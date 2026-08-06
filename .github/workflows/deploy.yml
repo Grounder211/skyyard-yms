@@ -1,0 +1,32 @@
+name: Deploy SkyYard
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - name: Notify Slack on failure
+        if: failure()
+        run: |
+          curl -X POST ${{ secrets.SLACK_WEBHOOK }} -d '{"text":"Build failed on ${{ github.ref }}"}'
+
+  deploy-staging:
+    needs: check
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Cloud Run
+        run: echo "Deployment command would go here"
+        # env: { GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }} }

@@ -1,0 +1,90 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.08);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.08), 0 4px 6px -4px rgb(0 0 0 / 0.08);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+  --shadow-spatial: 0 25px 50px -12px rgba(0, 0, 0, 0.15);
+}
+
+@supports (color: oklch(0 0 0)) {
+  :root {
+    --background: oklch(0.98 0.01 240); /* #f8fafc variant */
+    --foreground: oklch(0.15 0.05 240); /* #0f172a variant */
+    
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.15 0.05 240);
+    
+    --primary: oklch(0.60 0.18 250); /* Technical Blue */
+    --primary-foreground: oklch(1 0 0);
+    
+    --accent-teal: oklch(0.72 0.15 185);
+    --accent-amber: oklch(0.78 0.18 80);
+    --accent-red: oklch(0.55 0.22 30);
+    --accent-green: oklch(0.70 0.17 145);
+    
+    --secondary: oklch(0.96 0.02 240);
+    --muted: oklch(0.96 0.02 240);
+    --muted-foreground: oklch(0.55 0.05 240);
+    
+    --border: oklch(0.92 0.02 240);
+    --ring: oklch(0.60 0.18 250);
+    
+    --radius: 1.25rem;
+  }
+
+  .dark {
+    --background: oklch(0.15 0.05 240);
+    --foreground: oklch(0.98 0.01 240);
+    
+    --card: oklch(0.22 0.05 240);
+    --card-foreground: oklch(0.98 0.01 240);
+    
+    --primary: oklch(0.70 0.18 250);
+    --border: oklch(0.25 0.05 240);
+    --muted: oklch(0.22 0.05 240);
+  }
+}
+
+@layer base {
+  * { @apply border-[var(--border)]; }
+  body { @apply bg-[var(--background)] text-[var(--foreground)] antialiased font-sans transition-colors duration-500; }
+  h1, h2, h3, h4 { @apply font-bold tracking-tight; }
+}
+
+@layer components {
+  .glass {
+    @apply bg-white/70 backdrop-blur-xl border border-white/20 shadow-spatial rounded-[var(--radius)];
+  }
+
+  /* Motion Library Keyframes */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(24px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes springPop {
+    0% { transform: scale(0.9); opacity: 0; }
+    70% { transform: scale(1.05); }
+    100% { transform: scale(1); opacity: 1; }
+  }
+
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+
+  .motion-fade-up { animation: fadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+  .motion-spring-pop { animation: springPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { @apply bg-slate-200 rounded-full hover:bg-slate-300 transition-colors; }
+

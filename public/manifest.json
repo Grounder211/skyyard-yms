@@ -1,0 +1,35 @@
+{
+  "name": "SkyYard Quantum Driver Portal",
+  "short_name": "SkyYard",
+  "description": "Enterprise Yard Management System — Quantum Core",
+  "start_url": "/driver",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#060D18",
+  "background_color": "#060D18",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Walk-In Registration",
+      "url": "/driver/walkin",
+      "description": "Execute tactical node registration"
+    },
+    {
+      "name": "Check Neural Status",
+      "url": "/driver/status",
+      "description": "Monitor asset synchronization"
+    }
+  ]
+}
