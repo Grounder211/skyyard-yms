@@ -323,6 +323,7 @@ async function startServer() {
 
   app.use(cors({ origin: corsOriginCheck, credentials: true }));
   app.use(express.json());
+  app.use(express.urlencoded({ extended: true })); // Twilio's inbound SMS webhook posts form-encoded, not JSON
 
   // Brute-force protection: staff/carrier login, capped per-IP.
   const loginLimiter = rateLimit({
@@ -351,6 +352,17 @@ async function startServer() {
     legacyHeaders: false,
     keyGenerator: (req: any) => `${ipKeyGenerator(req.ip)}:${req.body?.phone || ""}`,
     message: { error: "Too many attempts. Try again in 15 minutes." },
+  });
+
+  // Public self-service walk-in (unmanned gate QR): capped per-IP+driver-session
+  // so the open, unauthenticated-by-staff endpoint can't be hammered.
+  const publicWalkinLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: any) => `${ipKeyGenerator(req.ip)}:${req.session?.driver_id || ""}`,
+    message: { error: "Too many registration attempts. Try again in 15 minutes." },
   });
 
   // --- Staff Authentication ---
@@ -629,6 +641,165 @@ async function startServer() {
     } catch (e: any) {
       logger.error("Walk-in registration failed", { error: e });
       res.status(500).json({ error: "System Neural Failure: " + e.message });
+    }
+  });
+
+  // --- Unmanned gate self-service (shared QR -> OTP-verified public form -> admin approval) ---
+  // Distinct from /api/walkin/register above: that one is guard-operated and
+  // auto-assigns a spot immediately. With no guard, auto-assign has no human
+  // backstop, so this path always lands in "pending_approval" and waits for
+  // an explicit admin decision (in-app, or SMS reply — see /api/twilio/inbound-sms).
+
+  const approveWalkin = async (walkinId: number, adminUserId: number | null, facilityId: number): Promise<{ ok: boolean; error?: string; spotName?: string | null }> => {
+    const { data: walkin } = await db.from("walkin_registrations").select("*").eq("id", walkinId).eq("facility_id", facilityId).maybeSingle();
+    if (!walkin) return { ok: false, error: "Not found" };
+    if (walkin.status !== "pending_approval") return { ok: false, error: `Already ${walkin.status}` };
+
+    const { data: assign } = await db.rpc("walkin_autoassign_tx", {
+      p_walkin_id: walkin.id, p_truck_plate: walkin.truck_plate, p_carrier_name: walkin.carrier_name, p_facility_id: facilityId,
+    });
+
+    if (assign?.assigned) {
+      await db.from("walkin_registrations").update({ reviewed_by: adminUserId, reviewed_at: new Date().toISOString() }).eq("id", walkinId);
+      logAudit({ action: "WALKIN_APPROVED", entityType: "WALKIN", entityId: String(walkinId), details: { spot: assign.spotName }, facility_id: facilityId });
+      notify({ type: "WALKIN_APPROVED", recipientType: "driver", recipientId: walkin.driver_id, data: { phone: walkin.phone, title: "Entry Approved", body: `SkyYard: You're approved. Proceed to spot ${assign.spotName}. Reference: WK-${walkinId}` } });
+      emitUpdate("yard_update", { type: "WALKIN", id: walkinId });
+      return { ok: true, spotName: assign.spotName };
+    }
+
+    await db.from("walkin_registrations").update({ status: "approved_awaiting_spot", reviewed_by: adminUserId, reviewed_at: new Date().toISOString() }).eq("id", walkinId);
+    notify({ type: "WALKIN_APPROVED_QUEUED", recipientType: "driver", recipientId: walkin.driver_id, data: { phone: walkin.phone, title: "Entry Approved — Queued", body: `SkyYard: You're approved but the yard is full. Please wait. Reference: WK-${walkinId}` } });
+    return { ok: true, spotName: null };
+  };
+
+  const rejectWalkin = async (walkinId: number, adminUserId: number | null, facilityId: number, reason: string): Promise<{ ok: boolean; error?: string; spotName?: string | null }> => {
+    const { data: walkin } = await db.from("walkin_registrations").select("*").eq("id", walkinId).eq("facility_id", facilityId).maybeSingle();
+    if (!walkin) return { ok: false, error: "Not found" };
+    if (walkin.status !== "pending_approval") return { ok: false, error: `Already ${walkin.status}` };
+
+    await db.from("walkin_registrations").update({ status: "rejected", rejection_reason: reason || "Denied by admin", reviewed_by: adminUserId, reviewed_at: new Date().toISOString() }).eq("id", walkinId);
+    logAudit({ action: "WALKIN_REJECTED", entityType: "WALKIN", entityId: String(walkinId), details: { reason }, facility_id: facilityId, severity: "warning" });
+    notify({ type: "WALKIN_REJECTED", recipientType: "driver", recipientId: walkin.driver_id, data: { phone: walkin.phone, title: "Entry Denied", body: `SkyYard: Entry denied. Reason: ${reason || "Not specified"}. Reference: WK-${walkinId}` } });
+    emitUpdate("yard_update", { type: "WALKIN", id: walkinId });
+    return { ok: true };
+  };
+
+  app.post("/api/public/walkin-checkin", requireDriverAuth, publicWalkinLimiter, async (req: any, res) => {
+    const { truck_plate, carrier_name, trailer_number, load_type, direction, consent, website } = req.body;
+    const facilityId = req.body.facility_id || 1;
+
+    // Honeypot: a hidden field real drivers never see or fill; only bots fill every field.
+    if (website) return res.status(400).json({ error: "Invalid submission" });
+    if (!truck_plate || !carrier_name) return res.status(400).json({ error: "Plate and carrier are required" });
+    if (consent !== true) return res.status(400).json({ error: "Consent to data processing is required" });
+
+    try {
+      const { data: driver } = await db.from("drivers").select("id, phone, name").eq("id", req.session.driver_id).maybeSingle();
+      if (!driver) return res.status(401).json({ error: "Driver session invalid" });
+
+      const blacklistHit = await checkBlacklist(facilityId, truck_plate, carrier_name);
+      if (blacklistHit && blacklistHit.severity === "block") {
+        const { data: rejected } = await db.from("walkin_registrations").insert({
+          driver_name: driver.name || "Unknown", carrier_name, phone: driver.phone, truck_plate,
+          trailer_number: trailer_number || null, load_type, direction, status: "rejected",
+          rejection_reason: `Blacklisted: ${blacklistHit.reason}`, reviewed_at: new Date().toISOString(),
+          driver_id: driver.id, facility_id: facilityId, source: "self_service_qr", consent_given: true,
+        }).select("id, status_token").single();
+        logAudit({ action: "BLACKLIST_BLOCKED_SELF_SERVICE", entityType: "TRAILER", entityId: truck_plate, details: { reason: blacklistHit.reason }, ip: req.ip, facility_id: facilityId, severity: "warning" });
+        return res.status(403).json({ error: "BLACKLIST_BLOCK", reason: blacklistHit.reason, status_token: rejected?.status_token });
+      }
+
+      const { data: walkin, error } = await db.from("walkin_registrations").insert({
+        driver_name: driver.name || "Unknown", carrier_name, phone: driver.phone, truck_plate,
+        trailer_number: trailer_number || null, load_type, direction, status: "pending_approval",
+        driver_id: driver.id, facility_id: facilityId, source: "self_service_qr", consent_given: true,
+      }).select("id, status_token").single();
+      if (error) throw error;
+
+      logAudit({ action: "WALKIN_SELF_SERVICE_SUBMITTED", entityType: "WALKIN", entityId: String(walkin.id), details: { truck_plate, carrier_name }, ip: req.ip, facility_id: facilityId });
+
+      const { data: admins } = await db.from("users").select("id, name, phone").eq("facility_id", facilityId).in("role", ["ADMIN", "superadmin"]);
+      for (const admin of admins || []) {
+        notify({
+          type: "WALKIN_APPROVAL_NEEDED", recipientType: "ADMIN", recipientId: admin.id,
+          data: {
+            phone: admin.phone,
+            title: "Gate entry needs approval",
+            body: `${driver.name || "Driver"} (${carrier_name}, ${truck_plate}) is requesting entry at the gate. Reply YES ${walkin.id} or NO ${walkin.id}, or open the app. Ref: WK-${walkin.id}`,
+            link: "/gate",
+          },
+        });
+      }
+
+      emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
+      res.json({ success: true, id: walkin.id, status: "pending_approval", status_token: walkin.status_token });
+    } catch (e: any) {
+      logger.error("Self-service walk-in failed", { error: e });
+      res.status(500).json({ error: "Registration failed: " + e.message });
+    }
+  });
+
+  // Public — token is the secret, no auth needed. Drivers land here after
+  // submitting to watch their approval status update in real time.
+  app.get("/api/public/walkin/status/:token", async (req, res) => {
+    const { token } = req.params;
+    const { data: walkin } = await db.from("walkin_registrations").select("id, status, truck_plate, carrier_name, rejection_reason, assigned_dock_id, spots:assigned_dock_id(name)").eq("status_token", token).maybeSingle();
+    if (!walkin) return res.status(404).json({ error: "Not found" });
+    res.json({
+      id: walkin.id, status: walkin.status, plate: walkin.truck_plate, carrier: walkin.carrier_name,
+      rejection_reason: walkin.rejection_reason, spotName: (walkin as any).spots?.name || null,
+    });
+  });
+
+  app.post("/api/admin/walkin/:id/approve", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const result = await approveWalkin(Number(req.params.id), req.session.user.id, req.facilityId);
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json({ success: true, spotName: result.spotName });
+  });
+
+  app.post("/api/admin/walkin/:id/reject", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const result = await rejectWalkin(Number(req.params.id), req.session.user.id, req.facilityId, req.body?.reason);
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json({ success: true });
+  });
+
+  app.get("/api/admin/walkin/pending", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const { data } = await db.from("walkin_registrations").select("*").eq("facility_id", req.facilityId).eq("status", "pending_approval").order("created_at", { ascending: true });
+    res.json(data || []);
+  });
+
+  // Twilio inbound SMS webhook — lets an admin approve/reject by texting back
+  // "YES <id>" / "NO <id>" instead of opening the app. Requires manually
+  // pointing the Twilio phone number's "A MESSAGE COMES IN" webhook at this
+  // URL in the Twilio Console — that step can't be done from here.
+  app.post("/api/twilio/inbound-sms", async (req: any, res) => {
+    res.set("Content-Type", "text/xml");
+    try {
+      const from = String(req.body?.From || "").replace(/\D/g, "").slice(-9); // last 9 digits, loose match
+      const body = String(req.body?.Body || "").trim();
+      const match = body.match(/^(YES|NO)\s+(\d+)/i);
+      if (!from || !match) return res.send("<Response></Response>");
+
+      const { data: admin } = await db.from("users").select("id, phone, facility_id, role").in("role", ["ADMIN", "superadmin"]).not("phone", "is", null);
+      const matched = (admin || []).find((a: any) => String(a.phone || "").replace(/\D/g, "").slice(-9) === from);
+      if (!matched) {
+        logAudit({ action: "SMS_APPROVAL_UNKNOWN_SENDER", entityType: "SMS", entityId: from, details: { body }, severity: "warning" });
+        return res.send("<Response></Response>"); // unknown sender — silently ignore, don't leak info
+      }
+
+      const walkinId = Number(match[2]);
+      const approve = match[1].toUpperCase() === "YES";
+      const result = approve
+        ? await approveWalkin(walkinId, matched.id, matched.facility_id || 1)
+        : await rejectWalkin(walkinId, matched.id, matched.facility_id || 1, "Denied via SMS");
+
+      const reply = result.ok
+        ? (approve ? `Approved WK-${walkinId}${result.spotName ? `, spot ${result.spotName}` : " (queued, yard full)"}.` : `Rejected WK-${walkinId}.`)
+        : `Could not process WK-${walkinId}: ${result.error}`;
+      res.send(`<Response><Message>${reply}</Message></Response>`);
+    } catch (e: any) {
+      logger.error("SMS approval webhook failed", { error: e.message });
+      res.send("<Response></Response>");
     }
   });
 
@@ -1605,6 +1776,27 @@ async function startServer() {
       if ((count || 0) >= 3) {
         await db.from("carriers").update({ flagged: true }).eq("id", appt.carrier_id);
         notify({ type: "CARRIER_FLAGGED", recipientType: "ADMIN", recipientId: null, data: { title: "Carrier Flagged - Excessive No-Shows", body: `Carrier ID ${appt.carrier_id} has ${count} no-shows in 30 days. Bookings now require approval.` } });
+      }
+    }
+  });
+
+  // Self-service walk-in approval timeout/escalation: an unmanned gate has no
+  // guard to fall back on, so a request stuck unanswered for too long needs a
+  // second notification path — otherwise a driver can be stranded at the gate
+  // indefinitely with nobody aware anything is pending.
+  const WALKIN_APPROVAL_TIMEOUT_MIN = 10;
+  cron.schedule("*/5 * * * *", async () => {
+    const cutoff = new Date(Date.now() - WALKIN_APPROVAL_TIMEOUT_MIN * 60 * 1000).toISOString();
+    const { data: stuck } = await db.from("walkin_registrations").select("id, truck_plate, carrier_name, facility_id, created_at").eq("status", "pending_approval").is("escalated_at", null).lt("created_at", cutoff);
+    for (const w of stuck || []) {
+      await db.from("walkin_registrations").update({ escalated_at: new Date().toISOString() }).eq("id", w.id); // set first — never re-escalate the same request
+      logAudit({ action: "WALKIN_APPROVAL_ESCALATED", entityType: "WALKIN", entityId: String(w.id), details: { waitingSince: w.created_at }, facility_id: w.facility_id, severity: "warning" });
+      const { data: allStaff } = await db.from("users").select("id, phone").eq("facility_id", w.facility_id).in("role", ["ADMIN", "superadmin"]);
+      for (const staff of allStaff || []) {
+        notify({
+          type: "WALKIN_APPROVAL_ESCALATED", recipientType: "ADMIN", recipientId: staff.id,
+          data: { phone: staff.phone, title: "Gate entry waiting over 10 minutes", body: `${w.carrier_name} (${w.truck_plate}) still awaiting approval. Reply YES ${w.id} or NO ${w.id}. Ref: WK-${w.id}`, link: "/gate" },
+        });
       }
     }
   });
