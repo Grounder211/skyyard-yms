@@ -19,11 +19,31 @@ import { db, unwrap } from "./server/supabaseClient.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const isProd = process.env.NODE_ENV === "production";
+
+if (isProd && !process.env.SESSION_SECRET) {
+  throw new Error("SESSION_SECRET must be set in production — refusing to start with a hardcoded fallback secret.");
+}
+
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+if (isProd && allowedOrigins.length === 0) {
+  throw new Error("ALLOWED_ORIGINS must be set in production — refusing to start with CORS open to all origins.");
+}
+
+const corsOriginCheck = (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+  if (!isProd || !origin || allowedOrigins.includes(origin)) return callback(null, true);
+  callback(new Error("Not allowed by CORS"));
+};
+
 async function startServer() {
   const app = express();
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
-    cors: { origin: "*" }
+    cors: { origin: isProd ? allowedOrigins : "*" }
   });
 
   const facilityPresence: Record<number, any[]> = {};
@@ -53,15 +73,29 @@ async function startServer() {
 
   const PORT = 3000;
 
+  if (isProd) app.set("trust proxy", 1);
+
   app.use(session({
     secret: process.env.SESSION_SECRET || "skyyard-secret-v4-quantum",
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 }
+    cookie: { secure: isProd, sameSite: "lax", maxAge: 24 * 60 * 60 * 1000 }
   }));
 
   app.use(helmet({
-    contentSecurityPolicy: false, // Disable for Vite dev
+    contentSecurityPolicy: isProd
+      ? {
+          directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", "data:", "blob:"],
+            connectSrc: ["'self'", "wss:", "https:"],
+            fontSrc: ["'self'", "data:"],
+            objectSrc: ["'none'"],
+          },
+        }
+      : false, // Disable for Vite dev (HMR needs inline/eval)
   }));
 
   // --- Yard status (the single read that powers Dashboard, Gate Console, Dispatch, Live Tracking) ---
@@ -277,16 +311,46 @@ async function startServer() {
     }
   };
 
-  app.use(cors());
+  app.use(cors({ origin: corsOriginCheck, credentials: true }));
   app.use(express.json());
 
+  // Brute-force protection: staff/carrier login, capped per-IP.
+  const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many login attempts. Try again in 15 minutes." },
+  });
+
+  // OTP request: capped per-IP+phone so one number can't be SMS-bombed and one IP can't farm codes across numbers.
+  const otpRequestLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 3,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: any) => `${req.ip}:${req.body?.phone || ""}`,
+    message: { error: "Too many code requests. Try again in 10 minutes." },
+  });
+
+  // OTP verify: 6-digit code has 1e6 combinations — cap attempts per-IP+phone so it can't be brute-forced.
+  const otpVerifyLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: any) => `${req.ip}:${req.body?.phone || ""}`,
+    message: { error: "Too many attempts. Try again in 15 minutes." },
+  });
+
   // --- Staff Authentication ---
-  app.post("/api/auth/login", async (req: any, res) => {
+  app.post("/api/auth/login", loginLimiter, async (req: any, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: "Email and password required" });
     try {
       const { data: user } = await db.from("users").select("*").eq("email", String(email).toLowerCase()).maybeSingle();
       if (!user || !user.password_hash || !(await bcrypt.compare(password, user.password_hash))) {
+        logAudit({ action: "STAFF_LOGIN_FAILED", entityType: "USER", entityId: String(email), details: {}, ip: req.ip, facility_id: 1, severity: "warning" });
         return res.status(401).json({ error: "Invalid email or password" });
       }
       req.session.user = { id: user.id, email: user.email, name: user.name, role: user.role, facility_id: user.facility_id };
@@ -755,7 +819,7 @@ async function startServer() {
   });
 
   // Driver OTP Routes
-  app.post("/api/driver/request-otp", async (req, res) => {
+  app.post("/api/driver/request-otp", otpRequestLimiter, async (req, res) => {
     const { phone } = req.body;
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
@@ -764,10 +828,13 @@ async function startServer() {
     res.json({ success: true, message: "Code sent" });
   });
 
-  app.post("/api/driver/verify-otp", async (req, res) => {
+  app.post("/api/driver/verify-otp", otpVerifyLimiter, async (req, res) => {
     const { phone, code } = req.body;
     const { data: otp } = await db.from("driver_otp").select("*").eq("phone", phone).eq("code", code).gt("expires_at", new Date().toISOString()).maybeSingle();
-    if (!otp) return res.status(401).json({ error: "Invalid or expired code" });
+    if (!otp) {
+      logAudit({ action: "DRIVER_OTP_FAILED", entityType: "DRIVER", entityId: phone, details: {}, ip: req.ip, facility_id: 1, severity: "warning" });
+      return res.status(401).json({ error: "Invalid or expired code" });
+    }
 
     await db.from("driver_otp").delete().eq("phone", phone);
     await db.from("drivers").upsert({ phone }, { onConflict: "phone", ignoreDuplicates: true });
@@ -867,11 +934,12 @@ async function startServer() {
   });
 
   // Carrier Auth & Portal
-  app.post("/api/carrier/login", async (req, res) => {
+  app.post("/api/carrier/login", loginLimiter, async (req, res) => {
     const { email, password } = req.body;
     try {
       const { data: carrier } = await db.from("carriers").select("*").eq("email", email).maybeSingle();
       if (!carrier || !(await bcrypt.compare(password, carrier.password_hash))) {
+        logAudit({ action: "CARRIER_LOGIN_FAILED", entityType: "CARRIER", entityId: email, details: {}, ip: req.ip, facility_id: 1, severity: "warning" });
         return res.status(401).json({ error: "Invalid credentials" });
       }
       (req as any).session.carrier_id = carrier.id;
