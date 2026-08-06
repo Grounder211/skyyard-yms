@@ -72,13 +72,55 @@ export default function GateConsole() {
     } catch {}
   };
 
+  const [pendingApprovals, setPendingApprovals] = useState<any[]>([]);
+  const [approvalBusy, setApprovalBusy] = useState<number | null>(null);
+
+  const loadPendingApprovals = async () => {
+    try {
+      const res = await fetch("/api/admin/walkin/pending");
+      if (res.ok) setPendingApprovals(await res.json());
+    } catch {}
+  };
+
+  const approveEntry = async (id: number) => {
+    setApprovalBusy(id);
+    const res = await fetch(`/api/admin/walkin/${id}/approve`, { method: "POST" });
+    setApprovalBusy(null);
+    if (res.ok) {
+      const data = await res.json();
+      toast(data.spotName ? `Approved — assigned to ${data.spotName}` : "Approved — queued, yard full", "success");
+      loadPendingApprovals();
+    } else {
+      toast("Failed to approve", "error");
+    }
+  };
+
+  const rejectEntry = async (id: number) => {
+    const reason = window.prompt("Reason for denying entry (shown to driver):") || "";
+    setApprovalBusy(id);
+    const res = await fetch(`/api/admin/walkin/${id}/reject`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    });
+    setApprovalBusy(null);
+    if (res.ok) {
+      toast("Entry denied", "success");
+      loadPendingApprovals();
+    } else {
+      toast("Failed to reject", "error");
+    }
+  };
+
   useEffect(() => {
     loadYard();
     loadVisitors();
+    loadPendingApprovals();
     const socket = io();
     socket.on("yard_update", () => {
       loadYard();
       loadVisitors();
+      loadPendingApprovals();
     });
     return () => {
       socket.disconnect();
@@ -254,6 +296,40 @@ export default function GateConsole() {
         <div className="flex items-center gap-3 bg-red-50 border border-red-300 text-red-700 rounded-2xl px-5 py-3 font-bold text-sm" role="alert">
           <AlertTriangle size={18} className="shrink-0" />
           <span>Icy conditions — {weather.tempC}°C at {weather.stationName}. Use caution moving trailers on the yard surface.</span>
+        </div>
+      )}
+
+      {pendingApprovals.length > 0 && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-5 space-y-3">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-indigo-700 flex items-center gap-1.5">
+            <UserCheck size={13} /> Gate entry awaiting approval ({pendingApprovals.length})
+          </h3>
+          <div className="space-y-2">
+            {pendingApprovals.map((w: any) => (
+              <div key={w.id} className="bg-white border border-indigo-100 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-bold text-slate-900 text-sm truncate">{w.truck_plate} — {w.carrier_name}</p>
+                  <p className="text-xs text-slate-400">{w.driver_name} · {w.load_type} · WK-{w.id} · {new Date(w.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <button
+                    onClick={() => rejectEntry(w.id)}
+                    disabled={approvalBusy === w.id}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-red-50 text-red-600 hover:bg-red-100 transition-all disabled:opacity-50"
+                  >
+                    Deny
+                  </button>
+                  <button
+                    onClick={() => approveEntry(w.id)}
+                    disabled={approvalBusy === w.id}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-1"
+                  >
+                    {approvalBusy === w.id && <Loader2 size={11} className="animate-spin" />} Approve
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
