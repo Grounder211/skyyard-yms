@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { Globe2, ShieldBan, UploadCloud, Building2, Trash2, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Globe2, ShieldBan, UploadCloud, Building2, Trash2, Loader2, CheckCircle2, AlertTriangle, Truck, Link2, Copy } from "lucide-react";
 import { useToast } from "../contexts/ToastContext";
 
-type Tab = "facilities" | "blacklist" | "import";
+type Tab = "facilities" | "blacklist" | "import" | "carriers";
 
 export default function SuperadminConsole() {
   const [tab, setTab] = useState<Tab>("facilities");
@@ -16,11 +16,13 @@ export default function SuperadminConsole() {
 
       <div className="flex gap-2 bg-slate-100 p-1.5 rounded-2xl w-fit">
         <TabButton active={tab === "facilities"} onClick={() => setTab("facilities")} icon={<Building2 size={14} />} label="Facilities" />
+        <TabButton active={tab === "carriers"} onClick={() => setTab("carriers")} icon={<Truck size={14} />} label="Carriers" />
         <TabButton active={tab === "blacklist"} onClick={() => setTab("blacklist")} icon={<ShieldBan size={14} />} label="Blacklist" />
         <TabButton active={tab === "import"} onClick={() => setTab("import")} icon={<UploadCloud size={14} />} label="Bulk import" />
       </div>
 
       {tab === "facilities" && <FacilitiesTab />}
+      {tab === "carriers" && <CarriersTab />}
       {tab === "blacklist" && <BlacklistTab />}
       {tab === "import" && <BulkImportTab />}
     </div>
@@ -101,6 +103,126 @@ function FacilitiesTab() {
           </button>
         </div>
       ))}
+    </div>
+  );
+}
+
+function CarriersTab() {
+  const { toast } = useToast();
+  const [rows, setRows] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState({ name: "", email: "", password: "", contact_phone: "" });
+  const [busy, setBusy] = useState(false);
+  const [linkBusy, setLinkBusy] = useState<number | null>(null);
+
+  const load = () => {
+    fetch("/api/admin/carriers")
+      .then((r) => r.json())
+      .then((data) => setRows(Array.isArray(data) ? data : []))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(load, []);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    const res = await fetch("/api/admin/carriers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form),
+    });
+    setBusy(false);
+    if (res.ok) {
+      toast("Carrier added", "success");
+      setForm({ name: "", email: "", password: "", contact_phone: "" });
+      load();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      toast(data.error || "Failed to add carrier", "error");
+    }
+  };
+
+  const generateLink = async (id: number) => {
+    setLinkBusy(id);
+    const res = await fetch(`/api/admin/carriers/${id}/booking-link`, { method: "POST" });
+    setLinkBusy(null);
+    if (res.ok) {
+      const { booking_url } = await res.json();
+      const fullUrl = `${window.location.origin}${booking_url}`;
+      navigator.clipboard?.writeText(fullUrl).catch(() => {});
+      toast(`Booking link copied: ${fullUrl}`, "success");
+      load();
+    } else {
+      toast("Failed to generate link", "error");
+    }
+  };
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <form onSubmit={submit} className="bg-white border border-slate-200 rounded-3xl p-6 space-y-4 h-fit">
+        <p className="text-sm font-bold text-slate-900">Add carrier</p>
+        <div className="space-y-1.5">
+          <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Name</label>
+          <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Email (portal login)</label>
+          <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Password (portal login)</label>
+          <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Contact phone</label>
+          <input value={form.contact_phone} onChange={(e) => setForm({ ...form, contact_phone: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+        </div>
+        <button type="submit" disabled={busy} className="w-full bg-indigo-600 text-white text-sm font-bold py-2.5 rounded-xl hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+          {busy && <Loader2 size={14} className="animate-spin" />} Add carrier
+        </button>
+      </form>
+
+      <div className="lg:col-span-2 bg-white border border-slate-200 rounded-3xl overflow-hidden">
+        {loading ? (
+          <p className="text-sm text-slate-400 p-8 text-center">Loading...</p>
+        ) : rows.length === 0 ? (
+          <p className="text-sm text-slate-400 p-8 text-center">No carriers yet — add one to enable self-service pre-booking links.</p>
+        ) : (
+          <table className="w-full text-left">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Name</th>
+                <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Email</th>
+                <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Booking link</th>
+                <th className="px-5 py-3" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50">
+              {rows.map((r) => {
+                const active = r.booking_token && r.booking_token_expires && new Date(r.booking_token_expires) > new Date();
+                return (
+                  <tr key={r.id}>
+                    <td className="px-5 py-3 text-sm font-bold text-slate-800">{r.name}</td>
+                    <td className="px-5 py-3 text-sm text-slate-500">{r.email || "—"}</td>
+                    <td className="px-5 py-3">
+                      <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${active ? "bg-teal-100 text-teal-700" : "bg-slate-100 text-slate-500"}`}>
+                        {active ? "Active" : "None"}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      <button onClick={() => generateLink(r.id)} disabled={linkBusy === r.id} className="text-indigo-600 hover:text-indigo-800 flex items-center gap-1 text-xs font-bold ml-auto disabled:opacity-50">
+                        {linkBusy === r.id ? <Loader2 size={12} className="animate-spin" /> : active ? <Copy size={12} /> : <Link2 size={12} />}
+                        {active ? "Copy link" : "Generate link"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }
