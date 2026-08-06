@@ -1,38 +1,19 @@
 import React, { useState, useEffect } from "react";
 import { motion } from "motion/react";
 import { Activity, Globe, Cpu, Server, MapPin, CheckCircle2, ChevronRight, LayoutGrid } from "lucide-react";
-import { supabaseAdmin } from "../lib/supabase";
 
 export default function NetworkDashboard() {
   const [facilities, setFacilities] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchNetworkData = async () => {
-    const { data: facilitiesData, error: fError } = await supabaseAdmin.from("facilities").select("*").eq("active", true);
-    if (fError) {
-        console.error("Fetch facilities error:", fError);
-        return;
+    try {
+      const res = await fetch("/api/superadmin/network");
+      if (!res.ok) throw new Error("Failed to load network data");
+      setFacilities(await res.json());
+    } catch (e) {
+      console.error("Fetch facilities error:", e);
     }
-
-    const enriched = await Promise.all(facilitiesData.map(async (f) => {
-      const [spots, alerts, health] = await Promise.all([
-        supabaseAdmin.from("spots").select("status").eq("facility_id", f.id),
-        supabaseAdmin.from("audit_logs").select("id").eq("facility_id", f.id)
-          .in("severity", ["warning","critical"]).is("resolved_at", null),
-        supabaseAdmin.rpc("get_facility_health", { p_facility_id: f.id, p_period_days: 7 })
-      ]);
-
-      const activeTrucks = spots.data?.filter(s => s.status === "occupied").length || 0;
-
-      return { 
-          ...f, 
-          activeTrucks, 
-          openAlerts: alerts.data?.length || 0,
-          healthScore: health.data || 0 
-      };
-    }));
-
-    setFacilities(enriched);
     setLoading(false);
   };
 

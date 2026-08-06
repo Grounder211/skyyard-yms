@@ -1183,6 +1183,35 @@ async function startServer() {
     res.json(enriched);
   });
 
+  // Network overview for NetworkDashboard.tsx — this used to query Supabase
+  // directly from the browser with the anon key. It couldn't have worked:
+  // every table has RLS enabled with zero policies (anon/authenticated get
+  // nothing by design, see README), and it called a get_facility_health()
+  // RPC that doesn't exist in this database. Moved server-side onto the
+  // same service_role-authorized pattern every other route already uses.
+  app.get("/api/superadmin/network", requireRole("superadmin"), async (req, res) => {
+    try {
+      const { data: facilities } = await db.from("facilities").select("*");
+      const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const enriched = await Promise.all((facilities || []).map(async (f: any) => {
+        const [spotsRes, alertsRes] = await Promise.all([
+          db.from("spots").select("status").eq("facility_id", f.id),
+          db.from("audit_logs").select("id", { count: "exact", head: true }).eq("facility_id", f.id).in("severity", ["warning", "critical"]).gte("timestamp", since),
+        ]);
+        const activeTrucks = (spotsRes.data || []).filter((s: any) => s.status === "OCCUPIED" || s.status === "occupied").length;
+        const openAlerts = alertsRes.count || 0;
+        // No health-score model exists yet (the RPC this replaced was never
+        // deployed) — simple heuristic until a real one is defined: fewer
+        // recent warning/critical alerts = healthier.
+        const healthScore = Math.max(0, 100 - openAlerts * 15);
+        return { ...f, activeTrucks, openAlerts, healthScore };
+      }));
+      res.json(enriched);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post("/api/superadmin/facilities/switch", requireRole("superadmin"), (req, res) => {
     const { facilityId } = req.body;
     (req as any).session.facility_id = facilityId;
