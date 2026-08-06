@@ -15,6 +15,7 @@ import crypto from "crypto";
 import rateLimit from "express-rate-limit";
 import PDFDocument from "pdfkit";
 import { db, unwrap } from "./server/supabaseClient.js";
+import { logger } from "./server/logger.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -163,15 +164,15 @@ async function startServer() {
   const sendSms = async (to: string, body: string) => {
     const client = getTwilioClient();
     if (!client) {
-      console.warn("[Twilio] Client not configured. Logging SMS instead:", { to, body });
+      logger.warn("[Twilio] Client not configured. Logging SMS instead:", { to, body });
       return { success: false, error: "Twilio not configured" };
     }
     try {
       await client.messages.create({ body, from: process.env.TWILIO_PHONE_NUMBER, to });
-      console.log(`[Twilio] SMS sent to ${to}`);
+      logger.info(`[Twilio] SMS sent to ${to}`);
       return { success: true };
     } catch (e: any) {
-      console.error(`[Twilio] Error sending SMS to ${to}:`, e.message);
+      logger.error(`[Twilio] Error sending SMS to ${to}: ${e.message}`);
       return { success: false, error: e.message };
     }
   };
@@ -212,14 +213,21 @@ async function startServer() {
         severity: data.severity || "info",
       });
     } catch (e) {
-      console.error("Audit logging failed", e);
+      logger.error("Audit logging failed", { error: e });
     }
   };
 
   // Middlewares
   const requireRole = (...roles: string[]) => (req: any, res: any, next: any) => {
     if (!req.session?.user) return res.status(401).json({ error: "Not authenticated" });
-    if (!roles.includes(req.session.user.role)) return res.status(403).json({ error: "Forbidden" });
+    if (!roles.includes(req.session.user.role)) {
+      logAudit({
+        action: "ACCESS_DENIED", entityType: "USER", entityId: String(req.session.user.id),
+        details: { path: req.path, role: req.session.user.role, requiredRoles: roles },
+        ip: req.ip, facility_id: req.session.user.facility_id || 1, severity: "warning",
+      });
+      return res.status(403).json({ error: "Forbidden" });
+    }
     next();
   };
 
@@ -271,7 +279,7 @@ async function startServer() {
 
       emitUpdate("new_notification", { userId: recipientId, userType: recipientType });
     } catch (e) {
-      console.error("Notification failed", e);
+      logger.error("Notification failed", { error: e });
     }
   };
 
@@ -400,7 +408,7 @@ async function startServer() {
       ];
       res.json(results);
     } catch (e: any) {
-      console.error("Search Error:", e.message);
+      logger.error(`Search Error: ${e.message}`);
       res.status(500).json({ error: e.message });
     }
   });
@@ -617,7 +625,7 @@ async function startServer() {
       emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
       res.json({ success: true, id: `WK-${walkin.id}`, status: "QUEUED" });
     } catch (e: any) {
-      console.error(e);
+      logger.error("Walk-in registration failed", { error: e });
       res.status(500).json({ error: "System Neural Failure: " + e.message });
     }
   });
@@ -663,6 +671,7 @@ async function startServer() {
       const blacklistHit = await checkBlacklist(facilityId, plate, carrierName || appt.carrier);
       if (blacklistHit && blacklistHit.severity === "block") {
         await db.from("gate_logs").insert({ facility_id: facilityId, event_type: "denied", appointment_id: appointmentId, truck_plate: plate, guard_user_id: req.session?.user?.id || null, notes: `Blacklisted: ${blacklistHit.reason}` });
+        logAudit({ action: "BLACKLIST_BLOCKED_ENTRY", entityType: "TRAILER", entityId: plate, details: { reason: blacklistHit.reason, appointmentId }, ip: req.ip, facility_id: facilityId, severity: "warning" });
         return res.status(403).json({ error: "BLACKLIST_BLOCK", reason: blacklistHit.reason });
       }
 
@@ -696,7 +705,7 @@ async function startServer() {
       emitUpdate("yard_update", { type: "CHECKIN", plate });
       res.json({ success: true, spotName: result.spotName });
     } catch (e: any) {
-      console.error(e);
+      logger.error("Gate checkin failed", { error: e });
       res.status(500).json({ error: "Sync failed" });
     }
   });
@@ -733,7 +742,7 @@ async function startServer() {
       emitUpdate("yard_update", { type: "MOVE_COMPLETE" });
       res.json({ success: true });
     } catch (e: any) {
-      console.error(e);
+      logger.error("Move completion failed", { error: e });
       res.status(500).json({ error: "Transaction failure" });
     }
   });
@@ -1068,7 +1077,10 @@ async function startServer() {
       if (!plate || !start_time) return res.status(400).json({ error: "Plate and arrival time are required" });
 
       const blacklistHit = await checkBlacklist(1, plate, carrier.name);
-      if (blacklistHit && blacklistHit.severity === "block") return res.status(403).json({ error: "BLACKLIST_BLOCK", reason: blacklistHit.reason });
+      if (blacklistHit && blacklistHit.severity === "block") {
+        logAudit({ action: "BLACKLIST_BLOCKED_BOOKING", entityType: "TRAILER", entityId: plate, details: { reason: blacklistHit.reason, carrier: carrier.name }, ip: req.ip, facility_id: 1, severity: "warning" });
+        return res.status(403).json({ error: "BLACKLIST_BLOCK", reason: blacklistHit.reason });
+      }
 
       let driverId: number | null = null;
       if (driver_phone) {
@@ -1346,7 +1358,7 @@ async function startServer() {
 
   // GDPR / Data Retention
   cron.schedule("0 3 * * *", async () => {
-    console.log("[Worker] Running Data Retention Enforcement...");
+    logger.info("[Worker] Running Data Retention Enforcement...");
     const retentionDays = 90;
     const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
     await db.from("walkin_registrations").update({ driver_name: "[REDACTED]", phone: "[REDACTED]" }).lt("created_at", cutoff).neq("driver_name", "[REDACTED]");
@@ -1431,7 +1443,7 @@ async function startServer() {
 
   // No-Show Detection Worker
   cron.schedule("*/30 * * * *", async () => {
-    console.log("[Worker] Running No-Show Detection...");
+    logger.info("[Worker] Running No-Show Detection...");
     const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const { data: noShows } = await db.from("appointments").select("id, carrier_id, carrier").eq("status", "SCHEDULED").lt("start_time", cutoff).is("checked_in_at", null);
     for (const appt of noShows || []) {
@@ -1452,7 +1464,7 @@ async function startServer() {
     for (const item of pending || []) {
       try {
         const payload = item.payload_json;
-        console.log(`[Notification Engine] Processing ${item.channel} to ${item.recipient_type} id ${item.recipient_id}`);
+        logger.info(`[Notification Engine] Processing ${item.channel} to ${item.recipient_type} id ${item.recipient_id}`);
         if (item.channel === "sms") {
           const result = await sendSms(payload.phone, payload.message);
           if (result.success) {
@@ -1484,7 +1496,7 @@ async function startServer() {
   }
 
   httpServer.listen(PORT, "0.0.0.0", () => {
-    console.log(`SkyYard YMS v4.0 [Supabase + Real-time] running on http://localhost:${PORT}`);
+    logger.info(`SkyYard YMS v4.0 [Supabase + Real-time] running on http://localhost:${PORT}`);
   });
 }
 
