@@ -74,7 +74,7 @@ async function startServer() {
     });
   });
 
-  const PORT = Number(process.env.PORT) || 8000;
+  const PORT = Number(process.env.PORT) || 4000;
 
   if (isProd) app.set("trust proxy", 1);
 
