@@ -1183,14 +1183,44 @@ async function startServer() {
   });
 
   // Detention & Maintenance Check
+  // Was inserting a brand-new detention_records row every 15 minutes for the
+  // same overdue trailer forever (same duplicate-insert class of bug fixed
+  // earlier this session for notifications and escalations), never set
+  // carrier_id (so POST /api/admin/invoices/generate's .eq("carrier_id", ...)
+  // filter could never match an auto-detected record), and never set
+  // invoice_status/amount_owed/overtime_minutes (so even a carrier_id fix
+  // wouldn't help — the invoice query also filters on invoice_status=pending,
+  // and the PDF renders amount_owed/overtime_minutes directly). Net effect:
+  // automated detention billing has never actually produced an invoiceable
+  // record. Now: one row per trailer while detention is active, updated in
+  // place each cycle instead of duplicated, carrier looked up by name match,
+  // amounts computed from the facility's configured rate (was hardcoded 50).
   cron.schedule("*/15 * * * *", async () => {
-    const { data: facilities } = await db.from("facility_settings").select("facility_id, detention_threshold_hours");
+    const { data: facilities } = await db.from("facility_settings").select("facility_id, detention_threshold_hours, detention_rate_per_hour");
     for (const f of facilities || []) {
       const threshold = f.detention_threshold_hours || 24;
+      const rate = f.detention_rate_per_hour || 50;
       const cutoff = new Date(Date.now() - threshold * 3600 * 1000).toISOString();
       const { data: overdue } = await db.from("trailers").select("*").eq("facility_id", f.facility_id).eq("status", "IN_YARD").lt("checked_in_at", cutoff);
       for (const t of overdue || []) {
-        await db.from("detention_records").insert({ facility_id: f.facility_id, trailer_id: t.id, carrier_name: t.carrier, start_time: t.checked_in_at, rate_per_hour: 50, status: "ACTIVE" });
+        const actualMinutes = Math.floor((Date.now() - new Date(t.checked_in_at).getTime()) / 60000);
+        const thresholdMinutes = threshold * 60;
+        const overtimeMinutes = actualMinutes - thresholdMinutes;
+        const amountOwed = Math.round((overtimeMinutes / 60) * rate * 100) / 100;
+
+        const { data: existing } = await db.from("detention_records").select("id").eq("trailer_id", t.id).eq("status", "ACTIVE").maybeSingle();
+        if (existing) {
+          await db.from("detention_records").update({ actual_minutes: actualMinutes, overtime_minutes: overtimeMinutes, amount_owed: amountOwed, updated_at: new Date().toISOString() }).eq("id", existing.id);
+          continue;
+        }
+
+        const { data: carrierMatch } = await db.from("carriers").select("id").eq("name", t.carrier).maybeSingle();
+        await db.from("detention_records").insert({
+          facility_id: f.facility_id, trailer_id: t.id, carrier_id: carrierMatch?.id || null, carrier_name: t.carrier,
+          start_time: t.checked_in_at, threshold_minutes: thresholdMinutes, actual_minutes: actualMinutes,
+          overtime_minutes: overtimeMinutes, rate_per_hour: rate, amount_owed: amountOwed,
+          status: "ACTIVE", invoice_status: "pending",
+        });
         notify({ type: "DETENTION_WARNING", recipientType: "CARRIER", recipientId: null, data: { title: "Detention Alert", body: `Trailer ${t.plate} has exceeded free dwell time. Detention charges applying.`, plate: t.plate } });
       }
     }
