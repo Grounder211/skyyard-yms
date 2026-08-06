@@ -12,6 +12,7 @@ import {
   X,
   LogOut,
   Loader2,
+  AlertTriangle,
 } from "lucide-react";
 import { io } from "socket.io-client";
 import { QRCodeSVG } from "qrcode.react";
@@ -28,6 +29,14 @@ export default function GateConsole() {
   const [query, setQuery] = useState("");
   const [scanOpen, setScanOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  const [weather, setWeather] = useState<any>(null);
+  useEffect(() => {
+    const loadWeather = () => fetch("/api/weather/current").then((r) => (r.ok ? r.json() : null)).then(setWeather).catch(() => {});
+    loadWeather();
+    const t = setInterval(loadWeather, 5 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
 
   const [checkinTarget, setCheckinTarget] = useState<any>(null);
   const [checkinForm, setCheckinForm] = useState({ plate: "", carrierName: "", sealNumber: "" });
@@ -240,6 +249,13 @@ export default function GateConsole() {
           </div>
         </div>
       </div>
+
+      {weather?.icyRisk && (
+        <div className="flex items-center gap-3 bg-red-50 border border-red-300 text-red-700 rounded-2xl px-5 py-3 font-bold text-sm" role="alert">
+          <AlertTriangle size={18} className="shrink-0" />
+          <span>Icy conditions — {weather.tempC}°C at {weather.stationName}. Use caution moving trailers on the yard surface.</span>
+        </div>
+      )}
 
       {/* Search / Scan bar */}
       <div className="flex gap-3">
