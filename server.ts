@@ -818,6 +818,27 @@ async function startServer() {
     res.json({ current, previous, carrierStats, hourlyVolume });
   });
 
+  // Dock/gate utilization heatmap: gate entries bucketed by day-of-week x
+  // hour-of-day over the last 90 days. Monday-first week (ISO), matching the
+  // Swedish work-week convention this app is built for. Used for staffing
+  // and appointment-slot capacity planning, not just a live snapshot.
+  app.get("/api/admin/analytics/heatmap", async (req: any, res) => {
+    const facilityId = req.facilityId;
+    const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    try {
+      const { data } = await db.from("gate_logs").select("timestamp").eq("facility_id", facilityId).eq("event_type", "entry").gte("timestamp", since);
+      const grid: number[][] = Array.from({ length: 7 }, () => Array(24).fill(0));
+      for (const row of data || []) {
+        const d = new Date(row.timestamp);
+        const isoDay = (d.getDay() + 6) % 7; // 0=Mon .. 6=Sun
+        grid[isoDay][d.getHours()]++;
+      }
+      res.json({ grid, sampleDays: 90 });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Smart Autofill for returning drivers
   app.get("/api/driver/lookup", async (req, res) => {
     const { plate } = req.query;
@@ -1482,14 +1503,36 @@ async function startServer() {
   // Live yard-adjacent weather from SMHI (Swedish met agency, public API, no key).
   // Air temp near/below freezing is a real safety signal for hostlers moving
   // trailers on icy pavement — surfaced on GateConsole and TVDisplay.
-  app.get("/api/weather/current", async (req, res) => {
+  app.get("/api/weather/current", async (req: any, res) => {
     try {
-      const reading = await getCurrentTemperature();
+      const facilityId = req.session?.facility_id || req.facilityId || 1;
+      const { data: facility } = await db.from("facilities").select("latitude, longitude").eq("id", facilityId).maybeSingle();
+      const coords = facility?.latitude != null && facility?.longitude != null
+        ? { lat: facility.latitude, lon: facility.longitude }
+        : undefined;
+      const reading = await getCurrentTemperature(coords);
       if (!reading) return res.status(502).json({ error: "SMHI data unavailable" });
       res.json(reading);
     } catch (e: any) {
       logger.error("SMHI weather fetch failed", { error: e.message });
       res.status(502).json({ error: "SMHI data unavailable" });
+    }
+  });
+
+  // Set a facility's real-world coordinates so weather (and future
+  // Trafikverket/geofence work) resolve to the nearest actual station
+  // instead of the Stockholm-Bromma fallback.
+  app.post("/api/admin/facility/coords", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const { latitude, longitude } = req.body;
+    const facilityId = req.session?.facility_id || 1;
+    if (typeof latitude !== "number" || typeof longitude !== "number") {
+      return res.status(400).json({ error: "latitude and longitude must be numbers" });
+    }
+    try {
+      await db.from("facilities").update({ latitude, longitude }).eq("id", facilityId);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
   });
 

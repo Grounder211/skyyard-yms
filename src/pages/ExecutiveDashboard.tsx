@@ -34,6 +34,7 @@ export default function ExecutiveDashboard() {
   const [metrics, setMetrics] = useState<any>(null);
   const [carrierStats, setCarrierStats] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [heatmap, setHeatmap] = useState<number[][] | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -47,6 +48,13 @@ export default function ExecutiveDashboard() {
       setLoading(false);
     });
   }, [range]);
+
+  useEffect(() => {
+    fetch("/api/admin/analytics/heatmap").then(r => r.json()).then(d => setHeatmap(d.grid)).catch(() => {});
+  }, []);
+
+  const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const heatmapMax = heatmap ? Math.max(1, ...heatmap.flat()) : 1;
 
   const tatChartData = {
     labels: carrierStats.map(c => c.carrier),
@@ -135,6 +143,41 @@ export default function ExecutiveDashboard() {
           </div>
         </div>
       </div>
+
+      {heatmap && (
+        <div className="bg-white border border-slate-200 p-8 rounded-3xl shadow-sm">
+          <h3 className="font-bold text-slate-900 text-lg mb-1 flex items-center gap-2">
+            <BarChart3 size={18} className="text-indigo-600" /> Gate arrivals — day × hour
+          </h3>
+          <p className="text-slate-500 text-sm mb-6">Last 90 days, Monday-first week. Use for staffing and appointment-slot capacity planning.</p>
+          <div className="overflow-x-auto">
+            <div className="min-w-[720px]">
+              <div className="grid grid-cols-[40px_repeat(24,1fr)] gap-1 mb-1">
+                <div />
+                {Array.from({ length: 24 }).map((_, h) => (
+                  <div key={h} className="text-center text-[9px] font-bold text-slate-400">{h % 3 === 0 ? h : ""}</div>
+                ))}
+              </div>
+              {DAY_LABELS.map((day, dayIdx) => (
+                <div key={day} className="grid grid-cols-[40px_repeat(24,1fr)] gap-1 mb-1">
+                  <div className="text-[10px] font-bold text-slate-400 flex items-center">{day}</div>
+                  {heatmap[dayIdx].map((count, hour) => {
+                    const intensity = count / heatmapMax;
+                    return (
+                      <div
+                        key={hour}
+                        title={`${day} ${hour}:00 — ${count} arrivals`}
+                        className="aspect-square rounded-sm"
+                        style={{ backgroundColor: intensity === 0 ? "#f1f5f9" : `rgba(79, 70, 229, ${0.15 + intensity * 0.85})` }}
+                      />
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
