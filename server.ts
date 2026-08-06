@@ -1441,6 +1441,42 @@ async function startServer() {
     }
   });
 
+  // Per-trailer movement timeline: merges gate events, moves, and the
+  // hash-chained audit log into one chronological history for a plate —
+  // used for detention disputes / incident review, not just a live snapshot.
+  app.get("/api/trailer/:plate/timeline", async (req: any, res) => {
+    const { plate } = req.params;
+    const facilityId = req.session?.facility_id || req.facilityId || 1;
+    try {
+      const [gateLogsRes, moveOrdersRes, auditRes, spotsRes] = await Promise.all([
+        db.from("gate_logs").select("*, users(name)").eq("facility_id", facilityId).eq("truck_plate", plate).order("timestamp", { ascending: true }),
+        db.from("move_orders").select("*, trailers!inner(plate)").eq("facility_id", facilityId).eq("trailers.plate", plate).order("created_at", { ascending: true }),
+        db.from("audit_logs").select("*").eq("facility_id", facilityId).eq("entityType", "TRAILER").eq("entityId", plate).order("timestamp", { ascending: true }),
+        db.from("spots").select("id, name").eq("facility_id", facilityId),
+      ]);
+
+      const spotName = new Map((spotsRes.data || []).map((s: any) => [s.id, s.name]));
+
+      const events: any[] = [];
+      for (const l of gateLogsRes.data || []) {
+        events.push({ timestamp: l.timestamp, type: `gate_${l.event_type}`, label: `Gate: ${l.event_type}`, detail: l.notes, actor: l.users?.name });
+      }
+      for (const m of moveOrdersRes.data || []) {
+        const from = spotName.get(m.from_spot_id) || "?";
+        const to = spotName.get(m.to_spot_id) || "?";
+        events.push({ timestamp: m.completed_at || m.created_at, type: m.status === "COMPLETED" ? "move_completed" : "move_created", label: `Move: ${from} → ${to}`, detail: m.status });
+      }
+      for (const a of auditRes.data || []) {
+        events.push({ timestamp: a.timestamp, type: a.action?.toLowerCase(), label: a.action, detail: a.details });
+      }
+
+      events.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      res.json({ plate, events });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // No-Show Detection Worker
   cron.schedule("*/30 * * * *", async () => {
     logger.info("[Worker] Running No-Show Detection...");

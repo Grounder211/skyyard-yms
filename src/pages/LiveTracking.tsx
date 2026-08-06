@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Radar, Truck, Clock, AlertTriangle, Activity, DoorOpen, LogIn, LogOut, ArrowRightLeft, X } from "lucide-react";
+import { Radar, Truck, Clock, AlertTriangle, Activity, DoorOpen, LogIn, LogOut, ArrowRightLeft, X, History } from "lucide-react";
 import { io } from "socket.io-client";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -110,6 +110,22 @@ export default function LiveTracking() {
 
   const breachCount = useMemo(() => occupied.filter((s: any) => statusOf(s) === "breach").length, [occupied, threshold]);
 
+  const [timeline, setTimeline] = useState<any[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+
+  useEffect(() => {
+    if (!selected?.plate) {
+      setTimeline([]);
+      return;
+    }
+    setTimelineLoading(true);
+    fetch(`/api/trailer/${encodeURIComponent(selected.plate)}/timeline`)
+      .then((r) => r.json())
+      .then((d) => setTimeline(d.events || []))
+      .catch(() => setTimeline([]))
+      .finally(() => setTimelineLoading(false));
+  }, [selected?.plate]);
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-20 gap-4 text-slate-400 animate-pulse">
@@ -217,7 +233,7 @@ export default function LiveTracking() {
 
       {selected && (
         <div className="fixed inset-0 z-[9998] bg-black/50 flex items-center justify-center p-6" onClick={() => setSelected(null)}>
-          <div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-bold text-lg text-slate-900">{selected.plate}</h3>
               <button onClick={() => setSelected(null)} className="text-slate-400 hover:text-slate-900">
@@ -230,6 +246,27 @@ export default function LiveTracking() {
               <Row label="Equipment" value={selected.equipment_type || "standard"} />
               <Row label="Seal" value={selected.seal_number || "—"} />
               <Row label="Time on site" value={elapsed(selected.checked_in_at || selected.check_in_time || new Date().toISOString())} mono />
+            </div>
+
+            <div className="mt-6 pt-4 border-t border-slate-100">
+              <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">
+                <History size={13} /> Movement timeline
+              </h4>
+              {timelineLoading && <p className="text-xs text-slate-400 py-2">Loading history...</p>}
+              {!timelineLoading && timeline.length === 0 && <p className="text-xs text-slate-400 py-2">No recorded events yet.</p>}
+              <div className="space-y-3">
+                {timeline.map((ev, i) => (
+                  <div key={i} className="flex items-start gap-2.5 text-xs">
+                    <span className="font-mono text-slate-400 shrink-0 pt-0.5">
+                      {new Date(ev.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-800">{ev.label}</p>
+                      {ev.detail && <p className="text-slate-400 truncate">{typeof ev.detail === "string" ? ev.detail : JSON.stringify(ev.detail)}</p>}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
