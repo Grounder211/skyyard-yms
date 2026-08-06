@@ -1069,6 +1069,33 @@ async function startServer() {
     }
   });
 
+  // Carrier management: there was previously no way to create a carrier at
+  // all — only /api/admin/carriers/:id/booking-link existed, which needs an
+  // existing row. With zero carriers in the table, the whole self-service
+  // pre-booking feature was a dead end.
+  app.get("/api/admin/carriers", requireRole("superadmin", "ADMIN"), async (req, res) => {
+    try {
+      const { data } = await db.from("carriers").select("id, name, email, contact_phone, booking_token, booking_token_expires, flagged, created_at").order("created_at", { ascending: false });
+      res.json(data || []);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/carriers", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const { name, email, password, contact_phone } = req.body;
+    if (!name) return res.status(400).json({ error: "Carrier name is required" });
+    try {
+      const password_hash = password ? await bcrypt.hash(password, 10) : null;
+      const { data, error } = await db.from("carriers").insert({ name, email: email || null, password_hash, contact_phone: contact_phone || null }).select("id, name, email, contact_phone").single();
+      if (error) throw error;
+      logAudit({ action: "CARRIER_CREATED", entityType: "CARRIER", entityId: String(data.id), details: { name }, ip: req.ip, facility_id: req.session?.user?.facility_id || 1 });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post("/api/admin/carriers/:id/booking-link", requireRole("superadmin", "ADMIN"), async (req, res) => {
     const { id } = req.params;
     const token = crypto.randomUUID();
