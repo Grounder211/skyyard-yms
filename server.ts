@@ -928,6 +928,20 @@ async function startServer() {
       const { error } = await db.rpc("dispatch_trailer_tx", { p_trailer_id: trailerId, p_spot_id: spotId || null });
       if (error) throw error;
 
+      // Close out any still-ACTIVE detention record for this trailer — dispatch
+      // never touched detention_records before, so a resolved detention charge
+      // stayed marked ACTIVE (still accruing) forever after the trailer left.
+      const { data: activeDetention } = await db.from("detention_records").select("*").eq("trailer_id", trailerId).eq("status", "ACTIVE").maybeSingle();
+      if (activeDetention) {
+        const finalActualMinutes = Math.floor((Date.now() - new Date(activeDetention.start_time).getTime()) / 60000);
+        const finalOvertimeMinutes = finalActualMinutes - (activeDetention.threshold_minutes || 0);
+        const finalAmountOwed = Math.round((finalOvertimeMinutes / 60) * (activeDetention.rate_per_hour || 0) * 100) / 100;
+        await db.from("detention_records").update({
+          status: "RESOLVED", actual_minutes: finalActualMinutes, overtime_minutes: finalOvertimeMinutes,
+          amount_owed: finalAmountOwed, updated_at: new Date().toISOString(),
+        }).eq("id", activeDetention.id);
+      }
+
       logAudit({ action: "TRAILER_DISPATCH", entityType: "TRAILER", entityId: String(trailerId), details: { spotId }, ip: req.ip });
 
       if (trailer?.drivers?.phone) {
