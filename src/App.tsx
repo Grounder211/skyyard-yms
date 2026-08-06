@@ -52,6 +52,8 @@ const DriverPortal = React.lazy(() => import("./pages/DriverPortal"));
 const CarrierPortal = React.lazy(() => import("./pages/CarrierPortal"));
 const BookingPage = React.lazy(() => import("./pages/BookingPage"));
 const PrivacyRequest = React.lazy(() => import("./pages/PrivacyRequest"));
+const GateCheckinPage = React.lazy(() => import("./pages/GateCheckinPage"));
+const GateCheckinStatusPage = React.lazy(() => import("./pages/GateCheckinStatusPage"));
 
 export default function App() {
   return (
@@ -72,6 +74,8 @@ function RootRoutes() {
       <Route path="/driver" element={<Suspense fallback={<PageLoader />}><DriverPortal /></Suspense>} />
       <Route path="/carrier" element={<Suspense fallback={<PageLoader />}><CarrierPortal /></Suspense>} />
       <Route path="/privacy" element={<Suspense fallback={<PageLoader />}><PrivacyRequest /></Suspense>} />
+      <Route path="/gate-checkin/status/:token" element={<Suspense fallback={<PageLoader />}><GateCheckinStatusPage /></Suspense>} />
+      <Route path="/gate-checkin/:facilityId" element={<Suspense fallback={<PageLoader />}><GateCheckinPage /></Suspense>} />
       <Route path="*" element={<StaffArea />} />
     </Routes>
   );
