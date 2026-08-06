@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
@@ -12,7 +13,7 @@ import bcrypt from "bcryptjs";
 import twilio from "twilio";
 import { scoreSlot } from "./server/services/slotEngine.js";
 import crypto from "crypto";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import PDFDocument from "pdfkit";
 import { db, unwrap } from "./server/supabaseClient.js";
 import { logger } from "./server/logger.js";
@@ -337,7 +338,7 @@ async function startServer() {
     max: 3,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req: any) => `${req.ip}:${req.body?.phone || ""}`,
+    keyGenerator: (req: any) => `${ipKeyGenerator(req.ip)}:${req.body?.phone || ""}`,
     message: { error: "Too many code requests. Try again in 10 minutes." },
   });
 
@@ -347,7 +348,7 @@ async function startServer() {
     max: 5,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req: any) => `${req.ip}:${req.body?.phone || ""}`,
+    keyGenerator: (req: any) => `${ipKeyGenerator(req.ip)}:${req.body?.phone || ""}`,
     message: { error: "Too many attempts. Try again in 15 minutes." },
   });
 
@@ -1512,7 +1513,15 @@ async function startServer() {
           await db.from("notifications_queue").update({ status: "sent" }).eq("id", item.id);
         }
       } catch (e: any) {
-        await db.from("notifications_queue").update({ attempts: item.attempts + 1, error_msg: e.message }).eq("id", item.id);
+        const attempts = item.attempts + 1;
+        const maxAttempts = 5;
+        if (attempts >= maxAttempts) {
+          await db.from("notifications_queue").update({ status: "failed", attempts, error_msg: e.message }).eq("id", item.id);
+          logger.error(`[Notification Engine] Giving up on notification ${item.id} after ${attempts} attempts`, { error: e.message });
+        } else {
+          const backoffMin = Math.min(2 ** attempts, 30);
+          await db.from("notifications_queue").update({ attempts, error_msg: e.message, next_attempt_at: new Date(Date.now() + backoffMin * 60 * 1000).toISOString() }).eq("id", item.id);
+        }
       }
     }
   });
