@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { io } from "socket.io-client";
-import { supabase } from "../lib/supabase";
 import { useToast } from "../contexts/ToastContext";
 
 type ViewType = "day" | "week" | "month" | "list";
@@ -33,39 +32,12 @@ export default function AppointmentCalendar() {
   useEffect(() => {
     fetchAppointments();
 
-    // Supabase Real-time Subscription
-    const channel = supabase
-      .channel('schema-db-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'appointments'
-        },
-        (payload) => {
-          console.log('Real-time change received:', payload);
-          if (payload.eventType === 'INSERT') {
-            setAppointments(current => [...current, payload.new]);
-            showToast(`New booking: ${payload.new.plate}`, "info");
-          } else if (payload.eventType === 'UPDATE') {
-            setAppointments(current => current.map(item => item.id === payload.new.id ? payload.new : item));
-            showToast(`Booking updated: ${payload.new.plate}`, "info");
-          } else if (payload.eventType === 'DELETE') {
-            setAppointments(current => current.filter(item => item.id !== payload.old.id));
-            showToast(`Booking cancelled`, "warning");
-          }
-        }
-      )
-      .subscribe();
-
     socketRef.current = io();
     socketRef.current.on("yard_update", () => {
       fetchAppointments();
     });
 
     return () => {
-      supabase.removeChannel(channel);
       socketRef.current.disconnect();
     };
   }, [currentDate, view]);
