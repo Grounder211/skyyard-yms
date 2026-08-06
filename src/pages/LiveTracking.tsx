@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Radar, Truck, Clock, AlertTriangle, Activity, DoorOpen, LogIn, LogOut, ArrowRightLeft, X } from "lucide-react";
 import { io } from "socket.io-client";
+import { motion, AnimatePresence } from "motion/react";
 
 function elapsed(since: string) {
   const ms = Date.now() - new Date(since).getTime();
@@ -29,10 +30,44 @@ export default function LiveTracking() {
   const [selected, setSelected] = useState<any>(null);
   const [, forceTick] = useState(0);
 
+  // Tracks which spot each plate last occupied, so a move between fetches
+  // can be detected and animated (shared layoutId "flies" the trailer card
+  // from its old spot to its new one) instead of just teleporting on reload.
+  const prevSpotByPlateRef = useRef<Record<string, number>>({});
+  const [justMoved, setJustMoved] = useState<Record<string, number>>({});
+
   const load = async () => {
     try {
       const [yardRes, logsRes] = await Promise.all([fetch("/api/yard-status"), fetch("/api/admin/gate-logs")]);
-      setYard(await yardRes.json());
+      const nextYard = await yardRes.json();
+
+      const prevMap = prevSpotByPlateRef.current;
+      const nextMap: Record<string, number> = {};
+      const movedNow: string[] = [];
+      for (const s of nextYard.spots || []) {
+        if (!s.plate) continue;
+        nextMap[s.plate] = s.id;
+        if (prevMap[s.plate] !== undefined && prevMap[s.plate] !== s.id) movedNow.push(s.plate);
+      }
+      prevSpotByPlateRef.current = nextMap;
+
+      if (movedNow.length) {
+        const now = Date.now();
+        setJustMoved((m) => {
+          const next = { ...m };
+          movedNow.forEach((p) => (next[p] = now));
+          return next;
+        });
+        setTimeout(() => {
+          setJustMoved((m) => {
+            const next = { ...m };
+            movedNow.forEach((p) => { if (next[p] === now) delete next[p]; });
+            return next;
+          });
+        }, 3000);
+      }
+
+      setYard(nextYard);
       if (logsRes.ok) setLogs(await logsRes.json());
     } catch {}
     setLoading(false);
@@ -119,20 +154,37 @@ export default function LiveTracking() {
                 status === "warning" ? "bg-amber-50 border-amber-300 text-amber-700" :
                 status === "normal" ? "bg-teal-50 border-teal-300 text-teal-700" :
                 "bg-slate-50 border-slate-100 text-slate-400";
+              const movedAt = spot.plate ? justMoved[spot.plate] : undefined;
               return (
                 <button
                   key={spot.id}
                   onClick={() => spot.plate && setSelected(spot)}
-                  className={`w-24 h-20 rounded-xl border flex flex-col items-center justify-center text-[10px] font-bold transition-all shadow-sm relative ${bg} ${spot.plate ? "cursor-pointer hover:scale-105" : "cursor-default"}`}
+                  className={`w-24 h-20 rounded-xl border flex flex-col items-center justify-center text-[10px] font-bold shadow-sm relative overflow-hidden ${bg} ${spot.plate ? "cursor-pointer hover:scale-105" : "cursor-default"} ${movedAt ? "ring-2 ring-indigo-400" : ""}`}
                 >
                   {status === "breach" && <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />}
-                  <span>{spot.name}</span>
-                  {spot.plate && (
-                    <>
-                      <span className="truncate max-w-[80px] text-[9px] font-medium mt-0.5">{spot.plate}</span>
-                      <span className="font-mono text-[9px] mt-0.5 opacity-80">{elapsed(spot.checked_in_at || spot.check_in_time || new Date().toISOString())}</span>
-                    </>
-                  )}
+                  <span className="absolute top-1.5 left-1.5 opacity-60">{spot.name}</span>
+                  <AnimatePresence mode="popLayout">
+                    {spot.plate && (
+                      <motion.div
+                        key={spot.plate}
+                        layoutId={`trailer-${spot.plate}`}
+                        layout
+                        initial={{ opacity: 0, scale: 0.85 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.85 }}
+                        transition={{ type: "spring", stiffness: 340, damping: 30 }}
+                        className="flex flex-col items-center justify-center mt-2"
+                      >
+                        <span className="truncate max-w-[80px] text-[9px] font-medium">{spot.plate}</span>
+                        <span className="font-mono text-[9px] mt-0.5 opacity-80">{elapsed(spot.checked_in_at || spot.check_in_time || new Date().toISOString())}</span>
+                        {movedAt && (
+                          <span className="text-[8px] mt-0.5 text-indigo-600 font-bold">
+                            moved {new Date(movedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                          </span>
+                        )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </button>
               );
             })}
