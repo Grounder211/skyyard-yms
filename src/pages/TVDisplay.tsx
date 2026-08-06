@@ -1,9 +1,17 @@
 import React, { useState, useEffect } from "react";
-import { Clock, Truck, Warehouse, List, AlertTriangle, Activity, Globe, Cpu } from "lucide-react";
+import { Clock, Truck, Warehouse, List, AlertTriangle, Activity, Globe, Cpu, Thermometer, Snowflake } from "lucide-react";
 
 export default function TVDisplay() {
   const [data, setData] = useState<any>(null);
   const [time, setTime] = useState(new Date());
+  const [weather, setWeather] = useState<any>(null);
+
+  useEffect(() => {
+    const loadWeather = () => fetch("/api/weather/current").then((r) => (r.ok ? r.json() : null)).then(setWeather).catch(() => {});
+    loadWeather();
+    const t = setInterval(loadWeather, 5 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
@@ -43,6 +51,15 @@ export default function TVDisplay() {
             <p className="text-indigo-400 text-xs font-bold uppercase tracking-[0.3em]">Live Logistics Status</p>
           </div>
         </div>
+        {weather && (
+          <div className={`flex items-center gap-2.5 rounded-2xl px-5 py-3 border ${weather.icyRisk ? "bg-red-500/10 border-red-500/30 text-red-400" : "bg-slate-800/60 border-slate-700 text-slate-300"}`}>
+            {weather.icyRisk ? <Snowflake size={20} /> : <Thermometer size={20} />}
+            <div>
+              <p className="text-xl font-bold font-mono tabular-nums leading-none">{weather.tempC.toFixed(1)}°C</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest mt-0.5 opacity-70">{weather.icyRisk ? "Icy risk" : weather.stationName}</p>
+            </div>
+          </div>
+        )}
         <div className="text-right">
           <p className="text-5xl font-bold font-mono tracking-tighter tabular-nums">
             {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}

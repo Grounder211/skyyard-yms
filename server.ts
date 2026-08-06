@@ -17,6 +17,7 @@ import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import PDFDocument from "pdfkit";
 import { db, unwrap } from "./server/supabaseClient.js";
 import { logger } from "./server/logger.js";
+import { getCurrentTemperature } from "./server/services/smhiWeather.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1475,6 +1476,20 @@ async function startServer() {
       res.json({ plate, events });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Live yard-adjacent weather from SMHI (Swedish met agency, public API, no key).
+  // Air temp near/below freezing is a real safety signal for hostlers moving
+  // trailers on icy pavement — surfaced on GateConsole and TVDisplay.
+  app.get("/api/weather/current", async (req, res) => {
+    try {
+      const reading = await getCurrentTemperature();
+      if (!reading) return res.status(502).json({ error: "SMHI data unavailable" });
+      res.json(reading);
+    } catch (e: any) {
+      logger.error("SMHI weather fetch failed", { error: e.message });
+      res.status(502).json({ error: "SMHI data unavailable" });
     }
   });
 
