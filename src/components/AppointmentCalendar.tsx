@@ -25,7 +25,7 @@ export default function AppointmentCalendar() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingAppointment, setEditingAppointment] = useState<any>(null);
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
-  const { showToast } = useToast();
+  const { toast } = useToast();
 
   const socketRef = useRef<any>(null);
 
@@ -75,10 +75,10 @@ export default function AppointmentCalendar() {
     try {
       const res = await fetch(`/api/appointments/${id}`, { method: 'DELETE' });
       if (res.ok) {
-        showToast("Booking cancelled", "success");
+        toast("Booking cancelled", "success");
       }
     } catch (e) {
-      showToast("Cancellation failed", "error");
+      toast("Cancellation failed", "error");
     }
   };
 
@@ -530,7 +530,7 @@ function CreateAppointmentModal({ onClose, onSuccess, initialDate, editingAppoin
     status: editingAppointment?.status || "SCHEDULED"
   });
   const [submitting, setSubmitting] = useState(false);
-  const { showToast } = useToast();
+  const { toast } = useToast();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -545,13 +545,13 @@ function CreateAppointmentModal({ onClose, onSuccess, initialDate, editingAppoin
         body: JSON.stringify(formData)
       });
       if (res.ok) {
-        showToast(editingAppointment ? "Appointment updated" : "Appointment established successfully", "success");
+        toast(editingAppointment ? "Appointment updated" : "Appointment established successfully", "success");
         onSuccess();
       } else {
-        showToast("Failed to commit booking to ledger", "error");
+        toast("Failed to commit booking to ledger", "error");
       }
     } catch (e) {
-      showToast("Network synchronization failure", "error");
+      toast("Network synchronization failure", "error");
     }
     setSubmitting(false);
   };
