@@ -299,6 +299,28 @@ async function startServer() {
     return data;
   };
 
+  // Phase E: appointments.load_weight_kg/temperature_requirement existed on
+  // the table already but no endpoint ever wrote or checked them — dead
+  // columns, same class of gap as detention billing earlier this session.
+  // Non-blocking by design: an unregistered/mismatched plate shouldn't
+  // silently reject a real booking, staff still make the final call (same
+  // pattern as the existing gate-checkin overrideDiscrepancy flow) — this
+  // surfaces the mismatch instead of hiding it.
+  const checkVehicleCapacity = async (plate: string, loadWeightKg?: number, temperatureRequirement?: string) => {
+    if (!plate || (!loadWeightKg && !temperatureRequirement)) return null;
+    const { data: vehicle } = await db.from("vehicles").select("*").eq("plate", plate.toUpperCase()).maybeSingle();
+    if (!vehicle) return null;
+
+    const warnings: string[] = [];
+    if (loadWeightKg && vehicle.max_weight_kg && loadWeightKg > vehicle.max_weight_kg) {
+      warnings.push(`Load ${loadWeightKg}kg exceeds ${plate}'s registered capacity of ${vehicle.max_weight_kg}kg`);
+    }
+    if (temperatureRequirement && temperatureRequirement !== "ambient" && vehicle.equipment_type !== "reefer") {
+      warnings.push(`Load requires ${temperatureRequirement} but ${plate} is registered as ${vehicle.equipment_type}, not reefer`);
+    }
+    return warnings.length > 0 ? { vehicle, warnings } : null;
+  };
+
   const evaluateWorkflows = async (event: string, data: any, facilityId: number) => {
     const { data: rules } = await db.from("workflow_rules").select("*").eq("facility_id", facilityId).eq("trigger_event", event).eq("active", true);
     for (const rule of rules || []) {
@@ -608,7 +630,7 @@ async function startServer() {
   });
 
   app.post("/api/appointments", async (req: any, res) => {
-    const { plate, carrier, start_time, duration_minutes, dock_id, load_type, priority_level } = req.body;
+    const { plate, carrier, start_time, duration_minutes, dock_id, load_type, priority_level, load_weight_kg, temperature_requirement } = req.body;
     const facilityId = req.facilityId || 1;
     try {
       const { data: newAppt, error } = await db.from("appointments").insert({
@@ -617,14 +639,21 @@ async function startServer() {
         dock_id: dock_id || null,
         load_type: load_type || "LOAD",
         priority_level: priority_level || 2,
+        load_weight_kg: load_weight_kg || null,
+        temperature_requirement: temperature_requirement || null,
         facility_id: facilityId,
         status: "SCHEDULED",
       }).select().single();
       if (error) throw error;
 
+      const capacityIssue = await checkVehicleCapacity(plate, load_weight_kg, temperature_requirement);
+      if (capacityIssue) {
+        logAudit({ action: "LOAD_CAPACITY_WARNING", entityType: "APPOINTMENT", entityId: String(newAppt.id), details: { warnings: capacityIssue.warnings }, ip: req.ip, facility_id: facilityId, severity: "warning" });
+      }
+
       emitUpdate("appointment_created", newAppt);
       evaluateWorkflows("appointment_created", newAppt, facilityId);
-      res.json(newAppt);
+      res.json({ ...newAppt, capacityWarning: capacityIssue?.warnings || null });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -746,6 +775,37 @@ async function startServer() {
   // auto-assigns a spot immediately. With no guard, auto-assign has no human
   // backstop, so this path always lands in "pending_approval" and waits for
   // an explicit admin decision (in-app, or SMS reply — see /api/twilio/inbound-sms).
+
+  // Unified in-pass record — every entry path (staff gate checkin, badge
+  // scan, self-service walk-in approval) issues one of these instead of
+  // just a gate_logs row. Gives every vehicle a trackable pipeline stage
+  // (IN_PASS -> PARKED -> LOADING/UNLOADING -> READY_FOR_EXIT -> OUT_PASS ->
+  // EXITED) and a human-readable pass number, instead of only "it's in the
+  // yard somewhere" that trailers.status alone provided.
+  const issueGatePass = async (params: {
+    facilityId: number; plate: string; carrierName?: string | null; trailerId?: number | null;
+    driverId?: number | null; spotName?: string | null; issuedBy?: number | null; entrySource: string;
+  }) => {
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const passNumber = `IN-${today}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const [{ data: vehicle }, { data: spot }] = await Promise.all([
+      db.from("vehicles").select("id").eq("plate", params.plate).maybeSingle(),
+      params.spotName ? db.from("spots").select("id").eq("facility_id", params.facilityId).eq("name", params.spotName).maybeSingle() : Promise.resolve({ data: null }),
+    ]);
+
+    const { data: pass, error } = await db.from("gate_passes").insert({
+      facility_id: params.facilityId, pass_number: passNumber, plate: params.plate,
+      carrier_name: params.carrierName || null, trailer_id: params.trailerId || null,
+      driver_id: params.driverId || null, vehicle_id: vehicle?.id || null, spot_id: spot?.id || null,
+      stage: "IN_PASS", entry_source: params.entrySource, issued_by: params.issuedBy || null,
+    }).select().single();
+    if (error) {
+      logger.error("Gate pass issuance failed", { error: error.message, plate: params.plate });
+      return null;
+    }
+    return pass;
+  };
 
   const approveWalkin = async (walkinId: number, adminUserId: number | null, facilityId: number): Promise<{ ok: boolean; error?: string; spotName?: string | null }> => {
     const { data: walkin } = await db.from("walkin_registrations").select("*").eq("id", walkinId).eq("facility_id", facilityId).maybeSingle();
@@ -1607,7 +1667,7 @@ async function startServer() {
 
   app.post("/api/book/:token", async (req: any, res) => {
     const { token } = req.params;
-    const { plate, driver_name, driver_phone, start_time, dock_id, load_type } = req.body;
+    const { plate, driver_name, driver_phone, start_time, dock_id, load_type, load_weight_kg, temperature_requirement } = req.body;
     try {
       const { data: carrier } = await db.from("carriers").select("*").eq("booking_token", token).gt("booking_token_expires", new Date().toISOString()).maybeSingle();
       if (!carrier) return res.status(404).json({ error: "Invalid or expired booking link" });
@@ -1628,6 +1688,7 @@ async function startServer() {
 
       const { data: newAppt, error } = await db.from("appointments").insert({
         plate, carrier: carrier.name, dock_id: dock_id || null, start_time, load_type: load_type || "standard",
+        load_weight_kg: load_weight_kg || null, temperature_requirement: temperature_requirement || null,
         status: "SCHEDULED", source: "self_book", driver_id: driverId, carrier_id: carrier.id, facility_id: 1,
       }).select().single();
       if (error) throw error;
@@ -1635,9 +1696,14 @@ async function startServer() {
       logAudit({ action: "SELF_BOOKED", entityType: "APPOINTMENT", entityId: String(newAppt.id), details: { plate, carrier: carrier.name }, ip: req.ip, facility_id: 1 });
       emitUpdate("appointment_created", newAppt);
 
+      const capacityIssue = await checkVehicleCapacity(plate, load_weight_kg, temperature_requirement);
+      if (capacityIssue) {
+        logAudit({ action: "LOAD_CAPACITY_WARNING", entityType: "APPOINTMENT", entityId: String(newAppt.id), details: { warnings: capacityIssue.warnings }, ip: req.ip, facility_id: 1, severity: "warning" });
+      }
+
       if (driver_phone) await sendSms(driver_phone, `SkyYard: Booking confirmed for ${plate} on ${start_time}. Reference: APT-${newAppt.id}.`);
 
-      res.json({ success: true, appointment: newAppt });
+      res.json({ success: true, appointment: newAppt, capacityWarning: capacityIssue?.warnings || null });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
