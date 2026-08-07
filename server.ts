@@ -933,6 +933,100 @@ async function startServer() {
     }
   });
 
+  // --- Gate pass pipeline management ---
+  const STAGE_ORDER = ["IN_PASS", "PARKED", "LOADING", "UNLOADING", "READY_FOR_EXIT", "OUT_PASS", "EXITED"];
+
+  app.get("/api/gate-pass/active", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    try {
+      const { data } = await db.from("gate_passes").select("*, spots(name)").eq("facility_id", req.facilityId).neq("stage", "EXITED").order("issued_at", { ascending: true });
+      res.json((data || []).map((p: any) => ({ ...p, spot_name: p.spots?.name })));
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/gate-pass/:id/verify", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
+    const { license_verified, vehicle_matched, documents_ok } = req.body;
+    try {
+      const { data, error } = await db.from("gate_passes").update({
+        license_verified: !!license_verified, vehicle_matched: !!vehicle_matched, documents_ok: !!documents_ok,
+        verified_by: req.session.user.id, verified_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      }).eq("id", req.params.id).eq("facility_id", req.facilityId).select().single();
+      if (error) throw error;
+      emitUpdate("yard_update", { type: "GATE_PASS" });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/gate-pass/:id/advance", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { stage } = req.body;
+    if (!STAGE_ORDER.includes(stage)) return res.status(400).json({ error: "Invalid stage" });
+    try {
+      const { data: pass } = await db.from("gate_passes").select("*").eq("id", req.params.id).eq("facility_id", req.facilityId).maybeSingle();
+      if (!pass) return res.status(404).json({ error: "Gate pass not found" });
+
+      const currentIdx = STAGE_ORDER.indexOf(pass.stage);
+      const targetIdx = STAGE_ORDER.indexOf(stage);
+      // Only forward, and only by one step at a time — skipping a stage (e.g.
+      // IN_PASS straight to READY_FOR_EXIT) would hide whatever actually
+      // happened to the load in between. LOADING <-> UNLOADING is the one
+      // lateral exception, both mean "at the dock, cargo operation active."
+      const isLateralDockSwap = (pass.stage === "LOADING" && stage === "UNLOADING") || (pass.stage === "UNLOADING" && stage === "LOADING");
+      if (!isLateralDockSwap && targetIdx !== currentIdx + 1) {
+        return res.status(400).json({ error: `Cannot advance from ${pass.stage} to ${stage} — stages must move forward one at a time` });
+      }
+      if (pass.stage === "IN_PASS" && !(pass.license_verified && pass.vehicle_matched)) {
+        return res.status(400).json({ error: "Verify driver license and vehicle match before moving past IN_PASS" });
+      }
+
+      const { data, error } = await db.from("gate_passes").update({ stage, updated_at: new Date().toISOString() }).eq("id", req.params.id).select().single();
+      if (error) throw error;
+      logAudit({ action: "GATE_PASS_STAGE_ADVANCED", entityType: "GATE_PASS", entityId: String(pass.id), details: { from: pass.stage, to: stage }, ip: req.ip, facility_id: req.facilityId });
+      emitUpdate("yard_update", { type: "GATE_PASS" });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/gate-pass/:id/out-pass", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
+    try {
+      const { data: pass } = await db.from("gate_passes").select("*").eq("id", req.params.id).eq("facility_id", req.facilityId).maybeSingle();
+      if (!pass) return res.status(404).json({ error: "Gate pass not found" });
+      if (pass.stage !== "READY_FOR_EXIT") return res.status(400).json({ error: "Vehicle must be marked ready for exit before an out-pass can be issued" });
+
+      const { data, error } = await db.from("gate_passes").update({
+        stage: "OUT_PASS", out_pass_by: req.session.user.id, out_pass_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      }).eq("id", req.params.id).select().single();
+      if (error) throw error;
+      logAudit({ action: "OUT_PASS_ISSUED", entityType: "GATE_PASS", entityId: String(pass.id), details: { plate: pass.plate }, ip: req.ip, facility_id: req.facilityId });
+      emitUpdate("yard_update", { type: "GATE_PASS" });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/gate-pass/:id/exit", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
+    try {
+      const { data: pass } = await db.from("gate_passes").select("*").eq("id", req.params.id).eq("facility_id", req.facilityId).maybeSingle();
+      if (!pass) return res.status(404).json({ error: "Gate pass not found" });
+      if (pass.stage !== "OUT_PASS") return res.status(400).json({ error: "Out-pass must be issued before exit can be confirmed" });
+
+      const { data, error } = await db.from("gate_passes").update({ stage: "EXITED", exited_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", req.params.id).select().single();
+      if (error) throw error;
+      await db.from("gate_logs").insert({ facility_id: req.facilityId, event_type: "exit", trailer_id: pass.trailer_id, truck_plate: pass.plate, guard_user_id: req.session.user.id, notes: `Gate pass ${pass.pass_number} exited` });
+      if (pass.spot_id) await db.from("spots").update({ status: "EMPTY" }).eq("id", pass.spot_id);
+      logAudit({ action: "GATE_PASS_EXITED", entityType: "GATE_PASS", entityId: String(pass.id), details: { plate: pass.plate }, ip: req.ip, facility_id: req.facilityId });
+      emitUpdate("yard_update", { type: "GATE_PASS" });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Gate badge scan — pre-registered driver (see /api/driver/profile) scans
   // their permanent QR at the gate instead of filling a form or waiting for
   // approval. Blacklist-checked, auto-assigns a spot via the same

@@ -45,6 +45,7 @@ const ReportBuilder = React.lazy(() => import("./pages/ReportBuilder"));
 const NotificationSettings = React.lazy(() => import("./pages/NotificationSettings"));
 const GateConsole = React.lazy(() => import("./pages/GateConsole"));
 const DispatchBoard = React.lazy(() => import("./pages/DispatchBoard"));
+const PipelineBoard = React.lazy(() => import("./pages/PipelineBoard"));
 const LiveTracking = React.lazy(() => import("./pages/LiveTracking"));
 const SuperadminConsole = React.lazy(() => import("./pages/SuperadminConsole"));
 const SettingsPage = React.lazy(() => import("./pages/Settings"));
@@ -123,6 +124,7 @@ function StaffArea() {
             <Route path="/gate" element={guard("/gate", <GateConsole />)} />
             <Route path="/tracking" element={guard("/tracking", <LiveTracking />)} />
             <Route path="/dispatch" element={guard("/dispatch", <DispatchBoard />)} />
+            <Route path="/pipeline" element={guard("/pipeline", <PipelineBoard />)} />
             <Route path="/superadmin" element={guard("/superadmin", <SuperadminConsole />)} />
             <Route path="/settings" element={guard("/settings", <SettingsPage />)} />
             <Route path="/design" element={<DesignSystemExplorer />} />
@@ -169,6 +171,7 @@ function AppLayout({ children, user }: any) {
     { to: "/gate", icon: <ScanLine size={20} />, label: t("nav.gate") },
     { to: "/tracking", icon: <Radar size={20} />, label: "Live Tracking" },
     { to: "/dispatch", icon: <ArrowRightLeft size={20} />, label: t("nav.dispatch") },
+    { to: "/pipeline", icon: <ShieldCheck size={20} />, label: "Pipeline" },
     { to: "/network", icon: <Globe size={20} />, label: t("nav.network") },
     { to: "/calendar", icon: <Calendar size={20} />, label: t("nav.calendar") },
     { to: "/finance", icon: <DollarSign size={20} />, label: t("nav.finance") },

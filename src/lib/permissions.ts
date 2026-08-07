@@ -11,6 +11,7 @@ export const ROUTE_ACCESS: Record<string, StaffRole[]> = {
   "/gate": ["superadmin", "ADMIN", "GUARD"],
   "/tracking": ["superadmin", "ADMIN", "GUARD", "HOSTLER"],
   "/dispatch": ["superadmin", "ADMIN", "HOSTLER"],
+  "/pipeline": ["superadmin", "ADMIN", "GUARD", "HOSTLER"],
   "/network": ["superadmin", "ADMIN"],
   "/calendar": ["superadmin", "ADMIN", "GUARD"],
   "/finance": ["superadmin", "ADMIN"],
