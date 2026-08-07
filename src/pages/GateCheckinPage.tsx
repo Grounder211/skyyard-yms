@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Warehouse, Phone, KeyRound, Loader2, Truck, CheckCircle2 } from "lucide-react";
+import { Warehouse, KeyRound, Loader2, Truck, CheckCircle2 } from "lucide-react";
+import PhoneInput, { toE164 } from "../components/PhoneInput";
 
 const LOAD_TYPES = ["standard", "reefer", "flatbed", "tanker", "hazmat", "oversized"];
 const DIRECTIONS = ["INBOUND", "OUTBOUND"];
@@ -13,7 +14,8 @@ export default function GateCheckinPage() {
   const navigate = useNavigate();
 
   const [step, setStep] = useState<"phone" | "code" | "form">("phone");
-  const [phone, setPhone] = useState("");
+  const [countryCode, setCountryCode] = useState("+46");
+  const [nationalNumber, setNationalNumber] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -30,7 +32,7 @@ export default function GateCheckinPage() {
     const res = await fetch("/api/driver/request-otp", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone }),
+      body: JSON.stringify({ phone: toE164(countryCode, nationalNumber) }),
     });
     setBusy(false);
     if (res.ok) setStep("code");
@@ -44,7 +46,7 @@ export default function GateCheckinPage() {
     const res = await fetch("/api/driver/verify-otp", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone, code }),
+      body: JSON.stringify({ phone: toE164(countryCode, nationalNumber), code }),
     });
     setBusy(false);
     if (res.ok) setStep("form");
@@ -92,8 +94,8 @@ export default function GateCheckinPage() {
           {step === "phone" && (
             <form onSubmit={requestOtp} className="space-y-4">
               <div className="space-y-1.5">
-                <label className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5"><Phone size={12} /> Phone number</label>
-                <input required type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+46 70 123 4567" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+                <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Phone number</label>
+                <PhoneInput countryCode={countryCode} number={nationalNumber} onChange={(cc, n) => { setCountryCode(cc); setNationalNumber(n); }} required />
               </div>
               <button type="submit" disabled={busy} className="w-full bg-indigo-600 text-white py-3 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                 {busy && <Loader2 size={14} className="animate-spin" />} Send code

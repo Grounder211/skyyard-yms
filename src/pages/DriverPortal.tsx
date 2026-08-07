@@ -1,18 +1,25 @@
 import React, { useEffect, useState } from "react";
-import { Warehouse, Truck, Phone, KeyRound, LogOut, Loader2, Clock, CheckCircle2 } from "lucide-react";
+import { Warehouse, Truck, KeyRound, LogOut, Loader2, Clock, CheckCircle2, ShieldCheck, IdCard } from "lucide-react";
 import { motion } from "motion/react";
 import { QRCodeSVG } from "qrcode.react";
 import { Link } from "react-router-dom";
+import PhoneInput, { toE164 } from "../components/PhoneInput";
+
+const VEHICLE_TYPES = ["Semi-trailer", "Box truck", "Flatbed", "Refrigerated", "Tanker", "Container chassis"];
 
 export default function DriverPortal() {
   const [checking, setChecking] = useState(true);
   const [driver, setDriver] = useState<any>(null);
-  const [phone, setPhone] = useState("");
+  const [countryCode, setCountryCode] = useState("+46");
+  const [nationalNumber, setNationalNumber] = useState("");
   const [code, setCode] = useState("");
   const [step, setStep] = useState<"phone" | "code">("phone");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState<{ appointments: any[]; walkins: any[] }>({ appointments: [], walkins: [] });
+
+  const [profileForm, setProfileForm] = useState({ name: "", truck_plate: "", carrier_name: "", license_number: "", vehicle_type: VEHICLE_TYPES[0] });
+  const [profileBusy, setProfileBusy] = useState(false);
 
   const loadDashboard = async () => {
     const meRes = await fetch("/api/driver/me");
@@ -22,6 +29,9 @@ export default function DriverPortal() {
     }
     const me = await meRes.json();
     setDriver(me.driver);
+    if (me.driver && !me.driver.badge_issued_at) {
+      setProfileForm((f) => ({ ...f, name: me.driver.name || "", truck_plate: me.driver.default_plate || "" }));
+    }
     const apptRes = await fetch("/api/driver/appointments");
     if (apptRes.ok) setData(await apptRes.json());
     setChecking(false);
@@ -38,7 +48,7 @@ export default function DriverPortal() {
     const res = await fetch("/api/driver/request-otp", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone }),
+      body: JSON.stringify({ phone: toE164(countryCode, nationalNumber) }),
     });
     setBusy(false);
     if (res.ok) setStep("code");
@@ -52,7 +62,7 @@ export default function DriverPortal() {
     const res = await fetch("/api/driver/verify-otp", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone, code }),
+      body: JSON.stringify({ phone: toE164(countryCode, nationalNumber), code }),
     });
     setBusy(false);
     if (res.ok) {
@@ -62,11 +72,30 @@ export default function DriverPortal() {
     }
   };
 
+  const submitProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setProfileBusy(true);
+    const res = await fetch("/api/driver/profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(profileForm),
+    });
+    setProfileBusy(false);
+    if (res.ok) {
+      const { driver: updated } = await res.json();
+      setDriver(updated);
+    } else {
+      const d = await res.json().catch(() => ({}));
+      setError(d.error || "Failed to save profile");
+    }
+  };
+
   const logout = async () => {
     await fetch("/api/driver/logout", { method: "POST" });
     setDriver(null);
     setStep("phone");
-    setPhone("");
+    setNationalNumber("");
     setCode("");
     setData({ appointments: [], walkins: [] });
   };
@@ -102,16 +131,13 @@ export default function DriverPortal() {
               </div>
             </div>
             <h1 className="text-xl font-bold text-center text-slate-900 mb-1">Driver check-in</h1>
-            <p className="text-sm text-slate-500 text-center mb-6">Verify with your phone number to view your bookings and gate status.</p>
+            <p className="text-sm text-slate-500 text-center mb-6">Verify with your phone number to view your bookings, register for a gate badge, and check gate status.</p>
 
             {error && <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-4 py-2.5 mb-4">{error}</p>}
 
             {step === "phone" ? (
               <form onSubmit={requestOtp} className="space-y-4">
-                <div className="relative">
-                  <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                  <input required value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+46 70 123 4567" className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 pl-11 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
-                </div>
+                <PhoneInput countryCode={countryCode} number={nationalNumber} onChange={(cc, n) => { setCountryCode(cc); setNationalNumber(n); }} required />
                 <button type="submit" disabled={busy} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                   {busy && <Loader2 size={16} className="animate-spin" />} Send code
                 </button>
@@ -137,6 +163,61 @@ export default function DriverPortal() {
               <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Signed in as</p>
               <p className="text-lg font-bold text-slate-900">{driver.name || driver.phone}</p>
             </div>
+
+            {!driver.badge_issued_at ? (
+              <div className="bg-white border border-indigo-200 rounded-3xl p-6 space-y-4">
+                <div className="flex items-center gap-2">
+                  <IdCard size={18} className="text-indigo-600" />
+                  <h2 className="font-bold text-slate-900">Register for your gate badge</h2>
+                </div>
+                <p className="text-sm text-slate-500">Complete your profile once to get a permanent QR badge — scan it at future visits instead of filling out the gate form each time.</p>
+                {error && <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-4 py-2.5">{error}</p>}
+                <form onSubmit={submitProfile} className="space-y-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Full name</label>
+                    <input required value={profileForm.name} onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Truck plate</label>
+                      <input required value={profileForm.truck_plate} onChange={(e) => setProfileForm({ ...profileForm, truck_plate: e.target.value.toUpperCase() })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Carrier / company</label>
+                      <input required value={profileForm.carrier_name} onChange={(e) => setProfileForm({ ...profileForm, carrier_name: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold uppercase tracking-widest text-slate-400">License number</label>
+                      <input value={profileForm.license_number} onChange={(e) => setProfileForm({ ...profileForm, license_number: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Vehicle type</label>
+                      <select value={profileForm.vehicle_type} onChange={(e) => setProfileForm({ ...profileForm, vehicle_type: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm">
+                        {VEHICLE_TYPES.map((v) => <option key={v} value={v}>{v}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <button type="submit" disabled={profileBusy} className="w-full bg-indigo-600 text-white py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                    {profileBusy && <Loader2 size={14} className="animate-spin" />} Get my gate badge
+                  </button>
+                </form>
+              </div>
+            ) : (
+              <div className="bg-white border border-teal-200 rounded-3xl p-6 flex items-center gap-6 flex-wrap">
+                <div className="bg-white border border-slate-200 rounded-2xl p-3 shrink-0">
+                  <QRCodeSVG value={`DRV-${driver.badge_token}`} size={120} level="M" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-teal-700 text-xs font-bold uppercase tracking-widest mb-1">
+                    <ShieldCheck size={13} /> Your gate badge
+                  </div>
+                  <p className="font-bold text-slate-900">{driver.default_plate} · {driver.carrier_name}</p>
+                  <p className="text-xs text-slate-500">Scan this at the gate for instant entry — no form, no waiting.</p>
+                </div>
+              </div>
+            )}
 
             <div>
               <h2 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-3">Your bookings</h2>
