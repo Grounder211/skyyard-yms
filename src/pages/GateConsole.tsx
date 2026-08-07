@@ -154,6 +154,8 @@ export default function GateConsole() {
       if (!res.ok) {
         if (data.error === "BLACKLIST_BLOCK") {
           toast(`Entry denied — ${data.driver?.name || "driver"} (${data.driver?.plate || "?"}): ${data.reason}`, "error");
+        } else if (data.error === "INSPECTION_EXPIRED") {
+          toast(`Entry denied — ${data.driver?.name || "driver"} (${data.driver?.plate || "?"}): vehicle inspection expired ${new Date(data.expiredOn).toLocaleDateString()}`, "error");
         } else {
           toast(data.error || "Badge not recognized", "error");
         }

@@ -922,6 +922,18 @@ async function startServer() {
         return res.status(403).json({ error: "BLACKLIST_BLOCK", reason: blacklistHit.reason, driver: { name: driver.name, plate: driver.default_plate } });
       }
 
+      // Phase F: deny entry on an expired inspection even when the plate
+      // isn't blacklisted — a badge scan is unattended (no guard eyeballing
+      // paperwork), so this is the only checkpoint left to catch it. Only
+      // applies to plates actually registered in the fleet table (Phase D);
+      // no registration means nothing to check against, same "opt-in, don't
+      // block the unregistered" rule as the capacity check.
+      const { data: vehicle } = await db.from("vehicles").select("inspection_expiry").eq("plate", driver.default_plate.toUpperCase()).maybeSingle();
+      if (vehicle?.inspection_expiry && new Date(vehicle.inspection_expiry) < new Date()) {
+        logAudit({ action: "EXPIRED_INSPECTION_BLOCKED_BADGE_SCAN", entityType: "VEHICLE", entityId: driver.default_plate, details: { inspection_expiry: vehicle.inspection_expiry, driverId: driver.id }, ip: req.ip, facility_id: facilityId, severity: "warning" });
+        return res.status(403).json({ error: "INSPECTION_EXPIRED", expiredOn: vehicle.inspection_expiry, driver: { name: driver.name, plate: driver.default_plate } });
+      }
+
       const { data: walkin, error } = await db.from("walkin_registrations").insert({
         driver_name: driver.name, carrier_name: driver.carrier_name, phone: driver.phone,
         truck_plate: driver.default_plate, load_type: driver.default_load_type || "standard",
@@ -1929,6 +1941,29 @@ async function startServer() {
     const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
     await db.from("walkin_registrations").update({ driver_name: "[REDACTED]", phone: "[REDACTED]" }).lt("created_at", cutoff).neq("driver_name", "[REDACTED]");
     logAudit({ action: "DATA_RETENTION_ENFORCED", entityType: "system", details: { retentionDays } });
+  });
+
+  // Phase F: proactive warning before an inspection expiry becomes a hard
+  // badge-scan denial (see /api/gate/badge/:token). Notify once per vehicle
+  // via expiry_notified_at — same dedup lesson as the walk-in escalation
+  // cron earlier this session (set-before-notify, filter on IS NULL), so
+  // this doesn't fire daily for the same vehicle for its entire 30-day window.
+  cron.schedule("0 7 * * *", async () => {
+    const soon = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+    const { data: expiring } = await db.from("vehicles").select("*, carriers(name)").lte("inspection_expiry", soon).is("expiry_notified_at", null).eq("active", true);
+    for (const v of expiring || []) {
+      await db.from("vehicles").update({ expiry_notified_at: new Date().toISOString() }).eq("id", v.id);
+      const daysLeft = Math.ceil((new Date(v.inspection_expiry).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+      const status = daysLeft < 0 ? `expired ${Math.abs(daysLeft)} days ago` : `expires in ${daysLeft} days`;
+      logAudit({ action: "VEHICLE_INSPECTION_EXPIRING", entityType: "VEHICLE", entityId: v.plate, details: { inspection_expiry: v.inspection_expiry, daysLeft }, severity: daysLeft < 0 ? "critical" : "warning" });
+      const { data: admins } = await db.from("users").select("id, phone").in("role", ["ADMIN", "superadmin"]);
+      for (const admin of admins || []) {
+        notify({
+          type: "VEHICLE_INSPECTION_EXPIRING", recipientType: "ADMIN", recipientId: admin.id,
+          data: { phone: admin.phone, title: "Vehicle inspection " + (daysLeft < 0 ? "expired" : "expiring"), body: `${v.plate} (${(v as any).carriers?.name || "unassigned"}) ${status}. Badge-scan entry will be blocked once expired.`, link: "/superadmin" },
+        });
+      }
+    }
   });
 
   app.post("/api/privacy/request", async (req: any, res) => {
