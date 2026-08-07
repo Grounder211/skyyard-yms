@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { io } from "socket.io-client";
-import { ShieldCheck, Clock, ArrowRight, CheckCircle2, LogOut, AlertTriangle, Loader2, X } from "lucide-react";
+import { ShieldCheck, Clock, ArrowRight, CheckCircle2, LogOut, AlertTriangle, Loader2, X, Printer } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { useToast } from "../contexts/ToastContext";
 
 const STAGES = [
@@ -39,6 +40,7 @@ export default function PipelineBoard() {
   const [passes, setPasses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [verifyTarget, setVerifyTarget] = useState<any>(null);
+  const [slipTarget, setSlipTarget] = useState<any>(null);
   const [busy, setBusy] = useState<number | null>(null);
   const [, forceTick] = useState(0);
 
@@ -162,7 +164,9 @@ export default function PipelineBoard() {
                         {stale && <AlertTriangle size={13} className="text-amber-500 shrink-0" />}
                       </div>
                       <div className="flex items-center justify-between text-[10px] text-slate-400">
-                        <span className="font-mono">{p.pass_number}</span>
+                        <button onClick={() => setSlipTarget(p)} className="font-mono hover:text-indigo-600 flex items-center gap-1" title="View / print pass slip">
+                          <Printer size={10} /> {p.pass_number}
+                        </button>
                         <span className="flex items-center gap-1"><Clock size={10} /> {timeInStage(p.updated_at)}</span>
                       </div>
                       {p.spot_name && <p className="text-[10px] font-bold text-indigo-600">{p.spot_name}</p>}
@@ -212,6 +216,7 @@ export default function PipelineBoard() {
       </div>
 
       {verifyTarget && <VerifyModal pass={verifyTarget} onClose={() => setVerifyTarget(null)} onSubmit={submitVerify} busy={busy === verifyTarget.id} />}
+      {slipTarget && <SlipModal pass={slipTarget} onClose={() => setSlipTarget(null)} />}
     </div>
   );
 }
@@ -246,6 +251,42 @@ function VerifyModal({ pass, onClose, onSubmit, busy }: any) {
           className="w-full bg-indigo-600 text-white py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
         >
           {busy && <Loader2 size={14} className="animate-spin" />} Save verification
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SlipModal({ pass, onClose }: any) {
+  return (
+    <div className="fixed inset-0 z-[9998] bg-black/50 flex items-center justify-center p-6 print:bg-white print:static" onClick={onClose}>
+      <div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl print:shadow-none print:rounded-none" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4 print:hidden">
+          <h3 className="font-bold text-lg text-slate-900">Gate Pass</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-900"><X size={18} /></button>
+        </div>
+
+        <div className="text-center space-y-4">
+          <div className="flex justify-center">
+            <QRCodeSVG value={pass.pass_number} size={160} level="M" />
+          </div>
+          <div>
+            <p className="font-mono font-bold text-lg text-slate-900">{pass.pass_number}</p>
+            <p className="text-sm text-slate-500">{pass.plate} · {pass.carrier_name || "—"}</p>
+          </div>
+          <div className="flex items-center justify-center gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-indigo-50 text-indigo-700">{pass.stage.replace(/_/g, " ")}</span>
+            {pass.spot_name && <span className="text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-slate-100 text-slate-600">{pass.spot_name}</span>}
+          </div>
+          <div className="text-left bg-slate-50 rounded-xl p-4 space-y-1.5 text-xs">
+            <div className="flex justify-between"><span className="text-slate-400">Issued</span><span className="font-bold text-slate-700">{new Date(pass.issued_at).toLocaleString()}</span></div>
+            <div className="flex justify-between"><span className="text-slate-400">License verified</span><span className={`font-bold ${pass.license_verified ? "text-teal-600" : "text-slate-400"}`}>{pass.license_verified ? "Yes" : "Pending"}</span></div>
+            <div className="flex justify-between"><span className="text-slate-400">Vehicle matched</span><span className={`font-bold ${pass.vehicle_matched ? "text-teal-600" : "text-slate-400"}`}>{pass.vehicle_matched ? "Yes" : "Pending"}</span></div>
+          </div>
+        </div>
+
+        <button onClick={() => window.print()} className="w-full mt-6 bg-indigo-600 text-white py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 print:hidden">
+          <Printer size={14} /> Print slip
         </button>
       </div>
     </div>

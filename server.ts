@@ -984,6 +984,14 @@ async function startServer() {
       const { data, error } = await db.from("gate_passes").update({ stage, updated_at: new Date().toISOString() }).eq("id", req.params.id).select().single();
       if (error) throw error;
       logAudit({ action: "GATE_PASS_STAGE_ADVANCED", entityType: "GATE_PASS", entityId: String(pass.id), details: { from: pass.stage, to: stage }, ip: req.ip, facility_id: req.facilityId });
+
+      if (stage === "READY_FOR_EXIT" && pass.driver_id) {
+        const { data: driver } = await db.from("drivers").select("phone").eq("id", pass.driver_id).maybeSingle();
+        if (driver?.phone) {
+          notify({ type: "GATE_PASS_READY_FOR_EXIT", recipientType: "driver", recipientId: pass.driver_id, data: { phone: driver.phone, title: "Ready for exit", body: `SkyYard: ${pass.plate} is cleared for exit. An out-pass will be issued shortly. Ref: ${pass.pass_number}` } });
+        }
+      }
+
       emitUpdate("yard_update", { type: "GATE_PASS" });
       res.json(data);
     } catch (e: any) {
@@ -1002,6 +1010,14 @@ async function startServer() {
       }).eq("id", req.params.id).select().single();
       if (error) throw error;
       logAudit({ action: "OUT_PASS_ISSUED", entityType: "GATE_PASS", entityId: String(pass.id), details: { plate: pass.plate }, ip: req.ip, facility_id: req.facilityId });
+
+      if (pass.driver_id) {
+        const { data: driver } = await db.from("drivers").select("phone").eq("id", pass.driver_id).maybeSingle();
+        if (driver?.phone) {
+          notify({ type: "OUT_PASS_ISSUED", recipientType: "driver", recipientId: pass.driver_id, data: { phone: driver.phone, title: "Out-pass issued", body: `SkyYard: Out-pass issued for ${pass.plate}. You're clear to exit. Ref: ${pass.pass_number}` } });
+        }
+      }
+
       emitUpdate("yard_update", { type: "GATE_PASS" });
       res.json(data);
     } catch (e: any) {
