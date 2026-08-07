@@ -18,6 +18,7 @@ import PDFDocument from "pdfkit";
 import { db, unwrap } from "./server/supabaseClient.js";
 import { logger } from "./server/logger.js";
 import { getCurrentTemperature } from "./server/services/smhiWeather.js";
+import { generateSecret as generateTotpSecret, verifyToken as verifyTotpToken, otpauthUrl as totpUri } from "./server/services/totp.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -365,6 +366,17 @@ async function startServer() {
     message: { error: "Too many registration attempts. Try again in 15 minutes." },
   });
 
+  // TOTP is a 6-digit code same as the driver OTP — same brute-force math,
+  // same fix: cap attempts per-IP+session so it can't be scripted.
+  const totpVerifyLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: any) => `${ipKeyGenerator(req.ip)}:${req.session?.pending_2fa_user_id || req.session?.user?.id || ""}`,
+    message: { error: "Too many attempts. Try again in 15 minutes." },
+  });
+
   // --- Staff Authentication ---
   app.post("/api/auth/login", loginLimiter, async (req: any, res) => {
     const { email, password } = req.body;
@@ -375,6 +387,16 @@ async function startServer() {
         logAudit({ action: "STAFF_LOGIN_FAILED", entityType: "USER", entityId: String(email), details: {}, ip: req.ip, facility_id: 1, severity: "warning" });
         return res.status(401).json({ error: "Invalid email or password" });
       }
+
+      if (user.totp_enabled) {
+        // Password correct, but don't set session.user yet — that's what every
+        // requireRole check gates on. Second factor required before the
+        // session actually counts as authenticated.
+        req.session.pending_2fa_user_id = user.id;
+        logAudit({ action: "STAFF_LOGIN_PASSWORD_OK_AWAITING_2FA", entityType: "USER", entityId: String(user.id), details: {}, ip: req.ip, facility_id: user.facility_id || 1 });
+        return res.json({ success: false, requiresTotp: true });
+      }
+
       req.session.user = { id: user.id, email: user.email, name: user.name, role: user.role, facility_id: user.facility_id };
       if (user.facility_id) req.session.facility_id = user.facility_id;
       logAudit({ action: "STAFF_LOGIN", entityType: "USER", entityId: String(user.id), details: { email: user.email }, ip: req.ip, facility_id: user.facility_id || 1 });
@@ -384,13 +406,79 @@ async function startServer() {
     }
   });
 
+  app.post("/api/auth/login/2fa-verify", totpVerifyLimiter, async (req: any, res) => {
+    const { code } = req.body;
+    const pendingUserId = req.session?.pending_2fa_user_id;
+    if (!pendingUserId) return res.status(401).json({ error: "No login in progress" });
+    try {
+      const { data: user } = await db.from("users").select("*").eq("id", pendingUserId).maybeSingle();
+      if (!user || !user.totp_secret || !verifyTotpToken(user.totp_secret, code)) {
+        logAudit({ action: "STAFF_LOGIN_2FA_FAILED", entityType: "USER", entityId: String(pendingUserId), details: {}, ip: req.ip, facility_id: user?.facility_id || 1, severity: "warning" });
+        return res.status(401).json({ error: "Invalid or expired code" });
+      }
+      delete req.session.pending_2fa_user_id;
+      req.session.user = { id: user.id, email: user.email, name: user.name, role: user.role, facility_id: user.facility_id };
+      if (user.facility_id) req.session.facility_id = user.facility_id;
+      logAudit({ action: "STAFF_LOGIN", entityType: "USER", entityId: String(user.id), details: { email: user.email, via2fa: true }, ip: req.ip, facility_id: user.facility_id || 1 });
+      res.json({ success: true, user: req.session.user });
+    } catch (e: any) {
+      res.status(500).json({ error: "Verification failed" });
+    }
+  });
+
   app.get("/api/auth/me", (req: any, res) => {
     if (!req.session?.user) return res.status(401).json({ error: "Not authenticated" });
     res.json({ user: req.session.user });
   });
 
+  app.get("/api/auth/2fa/status", (req: any, res) => {
+    if (!req.session?.user) return res.status(401).json({ error: "Not authenticated" });
+    (async () => {
+      const { data: user } = await db.from("users").select("totp_enabled").eq("id", req.session.user.id).maybeSingle();
+      res.json({ enabled: !!user?.totp_enabled });
+    })().catch((e) => res.status(500).json({ error: e.message }));
+  });
+
   app.post("/api/auth/logout", (req: any, res) => {
     req.session?.destroy(() => res.json({ success: true }));
+  });
+
+  // --- Staff 2FA (TOTP) self-service setup ---
+  app.post("/api/auth/2fa/setup", (req: any, res) => {
+    if (!req.session?.user) return res.status(401).json({ error: "Not authenticated" });
+    (async () => {
+      const secret = generateTotpSecret();
+      await db.from("users").update({ totp_secret: secret, totp_enabled: false }).eq("id", req.session.user.id);
+      res.json({ secret, otpauth_url: totpUri(secret, req.session.user.email) });
+    })().catch((e) => res.status(500).json({ error: e.message }));
+  });
+
+  app.post("/api/auth/2fa/confirm", totpVerifyLimiter, (req: any, res) => {
+    if (!req.session?.user) return res.status(401).json({ error: "Not authenticated" });
+    (async () => {
+      const { code } = req.body;
+      const { data: user } = await db.from("users").select("totp_secret").eq("id", req.session.user.id).maybeSingle();
+      if (!user?.totp_secret || !verifyTotpToken(user.totp_secret, code)) {
+        return res.status(401).json({ error: "Invalid code — check your authenticator app and try again" });
+      }
+      await db.from("users").update({ totp_enabled: true }).eq("id", req.session.user.id);
+      logAudit({ action: "STAFF_2FA_ENABLED", entityType: "USER", entityId: String(req.session.user.id), details: {}, ip: req.ip, facility_id: req.session.user.facility_id || 1 });
+      res.json({ success: true });
+    })().catch((e) => res.status(500).json({ error: e.message }));
+  });
+
+  app.post("/api/auth/2fa/disable", (req: any, res) => {
+    if (!req.session?.user) return res.status(401).json({ error: "Not authenticated" });
+    (async () => {
+      const { password } = req.body;
+      const { data: user } = await db.from("users").select("password_hash").eq("id", req.session.user.id).maybeSingle();
+      if (!user || !(await bcrypt.compare(password || "", user.password_hash))) {
+        return res.status(401).json({ error: "Incorrect password" });
+      }
+      await db.from("users").update({ totp_enabled: false, totp_secret: null }).eq("id", req.session.user.id);
+      logAudit({ action: "STAFF_2FA_DISABLED", entityType: "USER", entityId: String(req.session.user.id), details: {}, ip: req.ip, facility_id: req.session.user.facility_id || 1, severity: "warning" });
+      res.json({ success: true });
+    })().catch((e) => res.status(500).json({ error: e.message }));
   });
 
   // Facility Middleware

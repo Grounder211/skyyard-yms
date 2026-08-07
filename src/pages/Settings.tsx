@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Globe2, Coins, Clock, Bell, Warehouse, FileLock2, CheckCircle2, Loader2, DoorOpen } from "lucide-react";
+import { Globe2, Coins, Clock, Bell, Warehouse, FileLock2, CheckCircle2, Loader2, DoorOpen, ShieldCheck, KeyRound, Copy } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { Link } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
 import { useToast } from "../contexts/ToastContext";
@@ -20,6 +21,20 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [requests, setRequests] = useState<any[]>([]);
 
+  const [totpEnabled, setTotpEnabled] = useState(false);
+  const [totpSetup, setTotpSetup] = useState<{ secret: string; otpauth_url: string } | null>(null);
+  const [totpCode, setTotpCode] = useState("");
+  const [totpBusy, setTotpBusy] = useState(false);
+  const [disablePassword, setDisablePassword] = useState("");
+  const [showDisableForm, setShowDisableForm] = useState(false);
+
+  const loadTotpStatus = () => {
+    fetch("/api/auth/2fa/status")
+      .then((r) => (r.ok ? r.json() : { enabled: false }))
+      .then((d) => setTotpEnabled(!!d.enabled))
+      .catch(() => {});
+  };
+
   const load = () => {
     fetch("/api/settings/general")
       .then((r) => r.json())
@@ -32,9 +47,58 @@ export default function Settings() {
       .then((r) => (r.ok ? r.json() : []))
       .then((data) => setRequests(Array.isArray(data) ? data : []))
       .catch(() => {});
+    loadTotpStatus();
   };
 
   useEffect(load, []);
+
+  const startTotpSetup = async () => {
+    setTotpBusy(true);
+    const res = await fetch("/api/auth/2fa/setup", { method: "POST" });
+    setTotpBusy(false);
+    if (res.ok) setTotpSetup(await res.json());
+    else toast("Failed to start 2FA setup", "error");
+  };
+
+  const confirmTotpSetup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTotpBusy(true);
+    const res = await fetch("/api/auth/2fa/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: totpCode }),
+    });
+    setTotpBusy(false);
+    if (res.ok) {
+      toast("Two-factor authentication enabled", "success");
+      setTotpSetup(null);
+      setTotpCode("");
+      setTotpEnabled(true);
+    } else {
+      const data = await res.json().catch(() => ({}));
+      toast(data.error || "Invalid code", "error");
+    }
+  };
+
+  const disableTotp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTotpBusy(true);
+    const res = await fetch("/api/auth/2fa/disable", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: disablePassword }),
+    });
+    setTotpBusy(false);
+    if (res.ok) {
+      toast("Two-factor authentication disabled", "success");
+      setTotpEnabled(false);
+      setShowDisableForm(false);
+      setDisablePassword("");
+    } else {
+      const data = await res.json().catch(() => ({}));
+      toast(data.error || "Incorrect password", "error");
+    }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -131,6 +195,67 @@ export default function Settings() {
         <button onClick={save} disabled={saving} className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-2">
           {saving && <Loader2 size={14} className="animate-spin" />} Save settings
         </button>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-[2rem] p-8 space-y-5">
+        <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
+          <ShieldCheck size={18} className="text-indigo-600" /> Two-factor authentication
+        </h3>
+
+        {totpEnabled && !showDisableForm && (
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-2 text-teal-700 bg-teal-50 border border-teal-200 rounded-xl px-4 py-2.5 text-sm font-bold">
+              <CheckCircle2 size={16} /> 2FA is active on your account
+            </div>
+            <button onClick={() => setShowDisableForm(true)} className="text-sm font-bold text-red-600 hover:text-red-700">Disable</button>
+          </div>
+        )}
+
+        {totpEnabled && showDisableForm && (
+          <form onSubmit={disableTotp} className="space-y-3 max-w-sm">
+            <p className="text-sm text-slate-500">Enter your password to disable two-factor authentication.</p>
+            <input type="password" required value={disablePassword} onChange={(e) => setDisablePassword(e.target.value)} placeholder="Current password" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+            <div className="flex gap-2">
+              <button type="submit" disabled={totpBusy} className="bg-red-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-red-700 transition-all disabled:opacity-50 flex items-center gap-1.5">
+                {totpBusy && <Loader2 size={12} className="animate-spin" />} Confirm disable
+              </button>
+              <button type="button" onClick={() => { setShowDisableForm(false); setDisablePassword(""); }} className="text-xs font-bold text-slate-500 hover:text-slate-800 px-4 py-2">Cancel</button>
+            </div>
+          </form>
+        )}
+
+        {!totpEnabled && !totpSetup && (
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <p className="text-sm text-slate-500 max-w-md">Require a 6-digit code from an authenticator app (Google Authenticator, Authy, 1Password) in addition to your password.</p>
+            <button onClick={startTotpSetup} disabled={totpBusy} className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-2 shrink-0">
+              {totpBusy && <Loader2 size={14} className="animate-spin" />} Enable 2FA
+            </button>
+          </div>
+        )}
+
+        {!totpEnabled && totpSetup && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 items-start">
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 w-fit">
+              <QRCodeSVG value={totpSetup.otpauth_url} size={160} level="M" />
+            </div>
+            <form onSubmit={confirmTotpSetup} className="space-y-3">
+              <p className="text-sm text-slate-500">Scan the QR code, or enter this key manually:</p>
+              <button type="button" onClick={() => { navigator.clipboard?.writeText(totpSetup.secret); toast("Secret copied", "success"); }} className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono text-slate-600 hover:border-indigo-300 transition-all w-full text-left">
+                <Copy size={12} className="shrink-0" /> {totpSetup.secret}
+              </button>
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5"><KeyRound size={12} /> Verification code</label>
+                <input type="text" inputMode="numeric" required maxLength={6} value={totpCode} onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ""))} placeholder="000000" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-mono tracking-widest text-center focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+              </div>
+              <div className="flex gap-2">
+                <button type="submit" disabled={totpBusy} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-1.5">
+                  {totpBusy && <Loader2 size={12} className="animate-spin" />} Confirm & enable
+                </button>
+                <button type="button" onClick={() => { setTotpSetup(null); setTotpCode(""); }} className="text-xs font-bold text-slate-500 hover:text-slate-800 px-4 py-2">Cancel</button>
+              </div>
+            </form>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
