@@ -252,15 +252,18 @@ function FleetTab() {
   const emptyForm = { carrier_id: "", plate: "", equipment_type: "standard", max_weight_kg: "", max_volume_m3: "", registration_country: "SE", inspection_expiry: "" };
   const [form, setForm] = useState<any>(emptyForm);
   const [busy, setBusy] = useState(false);
+  const [summary, setSummary] = useState<any>(null);
 
   const load = () => {
     Promise.all([
       fetch("/api/admin/vehicles").then((r) => r.json()),
       fetch("/api/admin/carriers").then((r) => r.json()),
+      fetch("/api/admin/fleet/summary").then((r) => r.json()),
     ])
-      .then(([vehicles, carrierList]) => {
+      .then(([vehicles, carrierList, fleetSummary]) => {
         setRows(Array.isArray(vehicles) ? vehicles : []);
         setCarriers(Array.isArray(carrierList) ? carrierList : []);
+        setSummary(fleetSummary);
       })
       .finally(() => setLoading(false));
   };
@@ -320,7 +323,68 @@ function FleetTab() {
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+    <div className="space-y-8">
+      {summary && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="bg-white border border-slate-200 rounded-2xl p-5">
+              <p className="text-2xl font-bold text-slate-900">{summary.totalVehicles}</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">Registered vehicles</p>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-2xl p-5">
+              <p className="text-2xl font-bold text-slate-900">{summary.activeVehicles}</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">Active</p>
+            </div>
+            <div className={`bg-white border rounded-2xl p-5 ${summary.expired.length > 0 ? "border-red-200" : "border-slate-200"}`}>
+              <p className={`text-2xl font-bold ${summary.expired.length > 0 ? "text-red-600" : "text-slate-900"}`}>{summary.expired.length}</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">Inspection expired</p>
+            </div>
+            <div className={`bg-white border rounded-2xl p-5 ${summary.expiringSoon.length > 0 ? "border-amber-200" : "border-slate-200"}`}>
+              <p className={`text-2xl font-bold ${summary.expiringSoon.length > 0 ? "text-amber-600" : "text-slate-900"}`}>{summary.expiringSoon.length}</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">Expiring within 30d</p>
+            </div>
+          </div>
+
+          {(summary.expired.length > 0 || summary.expiringSoon.length > 0 || summary.recentCapacityWarnings.length > 0) && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {(summary.expired.length > 0 || summary.expiringSoon.length > 0) && (
+                <div className="bg-white border border-slate-200 rounded-3xl p-6">
+                  <h3 className="text-sm font-bold text-slate-900 mb-3">Inspection status</h3>
+                  <div className="space-y-2">
+                    {summary.expired.map((v: any) => (
+                      <div key={v.plate} className="flex items-center justify-between text-xs bg-red-50 border border-red-100 rounded-xl px-3 py-2">
+                        <span className="font-bold text-red-700">{v.plate} · {v.carrier_name}</span>
+                        <span className="text-red-500">expired {new Date(v.inspection_expiry).toLocaleDateString()}</span>
+                      </div>
+                    ))}
+                    {summary.expiringSoon.map((v: any) => (
+                      <div key={v.plate} className="flex items-center justify-between text-xs bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+                        <span className="font-bold text-amber-700">{v.plate} · {v.carrier_name}</span>
+                        <span className="text-amber-600">{v.daysLeft}d left</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {summary.recentCapacityWarnings.length > 0 && (
+                <div className="bg-white border border-slate-200 rounded-3xl p-6">
+                  <h3 className="text-sm font-bold text-slate-900 mb-3">Recent capacity warnings (30d)</h3>
+                  <div className="space-y-2">
+                    {summary.recentCapacityWarnings.map((w: any, i: number) => (
+                      <div key={i} className="text-xs bg-slate-50 border border-slate-100 rounded-xl px-3 py-2">
+                        <span className="font-bold text-slate-700">{w.entityId}</span>
+                        <p className="text-slate-500 mt-0.5">{(w.details?.warnings || []).join("; ")}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
       <form onSubmit={submit} className="bg-white border border-slate-200 rounded-3xl p-6 space-y-4 h-fit">
         <div className="flex items-center justify-between">
           <p className="text-sm font-bold text-slate-900">{editingId ? "Edit vehicle" : "Register vehicle"}</p>
@@ -416,6 +480,7 @@ function FleetTab() {
             </tbody>
           </table>
         )}
+      </div>
       </div>
     </div>
   );

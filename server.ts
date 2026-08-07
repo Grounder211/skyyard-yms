@@ -1603,6 +1603,46 @@ async function startServer() {
     }
   });
 
+  // Phase G: read-only fleet health rollup — per-carrier counts, inspection
+  // status, and recent capacity-warning frequency (from the audit trail
+  // Phase E already writes to). Nothing here mutates state.
+  app.get("/api/admin/fleet/summary", requireRole("superadmin", "ADMIN"), async (req, res) => {
+    try {
+      const { data: vehicles } = await db.from("vehicles").select("*, carriers(name)");
+      const all = vehicles || [];
+      const now = new Date();
+      const soon = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+      const byCarrierMap = new Map<string, number>();
+      for (const v of all) {
+        const name = (v as any).carriers?.name || "Unassigned";
+        byCarrierMap.set(name, (byCarrierMap.get(name) || 0) + 1);
+      }
+
+      const expired = all.filter((v: any) => v.inspection_expiry && new Date(v.inspection_expiry) < now)
+        .map((v: any) => ({ plate: v.plate, carrier_name: v.carriers?.name || "Unassigned", inspection_expiry: v.inspection_expiry }));
+      const expiringSoon = all.filter((v: any) => v.inspection_expiry && new Date(v.inspection_expiry) >= now && new Date(v.inspection_expiry) <= soon)
+        .map((v: any) => ({
+          plate: v.plate, carrier_name: v.carriers?.name || "Unassigned", inspection_expiry: v.inspection_expiry,
+          daysLeft: Math.ceil((new Date(v.inspection_expiry).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)),
+        }));
+
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const { data: warnings } = await db.from("audit_logs").select("entityId, details, timestamp").eq("action", "LOAD_CAPACITY_WARNING").gte("timestamp", thirtyDaysAgo).order("timestamp", { ascending: false }).limit(10);
+
+      res.json({
+        totalVehicles: all.length,
+        activeVehicles: all.filter((v: any) => v.active).length,
+        byCarrier: Array.from(byCarrierMap, ([carrier_name, count]) => ({ carrier_name, count })).sort((a, b) => b.count - a.count),
+        expired,
+        expiringSoon,
+        recentCapacityWarnings: warnings || [],
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/book/:token", async (req, res) => {
     const { token } = req.params;
     const { data: carrier } = await db.from("carriers").select("*").eq("booking_token", token).gt("booking_token_expires", new Date().toISOString()).maybeSingle();
