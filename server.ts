@@ -1254,6 +1254,53 @@ async function startServer() {
   });
 
   // API v1: Platform Integration
+  // Management endpoints for api_keys — same gap as carriers earlier this
+  // session: apiKeyAuth (verification) existed, but nothing anywhere could
+  // ever create a row for it to verify. The whole /api/v1 external
+  // integration surface was unusable. SHA-256 is the right hash here
+  // (unlike passwords/OTP/TOTP secrets) because the raw key itself is
+  // 256 bits of crypto.randomBytes, not a human-guessable secret — the
+  // hash's job is just to avoid storing the live credential in plaintext,
+  // not to resist brute force against low-entropy input.
+  app.get("/api/admin/api-keys", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    try {
+      const { data } = await db.from("api_keys").select("id, name, key_prefix, tier, last_used_at, revoked_at, created_at").eq("facility_id", req.facilityId).order("created_at", { ascending: false });
+      res.json(data || []);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/api-keys", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const { name, tier } = req.body;
+    if (!name) return res.status(400).json({ error: "Name is required" });
+    try {
+      const rawKey = `sky_${crypto.randomBytes(32).toString("hex")}`;
+      const keyHash = crypto.createHash("sha256").update(rawKey).digest("hex");
+      const keyPrefix = rawKey.slice(0, 12);
+      const { data, error } = await db.from("api_keys").insert({
+        facility_id: req.facilityId, name, key_hash: keyHash, key_prefix: keyPrefix, tier: tier || "standard",
+      }).select("id, name, key_prefix, tier, created_at").single();
+      if (error) throw error;
+      logAudit({ action: "API_KEY_CREATED", entityType: "API_KEY", entityId: String(data.id), details: { name, tier }, ip: req.ip, facility_id: req.facilityId });
+      // Full key returned exactly once — only the hash is ever stored, so
+      // this is the only moment it can be shown. Standard API-key UX.
+      res.json({ ...data, key: rawKey });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/api-keys/:id/revoke", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    try {
+      await db.from("api_keys").update({ revoked_at: new Date().toISOString() }).eq("id", req.params.id).eq("facility_id", req.facilityId);
+      logAudit({ action: "API_KEY_REVOKED", entityType: "API_KEY", entityId: req.params.id, details: {}, ip: req.ip, facility_id: req.facilityId, severity: "warning" });
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   const apiKeyAuth = async (req: any, res: any, next: any) => {
     const authHeader = req.headers["authorization"];
     if (!authHeader?.startsWith("Bearer ")) return res.status(401).json({ success: false, error: "Bearer token required" });
