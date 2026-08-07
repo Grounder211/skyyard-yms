@@ -725,8 +725,9 @@ async function startServer() {
       if (assign?.assigned) {
         logAudit({ action: "WALKIN_AUTO_CHECKIN", entityType: "WALKIN", entityId: String(walkin.id), details: { truck_plate, spot: assign.spotName }, ip: req.ip, facility_id: facilityId });
         notify({ type: "WALKIN_CONFIRMED", recipientType: "driver", recipientId: walkin.id, data: { phone, title: "Registration Sync", body: `SkyYard: Walk-in confirmed for ${truck_plate}. Proceeds to parking spot: ${assign.spotName}. Reference: WK-${walkin.id}` } });
+        const pass = await issueGatePass({ facilityId, plate: truck_plate, carrierName: carrier_name, spotName: assign.spotName, issuedBy: req.session?.user?.id, entrySource: "guard_walkin" });
         emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
-        return res.json({ success: true, id: `WK-${walkin.id}`, spotName: assign.spotName });
+        return res.json({ success: true, id: `WK-${walkin.id}`, spotName: assign.spotName, passNumber: pass?.pass_number });
       }
 
       logAudit({ action: "WALKIN_REGISTERED", entityType: "WALKIN", entityId: String(walkin.id), details: { truck_plate }, ip: req.ip, facility_id: facilityId });
@@ -747,6 +748,37 @@ async function startServer() {
   // backstop, so this path always lands in "pending_approval" and waits for
   // an explicit admin decision (in-app, or SMS reply — see /api/twilio/inbound-sms).
 
+  // Unified in-pass record — every entry path (staff gate checkin, badge
+  // scan, self-service walk-in approval) issues one of these instead of
+  // just a gate_logs row. Gives every vehicle a trackable pipeline stage
+  // (IN_PASS -> PARKED -> LOADING/UNLOADING -> READY_FOR_EXIT -> OUT_PASS ->
+  // EXITED) and a human-readable pass number, instead of only "it's in the
+  // yard somewhere" that trailers.status alone provided.
+  const issueGatePass = async (params: {
+    facilityId: number; plate: string; carrierName?: string | null; trailerId?: number | null;
+    driverId?: number | null; spotName?: string | null; issuedBy?: number | null; entrySource: string;
+  }) => {
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const passNumber = `IN-${today}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const [{ data: vehicle }, { data: spot }] = await Promise.all([
+      db.from("vehicles").select("id").eq("plate", params.plate).maybeSingle(),
+      params.spotName ? db.from("spots").select("id").eq("facility_id", params.facilityId).eq("name", params.spotName).maybeSingle() : Promise.resolve({ data: null }),
+    ]);
+
+    const { data: pass, error } = await db.from("gate_passes").insert({
+      facility_id: params.facilityId, pass_number: passNumber, plate: params.plate,
+      carrier_name: params.carrierName || null, trailer_id: params.trailerId || null,
+      driver_id: params.driverId || null, vehicle_id: vehicle?.id || null, spot_id: spot?.id || null,
+      stage: "IN_PASS", entry_source: params.entrySource, issued_by: params.issuedBy || null,
+    }).select().single();
+    if (error) {
+      logger.error("Gate pass issuance failed", { error: error.message, plate: params.plate });
+      return null;
+    }
+    return pass;
+  };
+
   const approveWalkin = async (walkinId: number, adminUserId: number | null, facilityId: number): Promise<{ ok: boolean; error?: string; spotName?: string | null }> => {
     const { data: walkin } = await db.from("walkin_registrations").select("*").eq("id", walkinId).eq("facility_id", facilityId).maybeSingle();
     if (!walkin) return { ok: false, error: "Not found" };
@@ -760,6 +792,7 @@ async function startServer() {
       await db.from("walkin_registrations").update({ reviewed_by: adminUserId, reviewed_at: new Date().toISOString() }).eq("id", walkinId);
       logAudit({ action: "WALKIN_APPROVED", entityType: "WALKIN", entityId: String(walkinId), details: { spot: assign.spotName }, facility_id: facilityId });
       notify({ type: "WALKIN_APPROVED", recipientType: "driver", recipientId: walkin.driver_id, data: { phone: walkin.phone, title: "Entry Approved", body: `SkyYard: You're approved. Proceed to spot ${assign.spotName}. Reference: WK-${walkinId}` } });
+      await issueGatePass({ facilityId, plate: walkin.truck_plate, carrierName: walkin.carrier_name, driverId: walkin.driver_id, spotName: assign.spotName, issuedBy: adminUserId, entrySource: "self_service_approved" });
       emitUpdate("yard_update", { type: "WALKIN", id: walkinId });
       return { ok: true, spotName: assign.spotName };
     }
@@ -937,8 +970,13 @@ async function startServer() {
 
       if (assign?.assigned) {
         notify({ type: "BADGE_SCAN_CONFIRMED", recipientType: "driver", recipientId: driver.id, data: { phone: driver.phone, title: "Entry confirmed", body: `SkyYard: Badge scanned, welcome back. Proceed to spot ${assign.spotName}.` } });
+        const pass = await issueGatePass({ facilityId, plate: driver.default_plate, carrierName: driver.carrier_name, driverId: driver.id, spotName: assign.spotName, issuedBy: req.session?.user?.id, entrySource: "badge_scan" });
+        // Pre-registered badge already implies the driver's identity and vehicle were
+        // verified at registration time — mark the checklist pre-satisfied so staff
+        // aren't asked to re-verify what the badge itself already vouches for.
+        if (pass) await db.from("gate_passes").update({ license_verified: true, vehicle_matched: true, verified_by: req.session?.user?.id, verified_at: new Date().toISOString() }).eq("id", pass.id);
         emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
-        return res.json({ success: true, driver: { name: driver.name, plate: driver.default_plate, carrier_name: driver.carrier_name }, spotName: assign.spotName });
+        return res.json({ success: true, driver: { name: driver.name, plate: driver.default_plate, carrier_name: driver.carrier_name }, spotName: assign.spotName, passNumber: pass?.pass_number });
       }
 
       emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
@@ -1016,13 +1054,25 @@ async function startServer() {
 
       logAudit({ action: "GATE_CHECKIN", entityType: "TRAILER", entityId: plate, details: { appointmentId, spot: result.spotName, overrideDiscrepancy }, ip: req.ip, facility_id: facilityId });
 
+      // Staff already verified plate/carrier against the appointment (the
+      // discrepancy check above) and captured the seal number — record that
+      // as the gate pass's completed verification checklist rather than
+      // leaving it for a separate step.
+      const pass = await issueGatePass({ facilityId, plate, carrierName: carrierName || appt.carrier, driverId: appt.driver_id, spotName: result.spotName, issuedBy: req.session?.user?.id, entrySource: "staff_checkin" });
+      if (pass) {
+        await db.from("gate_passes").update({
+          license_verified: true, vehicle_matched: !hasPlateMismatch, documents_ok: !!sealNumber,
+          verified_by: req.session?.user?.id, verified_at: new Date().toISOString(),
+        }).eq("id", pass.id);
+      }
+
       const driverPhone = appt.drivers?.phone;
       if (driverPhone) {
         notify({ type: "GATE_CHECKIN", recipientType: "driver", recipientId: appt.driver_id, data: { phone: driverPhone, title: "Checked In", body: `SkyYard: Welcome! You are assigned to parking spot: ${result.spotName}. Please wait for further instructions.` } });
       }
 
       emitUpdate("yard_update", { type: "CHECKIN", plate });
-      res.json({ success: true, spotName: result.spotName });
+      res.json({ success: true, spotName: result.spotName, passNumber: pass?.pass_number });
     } catch (e: any) {
       logger.error("Gate checkin failed", { error: e });
       res.status(500).json({ error: "Sync failed" });
