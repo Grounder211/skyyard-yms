@@ -1487,6 +1487,63 @@ async function startServer() {
     res.json({ booking_url: `/book/${token}` });
   });
 
+  // --- Fleet registry: registered vehicles per carrier (Phase D) ---
+  // Distinct from `trailers`, which is a per-visit occupancy record created
+  // fresh at every gate checkin/walk-in. This is the persistent asset —
+  // capacity, equipment type, inspection status — that visit-time checks
+  // (load capacity validation, expired-inspection denial) will reference
+  // against in later phases.
+  app.get("/api/admin/vehicles", requireRole("superadmin", "ADMIN"), async (req, res) => {
+    try {
+      const { data } = await db.from("vehicles").select("*, carriers(name)").order("created_at", { ascending: false });
+      res.json((data || []).map((v: any) => ({ ...v, carrier_name: v.carriers?.name })));
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/vehicles", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const { carrier_id, plate, equipment_type, max_weight_kg, max_volume_m3, registration_country, inspection_expiry } = req.body;
+    if (!plate) return res.status(400).json({ error: "Plate is required" });
+    try {
+      const { data, error } = await db.from("vehicles").insert({
+        carrier_id: carrier_id || null, plate: String(plate).toUpperCase(), equipment_type: equipment_type || "standard",
+        max_weight_kg: max_weight_kg || null, max_volume_m3: max_volume_m3 || null,
+        registration_country: registration_country || "SE", inspection_expiry: inspection_expiry || null,
+      }).select("*, carriers(name)").single();
+      if (error) throw error;
+      logAudit({ action: "VEHICLE_REGISTERED", entityType: "VEHICLE", entityId: String(data.id), details: { plate }, ip: req.ip, facility_id: req.facilityId || 1 });
+      res.json({ ...data, carrier_name: data.carriers?.name });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/admin/vehicles/:id", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const { id } = req.params;
+    const allowedFields = ["carrier_id", "plate", "equipment_type", "max_weight_kg", "max_volume_m3", "registration_country", "inspection_expiry", "active"];
+    const patch: any = {};
+    for (const field of allowedFields) if (req.body[field] !== undefined) patch[field] = req.body[field];
+    if (patch.plate) patch.plate = String(patch.plate).toUpperCase();
+    if (Object.keys(patch).length === 0) return res.status(400).json({ error: "No valid fields to update" });
+    try {
+      const { data, error } = await db.from("vehicles").update(patch).eq("id", id).select("*, carriers(name)").single();
+      if (error) throw error;
+      res.json({ ...data, carrier_name: data.carriers?.name });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/admin/vehicles/:id", requireRole("superadmin", "ADMIN"), async (req, res) => {
+    try {
+      await db.from("vehicles").delete().eq("id", req.params.id);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/book/:token", async (req, res) => {
     const { token } = req.params;
     const { data: carrier } = await db.from("carriers").select("*").eq("booking_token", token).gt("booking_token_expires", new Date().toISOString()).maybeSingle();
