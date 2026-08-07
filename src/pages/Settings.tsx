@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Globe2, Coins, Clock, Bell, Warehouse, FileLock2, CheckCircle2, Loader2, DoorOpen, ShieldCheck, KeyRound, Copy } from "lucide-react";
+import { Globe2, Coins, Clock, Bell, Warehouse, FileLock2, CheckCircle2, Loader2, DoorOpen, ShieldCheck, KeyRound, Copy, Code2, Ban, AlertCircle } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { Link } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
@@ -35,6 +35,48 @@ export default function Settings() {
       .catch(() => {});
   };
 
+  const [apiKeys, setApiKeys] = useState<any[]>([]);
+  const [newKeyName, setNewKeyName] = useState("");
+  const [newKeyTier, setNewKeyTier] = useState("standard");
+  const [keyBusy, setKeyBusy] = useState(false);
+  const [revealedKey, setRevealedKey] = useState<string | null>(null);
+
+  const loadApiKeys = () => {
+    fetch("/api/admin/api-keys")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setApiKeys(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  };
+
+  const createApiKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newKeyName.trim()) return;
+    setKeyBusy(true);
+    const res = await fetch("/api/admin/api-keys", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newKeyName, tier: newKeyTier }),
+    });
+    setKeyBusy(false);
+    if (res.ok) {
+      const data = await res.json();
+      setRevealedKey(data.key);
+      setNewKeyName("");
+      loadApiKeys();
+    } else {
+      toast("Failed to create API key", "error");
+    }
+  };
+
+  const revokeApiKey = async (id: string) => {
+    if (!confirm("Revoke this API key? Anything using it will stop working immediately.")) return;
+    const res = await fetch(`/api/admin/api-keys/${id}/revoke`, { method: "POST" });
+    if (res.ok) {
+      toast("API key revoked", "success");
+      loadApiKeys();
+    }
+  };
+
   const load = () => {
     fetch("/api/settings/general")
       .then((r) => r.json())
@@ -48,6 +90,7 @@ export default function Settings() {
       .then((data) => setRequests(Array.isArray(data) ? data : []))
       .catch(() => {});
     loadTotpStatus();
+    loadApiKeys();
   };
 
   useEffect(load, []);
@@ -254,6 +297,76 @@ export default function Settings() {
                 <button type="button" onClick={() => { setTotpSetup(null); setTotpCode(""); }} className="text-xs font-bold text-slate-500 hover:text-slate-800 px-4 py-2">Cancel</button>
               </div>
             </form>
+          </div>
+        )}
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-[2rem] p-8 space-y-5">
+        <div>
+          <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
+            <Code2 size={18} className="text-indigo-600" /> API keys
+          </h3>
+          <p className="text-sm text-slate-500 mt-1">For partner/EDI integrations against the /api/v1 external API. Each key is shown once at creation — store it somewhere safe.</p>
+        </div>
+
+        {revealedKey && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 space-y-2">
+            <p className="text-xs font-bold uppercase tracking-widest text-amber-700 flex items-center gap-1.5">
+              <AlertCircle size={13} /> Copy this now — it won't be shown again
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 bg-white border border-amber-200 rounded-lg px-3 py-2 text-xs font-mono break-all">{revealedKey}</code>
+              <button
+                type="button"
+                onClick={() => { navigator.clipboard?.writeText(revealedKey); toast("Key copied", "success"); }}
+                className="shrink-0 bg-amber-600 text-white p-2 rounded-lg hover:bg-amber-700 transition-all"
+              >
+                <Copy size={14} />
+              </button>
+            </div>
+            <button type="button" onClick={() => setRevealedKey(null)} className="text-xs font-bold text-amber-700 hover:text-amber-900">
+              I've saved it, dismiss
+            </button>
+          </div>
+        )}
+
+        <form onSubmit={createApiKey} className="flex flex-wrap items-end gap-3">
+          <div className="space-y-1.5 flex-1 min-w-[180px]">
+            <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Key name</label>
+            <input required value={newKeyName} onChange={(e) => setNewKeyName(e.target.value)} placeholder="e.g. Nordic Freight EDI" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Tier</label>
+            <select value={newKeyTier} onChange={(e) => setNewKeyTier(e.target.value)} className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm">
+              <option value="standard">Standard (100 req/min)</option>
+              <option value="enterprise">Enterprise (500 req/min)</option>
+            </select>
+          </div>
+          <button type="submit" disabled={keyBusy} className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-2">
+            {keyBusy && <Loader2 size={14} className="animate-spin" />} Generate key
+          </button>
+        </form>
+
+        {apiKeys.length > 0 && (
+          <div className="divide-y divide-slate-100 border-t border-slate-100 pt-2">
+            {apiKeys.map((k) => (
+              <div key={k.id} className="flex items-center justify-between gap-4 py-3">
+                <div className="min-w-0">
+                  <p className="font-bold text-slate-900 text-sm truncate">{k.name}</p>
+                  <p className="text-xs text-slate-400 font-mono">{k.key_prefix}••••••••••••••••••••</p>
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">{k.tier}</span>
+                  {k.revoked_at ? (
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-red-100 text-red-700">Revoked</span>
+                  ) : (
+                    <button onClick={() => revokeApiKey(k.id)} className="text-xs font-bold text-red-600 hover:text-red-700 flex items-center gap-1">
+                      <Ban size={12} /> Revoke
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
