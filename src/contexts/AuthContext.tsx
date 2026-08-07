@@ -11,7 +11,8 @@ export interface StaffUser {
 interface AuthCtxShape {
   user: StaffUser | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  login: (email: string, password: string) => Promise<{ success: boolean; error?: string; requiresTotp?: boolean }>;
+  verifyTotp: (code: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -20,6 +21,7 @@ const AuthContext = createContext<AuthCtxShape>({
   user: null,
   loading: true,
   login: async () => ({ success: false }),
+  verifyTotp: async () => ({ success: false }),
   logout: async () => {},
   refresh: async () => {},
 });
@@ -60,7 +62,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(data.user);
         return { success: true };
       }
+      if (data.requiresTotp) return { success: false, requiresTotp: true };
       return { success: false, error: data.error || "Invalid email or password" };
+    } catch (e: any) {
+      return { success: false, error: "Network error — is the server running?" };
+    }
+  };
+
+  const verifyTotp = async (code: string) => {
+    try {
+      const res = await fetch("/api/auth/login/2fa-verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setUser(data.user);
+        return { success: true };
+      }
+      return { success: false, error: data.error || "Invalid code" };
     } catch (e: any) {
       return { success: false, error: "Network error — is the server running?" };
     }
@@ -72,7 +93,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, refresh }}>
+    <AuthContext.Provider value={{ user, loading, login, verifyTotp, logout, refresh }}>
       {children}
     </AuthContext.Provider>
   );

@@ -431,6 +431,14 @@ async function startServer() {
     res.json({ user: req.session.user });
   });
 
+  app.get("/api/auth/2fa/status", (req: any, res) => {
+    if (!req.session?.user) return res.status(401).json({ error: "Not authenticated" });
+    (async () => {
+      const { data: user } = await db.from("users").select("totp_enabled").eq("id", req.session.user.id).maybeSingle();
+      res.json({ enabled: !!user?.totp_enabled });
+    })().catch((e) => res.status(500).json({ error: e.message }));
+  });
+
   app.post("/api/auth/logout", (req: any, res) => {
     req.session?.destroy(() => res.json({ success: true }));
   });
