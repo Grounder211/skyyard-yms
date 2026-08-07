@@ -143,9 +143,45 @@ export default function GateConsole() {
     setDiscrepancy(null);
   };
 
+  const [badgeScanBusy, setBadgeScanBusy] = useState(false);
+
+  const scanBadge = async (token: string) => {
+    setBadgeScanBusy(true);
+    try {
+      const res = await fetch(`/api/gate/badge/${token}`);
+      const data = await res.json();
+      setBadgeScanBusy(false);
+      if (!res.ok) {
+        if (data.error === "BLACKLIST_BLOCK") {
+          toast(`Entry denied — ${data.driver?.name || "driver"} (${data.driver?.plate || "?"}): ${data.reason}`, "error");
+        } else {
+          toast(data.error || "Badge not recognized", "error");
+        }
+        return;
+      }
+      if (data.queued) {
+        toast(`${data.driver.name} (${data.driver.plate}) checked in — queued, yard is full`, "warning");
+      } else {
+        toast(`${data.driver.name} (${data.driver.plate}) — welcome back, spot ${data.spotName}`, "success");
+      }
+      loadYard();
+      loadPendingApprovals();
+    } catch {
+      setBadgeScanBusy(false);
+      toast("Badge scan failed — network error", "error");
+    }
+  };
+
   const handleScan = (text: string) => {
     setScanOpen(false);
-    // QR payload format: APT-<id>-<plate>
+    // Two QR formats in play: APT-<id> (staff pre-verifies a scheduled
+    // appointment) and DRV-<badge_token> (pre-registered driver's permanent
+    // gate badge — auto-verifies and auto-assigns, no form).
+    const badgeMatch = text.match(/^DRV-(.+)$/i);
+    if (badgeMatch) {
+      scanBadge(badgeMatch[1]);
+      return;
+    }
     const match = text.match(/APT-(\d+)/i);
     if (match) {
       const id = match[1];

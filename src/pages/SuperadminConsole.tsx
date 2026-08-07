@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Globe2, ShieldBan, UploadCloud, Building2, Trash2, Loader2, CheckCircle2, AlertTriangle, Truck, Link2, Copy } from "lucide-react";
 import { useToast } from "../contexts/ToastContext";
+import PhoneInput, { toE164 } from "../components/PhoneInput";
 
 type Tab = "facilities" | "blacklist" | "import" | "carriers";
 
@@ -112,6 +113,8 @@ function CarriersTab() {
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({ name: "", email: "", password: "", contact_phone: "" });
+  const [phoneCountry, setPhoneCountry] = useState("+46");
+  const [phoneNumber, setPhoneNumber] = useState("");
   const [busy, setBusy] = useState(false);
   const [linkBusy, setLinkBusy] = useState<number | null>(null);
 
@@ -136,6 +139,7 @@ function CarriersTab() {
     if (res.ok) {
       toast("Carrier added", "success");
       setForm({ name: "", email: "", password: "", contact_phone: "" });
+      setPhoneNumber("");
       load();
     } else {
       const data = await res.json().catch(() => ({}));
@@ -176,7 +180,15 @@ function CarriersTab() {
         </div>
         <div className="space-y-1.5">
           <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Contact phone</label>
-          <input value={form.contact_phone} onChange={(e) => setForm({ ...form, contact_phone: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+          <PhoneInput
+            countryCode={phoneCountry}
+            number={phoneNumber}
+            onChange={(cc, n) => {
+              setPhoneCountry(cc);
+              setPhoneNumber(n);
+              setForm({ ...form, contact_phone: toE164(cc, n) });
+            }}
+          />
         </div>
         <button type="submit" disabled={busy} className="w-full bg-indigo-600 text-white text-sm font-bold py-2.5 rounded-xl hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
           {busy && <Loader2 size={14} className="animate-spin" />} Add carrier

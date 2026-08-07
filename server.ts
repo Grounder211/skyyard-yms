@@ -703,6 +703,15 @@ async function startServer() {
     }
 
     try {
+      // Flagged earlier this session, never actually fixed here — only the
+      // self-service /api/public/walkin-checkin endpoint got a blacklist
+      // check. The guard-operated path had the exact same gap.
+      const blacklistHit = await checkBlacklist(facilityId, truck_plate, carrier_name);
+      if (blacklistHit && blacklistHit.severity === "block") {
+        logAudit({ action: "BLACKLIST_BLOCKED_GUARD_WALKIN", entityType: "TRAILER", entityId: truck_plate, details: { reason: blacklistHit.reason }, ip: req.ip, facility_id: facilityId, severity: "warning" });
+        return res.status(403).json({ error: "BLACKLIST_BLOCK", reason: blacklistHit.reason });
+      }
+
       const { data: walkin, error } = await db.from("walkin_registrations").insert({
         driver_name, carrier_name, phone, truck_plate, trailer_number: trailer_number || null,
         load_type, direction, status: "pending", facility_id: facilityId,
@@ -888,6 +897,55 @@ async function startServer() {
     } catch (e: any) {
       logger.error("SMS approval webhook failed", { error: e.message });
       res.send("<Response></Response>");
+    }
+  });
+
+  // Gate badge scan — pre-registered driver (see /api/driver/profile) scans
+  // their permanent QR at the gate instead of filling a form or waiting for
+  // approval. Blacklist-checked, auto-assigns a spot via the same
+  // walkin_autoassign_tx engine every other entry path already uses.
+  // Physically reading the code still goes through GateConsole's existing
+  // QRScanner (staff-operated camera) — a literal unattended kiosk/hardware
+  // reader is a separate hardware integration, not something buildable here.
+  app.get("/api/gate/badge/:token", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
+    const { token } = req.params;
+    const facilityId = req.facilityId || 1;
+    try {
+      const { data: driver } = await db.from("drivers").select("*").eq("badge_token", token).maybeSingle();
+      if (!driver || !driver.badge_issued_at) {
+        return res.status(404).json({ error: "Badge not recognized or driver hasn't completed registration" });
+      }
+
+      const blacklistHit = await checkBlacklist(facilityId, driver.default_plate, driver.carrier_name);
+      if (blacklistHit && blacklistHit.severity === "block") {
+        logAudit({ action: "BLACKLIST_BLOCKED_BADGE_SCAN", entityType: "TRAILER", entityId: driver.default_plate, details: { reason: blacklistHit.reason, driverId: driver.id }, ip: req.ip, facility_id: facilityId, severity: "warning" });
+        return res.status(403).json({ error: "BLACKLIST_BLOCK", reason: blacklistHit.reason, driver: { name: driver.name, plate: driver.default_plate } });
+      }
+
+      const { data: walkin, error } = await db.from("walkin_registrations").insert({
+        driver_name: driver.name, carrier_name: driver.carrier_name, phone: driver.phone,
+        truck_plate: driver.default_plate, load_type: driver.default_load_type || "standard",
+        status: "pending", facility_id: facilityId, driver_id: driver.id, source: "badge_scan",
+      }).select().single();
+      if (error) throw error;
+
+      const { data: assign } = await db.rpc("walkin_autoassign_tx", {
+        p_walkin_id: walkin.id, p_truck_plate: driver.default_plate, p_carrier_name: driver.carrier_name, p_facility_id: facilityId,
+      });
+
+      logAudit({ action: "BADGE_SCAN_ENTRY", entityType: "DRIVER", entityId: String(driver.id), details: { plate: driver.default_plate, assigned: !!assign?.assigned }, ip: req.ip, facility_id: facilityId });
+
+      if (assign?.assigned) {
+        notify({ type: "BADGE_SCAN_CONFIRMED", recipientType: "driver", recipientId: driver.id, data: { phone: driver.phone, title: "Entry confirmed", body: `SkyYard: Badge scanned, welcome back. Proceed to spot ${assign.spotName}.` } });
+        emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
+        return res.json({ success: true, driver: { name: driver.name, plate: driver.default_plate, carrier_name: driver.carrier_name }, spotName: assign.spotName });
+      }
+
+      emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
+      res.json({ success: true, driver: { name: driver.name, plate: driver.default_plate, carrier_name: driver.carrier_name }, queued: true });
+    } catch (e: any) {
+      logger.error("Badge scan failed", { error: e.message });
+      res.status(500).json({ error: e.message });
     }
   });
 
@@ -1152,8 +1210,30 @@ async function startServer() {
 
   app.get("/api/driver/me", async (req: any, res) => {
     if (!req.session?.driver_id) return res.status(401).json({ error: "Not authenticated" });
-    const { data: driver } = await db.from("drivers").select("id, phone, name, default_carrier_id, default_plate, default_load_type").eq("id", req.session.driver_id).maybeSingle();
+    const { data: driver } = await db.from("drivers").select("id, phone, name, default_carrier_id, default_plate, default_load_type, license_number, vehicle_type, carrier_name, badge_token, badge_issued_at").eq("id", req.session.driver_id).maybeSingle();
     res.json({ driver });
+  });
+
+  // Self-service driver profile — completing this is what turns a bare OTP
+  // session into a reusable gate badge (badge_token already exists on every
+  // driver row via a DB default, but it's meaningless without the profile
+  // details a guard/scanner needs to actually verify someone at the gate).
+  app.post("/api/driver/profile", async (req: any, res) => {
+    if (!req.session?.driver_id) return res.status(401).json({ error: "Not authenticated" });
+    const { name, truck_plate, carrier_name, license_number, vehicle_type } = req.body;
+    if (!name || !truck_plate || !carrier_name) return res.status(400).json({ error: "Name, plate, and carrier are required" });
+    try {
+      const { data: driver, error } = await db.from("drivers").update({
+        name, default_plate: truck_plate, carrier_name,
+        license_number: license_number || null, vehicle_type: vehicle_type || null,
+        badge_issued_at: new Date().toISOString(),
+      }).eq("id", req.session.driver_id).select("id, phone, name, default_plate, carrier_name, license_number, vehicle_type, badge_token, badge_issued_at").single();
+      if (error) throw error;
+      logAudit({ action: "DRIVER_PROFILE_REGISTERED", entityType: "DRIVER", entityId: String(driver.id), details: { truck_plate, carrier_name }, ip: req.ip, facility_id: 1 });
+      res.json({ success: true, driver });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.post("/api/driver/logout", (req: any, res) => {
