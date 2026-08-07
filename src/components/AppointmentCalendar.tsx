@@ -527,7 +527,9 @@ function CreateAppointmentModal({ onClose, onSuccess, initialDate, editingAppoin
     duration_minutes: editingAppointment?.actual_duration_minutes || 60,
     load_type: editingAppointment?.load_type || "LOAD",
     priority_level: editingAppointment?.priority_level || 2,
-    status: editingAppointment?.status || "SCHEDULED"
+    status: editingAppointment?.status || "SCHEDULED",
+    load_weight_kg: editingAppointment?.load_weight_kg || "",
+    temperature_requirement: editingAppointment?.temperature_requirement || "ambient",
   });
   const [submitting, setSubmitting] = useState(false);
   const { toast } = useToast();
@@ -542,10 +544,12 @@ function CreateAppointmentModal({ onClose, onSuccess, initialDate, editingAppoin
       const res = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData)
+        body: JSON.stringify({ ...formData, load_weight_kg: formData.load_weight_kg ? Number(formData.load_weight_kg) : null })
       });
       if (res.ok) {
+        const data = await res.json().catch(() => ({}));
         toast(editingAppointment ? "Appointment updated" : "Appointment established successfully", "success");
+        for (const w of data.capacityWarning || []) toast(w, "warning");
         onSuccess();
       } else {
         toast("Failed to commit booking to ledger", "error");
@@ -633,6 +637,31 @@ function CreateAppointmentModal({ onClose, onSuccess, initialDate, editingAppoin
                   <option value={60}>60 Minutes</option>
                   <option value={90}>90 Minutes</option>
                   <option value={120}>120 Minutes</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-8">
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Load weight (kg, optional)</label>
+                <input
+                  type="number"
+                  placeholder="e.g. 18000"
+                  value={formData.load_weight_kg}
+                  onChange={e => setFormData({ ...formData, load_weight_kg: e.target.value })}
+                  className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-900 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all focus:border-indigo-600 focus:bg-white"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Temperature requirement</label>
+                <select
+                  value={formData.temperature_requirement}
+                  onChange={e => setFormData({ ...formData, temperature_requirement: e.target.value })}
+                  className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-900 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all focus:border-indigo-600 focus:bg-white appearance-none cursor-pointer"
+                >
+                  <option value="ambient">Ambient</option>
+                  <option value="chilled">Chilled</option>
+                  <option value="frozen">Frozen</option>
                 </select>
               </div>
             </div>

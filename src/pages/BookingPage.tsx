@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { Warehouse, CalendarDays, Loader2, CheckCircle2, AlertCircle, DoorOpen } from "lucide-react";
+import { Warehouse, CalendarDays, Loader2, CheckCircle2, AlertCircle, DoorOpen, AlertTriangle } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
+import PhoneInput, { toE164 } from "../components/PhoneInput";
 
 const LOAD_TYPES = ["standard", "reefer", "flatbed", "tanker", "hazmat", "oversized"];
+const TEMP_REQUIREMENTS = ["ambient", "chilled", "frozen"];
 
 function tomorrowISO() {
   const d = new Date();
@@ -23,10 +25,13 @@ export default function BookingPage() {
   const [selectedTime, setSelectedTime] = useState<any>(null);
   const [selectedDock, setSelectedDock] = useState<number | null>(null);
 
-  const [form, setForm] = useState({ plate: "", driver_name: "", driver_phone: "", load_type: "standard" });
+  const [form, setForm] = useState({ plate: "", driver_name: "", load_type: "standard", load_weight_kg: "", temperature_requirement: "ambient" });
+  const [phoneCountry, setPhoneCountry] = useState("+46");
+  const [phoneNumber, setPhoneNumber] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [confirmed, setConfirmed] = useState<any>(null);
+  const [capacityWarnings, setCapacityWarnings] = useState<string[]>([]);
 
   useEffect(() => {
     fetch(`/api/book/${token}`)
@@ -62,11 +67,21 @@ export default function BookingPage() {
       const res = await fetch(`/api/book/${token}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, start_time: selectedTime.dateTime, dock_id: selectedDock }),
+        body: JSON.stringify({
+          ...form,
+          driver_phone: phoneNumber ? toE164(phoneCountry, phoneNumber) : "",
+          load_weight_kg: form.load_weight_kg ? Number(form.load_weight_kg) : null,
+          start_time: selectedTime.dateTime,
+          dock_id: selectedDock,
+        }),
       });
       const data = await res.json();
-      if (res.ok) setConfirmed(data.appointment);
-      else setError(data.error || "Booking failed");
+      if (res.ok) {
+        setConfirmed(data.appointment);
+        setCapacityWarnings(data.capacityWarning || []);
+      } else {
+        setError(data.error || "Booking failed");
+      }
     } catch {
       setError("Network error while booking");
     }
@@ -108,6 +123,15 @@ export default function BookingPage() {
             <p className="text-slate-500 mb-6">
               {confirmed.plate} — {new Date(confirmed.start_time).toLocaleString()}
             </p>
+            {capacityWarnings.length > 0 && (
+              <div className="text-left bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-6 space-y-1.5">
+                {capacityWarnings.map((w, i) => (
+                  <p key={i} className="text-xs text-amber-700 font-semibold flex items-start gap-1.5">
+                    <AlertTriangle size={13} className="shrink-0 mt-0.5" /> {w}
+                  </p>
+                ))}
+              </div>
+            )}
             <div className="flex justify-center mb-6">
               <QRCodeSVG value={`APT-${confirmed.id}`} size={140} level="M" />
             </div>
@@ -134,7 +158,19 @@ export default function BookingPage() {
                   </select>
                 </div>
                 <TextField label="Driver name" value={form.driver_name} onChange={(v) => setForm({ ...form, driver_name: v })} />
-                <TextField label="Driver phone" value={form.driver_phone} onChange={(v) => setForm({ ...form, driver_phone: v })} placeholder="+46 70 123 4567" />
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Driver phone</label>
+                  <PhoneInput countryCode={phoneCountry} number={phoneNumber} onChange={(cc, n) => { setPhoneCountry(cc); setPhoneNumber(n); }} />
+                </div>
+                <TextField label="Load weight (kg, optional)" value={form.load_weight_kg} onChange={(v) => setForm({ ...form, load_weight_kg: v.replace(/\D/g, "") })} placeholder="e.g. 18000" />
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Temperature requirement</label>
+                  <select value={form.temperature_requirement} onChange={(e) => setForm({ ...form, temperature_requirement: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                    {TEMP_REQUIREMENTS.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div className="space-y-1.5">
