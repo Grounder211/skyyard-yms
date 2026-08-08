@@ -231,6 +231,33 @@ async function startServer() {
     }
   };
 
+  // Exception Management Center — this app already detects a real set of
+  // operational exceptions (blacklist blocks, seal mismatches, reefer
+  // critical readings, SLA critical breaches, no-shows), but each one only
+  // ever wrote to audit_logs, a append-only trail nobody works as a queue.
+  // There was no owner, no status, no resolution — just a fact that
+  // happened. This gives each one a real lifecycle: open -> acknowledged ->
+  // resolved, with an owner and resolution notes, exactly like the
+  // exception center every real YMS has.
+  const raiseException = async (data: {
+    facility_id: number; exception_type: string; severity?: "info" | "warning" | "critical";
+    entity_type?: string; entity_id?: string; title: string; description?: string; source?: string;
+  }) => {
+    try {
+      const { data: row, error } = await db.from("exceptions").insert({
+        facility_id: data.facility_id, exception_type: data.exception_type, severity: data.severity || "warning",
+        entity_type: data.entity_type || null, entity_id: data.entity_id || null,
+        title: data.title, description: data.description || null, source: data.source || null,
+      }).select().single();
+      if (error) throw error;
+      emitUpdate("exception_created", row);
+      return row;
+    } catch (e) {
+      logger.error("Exception logging failed", { error: e });
+      return null;
+    }
+  };
+
   // Middlewares
   const requireRole = (...roles: string[]) => (req: any, res: any, next: any) => {
     if (!req.session?.user) return res.status(401).json({ error: "Not authenticated" });
@@ -745,6 +772,7 @@ async function startServer() {
       const blacklistHit = await checkBlacklist(facilityId, truck_plate, carrier_name);
       if (blacklistHit && blacklistHit.severity === "block") {
         logAudit({ action: "BLACKLIST_BLOCKED_GUARD_WALKIN", entityType: "TRAILER", entityId: truck_plate, details: { reason: blacklistHit.reason }, ip: req.ip, facility_id: facilityId, severity: "warning" });
+        raiseException({ facility_id: facilityId, exception_type: "blacklist_block", severity: "warning", entity_type: "TRAILER", entity_id: truck_plate, title: `Blacklisted entry blocked: ${truck_plate}`, description: blacklistHit.reason, source: "guard_walkin" });
         return res.status(403).json({ error: "BLACKLIST_BLOCK", reason: blacklistHit.reason });
       }
 
@@ -888,6 +916,7 @@ async function startServer() {
           driver_id: driver.id, facility_id: facilityId, source: "self_service_qr", consent_given: true,
         }).select("id, status_token").single();
         logAudit({ action: "BLACKLIST_BLOCKED_SELF_SERVICE", entityType: "TRAILER", entityId: truck_plate, details: { reason: blacklistHit.reason }, ip: req.ip, facility_id: facilityId, severity: "warning" });
+        raiseException({ facility_id: facilityId, exception_type: "blacklist_block", severity: "warning", entity_type: "TRAILER", entity_id: truck_plate, title: `Blacklisted entry blocked: ${truck_plate}`, description: blacklistHit.reason, source: "self_service_qr" });
         return res.status(403).json({ error: "BLACKLIST_BLOCK", reason: blacklistHit.reason, status_token: rejected?.status_token });
       }
 
@@ -1010,6 +1039,46 @@ async function startServer() {
 
       items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       res.json(items);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Exception Management Center — real queue for exceptions raiseException()
+  // writes into (blacklist blocks, seal mismatches, reefer critical, SLA
+  // critical, no-shows), with an actual open -> acknowledged -> resolved
+  // lifecycle instead of just an audit-log entry nobody works as a queue.
+  app.get("/api/admin/exceptions", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { status, severity } = req.query;
+    try {
+      let query = db.from("exceptions").select("*, owner:users!exceptions_owner_id_fkey(name), acknowledged_by_user:users!exceptions_acknowledged_by_fkey(name), resolved_by_user:users!exceptions_resolved_by_fkey(name)").eq("facility_id", req.facilityId).order("created_at", { ascending: false }).limit(200);
+      if (status) query = query.eq("status", status);
+      if (severity) query = query.eq("severity", severity);
+      const { data, error } = await query;
+      if (error) throw error;
+      res.json(data || []);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/admin/exceptions/:id", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { status, owner_id, resolution_notes } = req.body;
+    const userId = req.session?.user?.id || null;
+    try {
+      const patch: any = {};
+      if (owner_id !== undefined) patch.owner_id = owner_id;
+      if (resolution_notes !== undefined) patch.resolution_notes = resolution_notes;
+      if (status === "acknowledged") { patch.status = "acknowledged"; patch.acknowledged_at = new Date().toISOString(); patch.acknowledged_by = userId; }
+      if (status === "resolved") { patch.status = "resolved"; patch.resolved_at = new Date().toISOString(); patch.resolved_by = userId; }
+      if (status === "open") patch.status = "open";
+      if (Object.keys(patch).length === 0) return res.status(400).json({ error: "No valid fields to update" });
+
+      const { data, error } = await db.from("exceptions").update(patch).eq("id", req.params.id).eq("facility_id", req.facilityId).select().single();
+      if (error) throw error;
+      logAudit({ action: "EXCEPTION_UPDATED", entityType: "EXCEPTION", entityId: String(req.params.id), details: { status, resolution_notes: !!resolution_notes }, ip: req.ip, facility_id: req.facilityId });
+      emitUpdate("exception_updated", data);
+      res.json(data);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -1207,6 +1276,7 @@ async function startServer() {
       const blacklistHit = await checkBlacklist(facilityId, driver.default_plate, driver.carrier_name);
       if (blacklistHit && blacklistHit.severity === "block") {
         logAudit({ action: "BLACKLIST_BLOCKED_BADGE_SCAN", entityType: "TRAILER", entityId: driver.default_plate, details: { reason: blacklistHit.reason, driverId: driver.id }, ip: req.ip, facility_id: facilityId, severity: "warning" });
+        raiseException({ facility_id: facilityId, exception_type: "blacklist_block", severity: "warning", entity_type: "TRAILER", entity_id: driver.default_plate, title: `Blacklisted entry blocked: ${driver.default_plate}`, description: blacklistHit.reason, source: "badge_scan" });
         return res.status(403).json({ error: "BLACKLIST_BLOCK", reason: blacklistHit.reason, driver: { name: driver.name, plate: driver.default_plate } });
       }
 
@@ -1284,6 +1354,7 @@ async function startServer() {
       if (blacklistHit && blacklistHit.severity === "block") {
         await db.from("gate_logs").insert({ facility_id: facilityId, event_type: "denied", appointment_id: appointmentId, truck_plate: plate, guard_user_id: req.session?.user?.id || null, notes: `Blacklisted: ${blacklistHit.reason}` });
         logAudit({ action: "BLACKLIST_BLOCKED_ENTRY", entityType: "TRAILER", entityId: plate, details: { reason: blacklistHit.reason, appointmentId }, ip: req.ip, facility_id: facilityId, severity: "warning" });
+        raiseException({ facility_id: facilityId, exception_type: "blacklist_block", severity: "warning", entity_type: "TRAILER", entity_id: plate, title: `Blacklisted entry blocked: ${plate}`, description: blacklistHit.reason, source: "staff_checkin" });
         return res.status(403).json({ error: "BLACKLIST_BLOCK", reason: blacklistHit.reason });
       }
 
@@ -1993,6 +2064,7 @@ async function startServer() {
       const blacklistHit = await checkBlacklist(1, plate, carrier.name);
       if (blacklistHit && blacklistHit.severity === "block") {
         logAudit({ action: "BLACKLIST_BLOCKED_BOOKING", entityType: "TRAILER", entityId: plate, details: { reason: blacklistHit.reason, carrier: carrier.name }, ip: req.ip, facility_id: 1, severity: "warning" });
+        raiseException({ facility_id: 1, exception_type: "blacklist_block", severity: "warning", entity_type: "TRAILER", entity_id: plate, title: `Blacklisted entry blocked: ${plate}`, description: blacklistHit.reason, source: "carrier_booking" });
         return res.status(403).json({ error: "BLACKLIST_BLOCK", reason: blacklistHit.reason });
       }
 
@@ -2247,6 +2319,7 @@ async function startServer() {
 
       if (level === "critical" && (await checkNotified("sla_critical")) === 0) {
         await db.from("audit_logs").insert({ facility_id: appt.facility_id, action: "sla_critical", entityType: "appointment", entityId: String(appt.id), details: { elapsed: Math.round(elapsedMin), threshold: sla.threshold_minutes }, severity: "critical" });
+        raiseException({ facility_id: appt.facility_id, exception_type: "long_dwell", severity: "critical", entity_type: "APPOINTMENT", entity_id: String(appt.id), title: `SLA critical: ${appt.carrier} (${Math.round(elapsedMin)}min, threshold ${sla.threshold_minutes}min)`, source: "sla_worker" });
         notify({ type: "SLA_CRITICAL", recipientType: "ADMIN", recipientId: null, data: { title: "CRITICAL SLA BREACH", body: `${appt.carrier} has exceeded SLA at facility ${appt.facility_id}` } });
       } else if (level === "breach" && (await checkNotified("sla_breach")) === 0) {
         await db.from("audit_logs").insert({ facility_id: appt.facility_id, action: "sla_breach", entityType: "appointment", entityId: String(appt.id), details: { elapsed: Math.round(elapsedMin), threshold: sla.threshold_minutes }, severity: "warning" });
@@ -2579,6 +2652,7 @@ async function startServer() {
         for (const admin of admins || []) {
           notify({ type: "REEFER_ALERT", recipientType: "ADMIN", recipientId: admin.id, data: { phone: admin.phone, title: "Reefer alert", body: `${plate}: ${evaluation.reasons.join("; ")}`, link: "/tracking" } });
         }
+        raiseException({ facility_id: facilityId, exception_type: "temperature_violation", severity: "critical", entity_type: "TRAILER", entity_id: plate, title: `Reefer out of range: ${plate}`, description: evaluation.reasons.join("; "), source: "reefer_monitoring" });
       }
 
       emitUpdate("yard_update", { type: "REEFER_READING", plate });
@@ -2661,6 +2735,7 @@ async function startServer() {
       const matched = String(seal_number || "").trim().toUpperCase() === String(seal.seal_number || "").trim().toUpperCase();
       if (!matched) {
         logAudit({ action: "SEAL_MISMATCH", entityType: "TRAILER", entityId: plate, details: { expected: seal.seal_number, presented: seal_number }, ip: req.ip, facility_id: facilityId, severity: "warning" });
+        raiseException({ facility_id: facilityId, exception_type: "seal_mismatch", severity: "critical", entity_type: "TRAILER", entity_id: plate, title: `Seal mismatch: ${plate}`, description: `Expected ${seal.seal_number}, got ${seal_number || "(blank)"}`, source: "seal_verification" });
         return res.status(409).json({ error: "SEAL_MISMATCH", expected: seal.seal_number, presented: seal_number });
       }
 
@@ -2775,10 +2850,11 @@ async function startServer() {
   cron.schedule("*/30 * * * *", async () => {
     logger.info("[Worker] Running No-Show Detection...");
     const lookback = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const { data: candidates } = await db.from("appointments").select("id, carrier_id, carrier, start_time, grace_period_minutes").eq("status", "SCHEDULED").gt("start_time", lookback).lt("start_time", new Date().toISOString()).is("checked_in_at", null);
+    const { data: candidates } = await db.from("appointments").select("id, carrier_id, carrier, start_time, grace_period_minutes, facility_id").eq("status", "SCHEDULED").gt("start_time", lookback).lt("start_time", new Date().toISOString()).is("checked_in_at", null);
     const noShows = (candidates || []).filter((appt: any) => isNoShow(appt.start_time, appt.grace_period_minutes));
     for (const appt of noShows) {
       await db.from("appointments").update({ status: "no_show", no_show_flag: true }).eq("id", appt.id);
+      raiseException({ facility_id: appt.facility_id || 1, exception_type: "no_show", severity: "warning", entity_type: "APPOINTMENT", entity_id: String(appt.id), title: `No-show: ${appt.carrier || "Unknown carrier"}`, description: `Scheduled ${appt.start_time}, no check-in within grace period`, source: "no_show_worker" });
       if (!appt.carrier_id) continue;
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
       const { count } = await db.from("appointments").select("*", { count: "exact", head: true }).eq("carrier_id", appt.carrier_id).eq("no_show_flag", true).gt("start_time", thirtyDaysAgo);
