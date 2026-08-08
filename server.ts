@@ -1217,8 +1217,28 @@ async function startServer() {
   // "YES <id>" / "NO <id>" instead of opening the app. Requires manually
   // pointing the Twilio phone number's "A MESSAGE COMES IN" webhook at this
   // URL in the Twilio Console — that step can't be done from here.
+  // SECURITY FIX: this webhook approves/rejects real walk-in registrations
+  // based on nothing but the request body's `From` field matching an admin's
+  // phone number — with no verification that the request actually came from
+  // Twilio. Anyone could POST directly to this URL with a forged `From` and
+  // `Body`, impersonate any admin whose phone number they know, and push
+  // through (or block) approvals that exist specifically to require a human
+  // sign-off on unmanned-gate self-service walk-ins. Twilio signs every
+  // webhook request with an X-Twilio-Signature header computed from the
+  // auth token + exact URL + form params; validateRequest() is Twilio's own
+  // verification of that signature. Requests that don't come from Twilio's
+  // signing key are now rejected before any approval logic runs. If
+  // TWILIO_AUTH_TOKEN isn't configured, Twilio integration isn't active and
+  // this path can't be legitimately reached anyway, so it fails closed.
   app.post("/api/twilio/inbound-sms", async (req: any, res) => {
     res.set("Content-Type", "text/xml");
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    const signature = req.headers["x-twilio-signature"];
+    const webhookUrl = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+    if (!authToken || !signature || !twilio.validateRequest(authToken, signature, webhookUrl, req.body || {})) {
+      logAudit({ action: "TWILIO_WEBHOOK_SIGNATURE_INVALID", entityType: "SMS", details: { from: req.body?.From }, ip: req.ip, severity: "warning" });
+      return res.status(403).send("<Response></Response>");
+    }
     try {
       const from = String(req.body?.From || "").replace(/\D/g, "").slice(-9); // last 9 digits, loose match
       const body = String(req.body?.Body || "").trim();
