@@ -1237,6 +1237,75 @@ async function startServer() {
   // writes into (blacklist blocks, seal mismatches, reefer critical, SLA
   // critical, no-shows), with an actual open -> acknowledged -> resolved
   // lifecycle instead of just an audit-log entry nobody works as a queue.
+  const SAFETY_CATEGORIES = ["near_miss", "ppe_violation", "speed_violation", "restricted_zone_entry", "pedestrian_conflict", "unauthorized_movement", "collision_risk", "unsafe_parking", "damaged_equipment", "other"];
+
+  // No safety incident tracking existed anywhere in this app — any real
+  // yard operation needs a way to log near-misses, PPE violations, unsafe
+  // parking, damaged equipment, etc. with severity/witnesses/corrective
+  // action, not just the general-purpose exceptions table (which has no
+  // room for root cause, witnesses, or immediate vs. corrective action).
+  // Also raises a linked exception so it surfaces in the existing
+  // Exception Center without a supervisor needing to check a sixth module.
+  app.get("/api/admin/safety-incidents", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { status, severity } = req.query;
+    try {
+      let query = db.from("safety_incidents").select("*, reporter:users!safety_incidents_reported_by_fkey(name), resolver:users!safety_incidents_resolved_by_fkey(name), driver:drivers!safety_incidents_driver_id_fkey(name, phone)").eq("facility_id", req.facilityId).order("created_at", { ascending: false }).limit(200);
+      if (status) query = query.eq("status", status);
+      if (severity) query = query.eq("severity", severity);
+      const { data, error } = await query;
+      if (error) throw error;
+      res.json(data || []);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/safety-incidents", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { severity, category, location, plate, driver_id, description, witnesses, immediate_action, photos } = req.body;
+    const userId = req.session?.user?.id || null;
+    const facilityId = req.facilityId;
+    if (!description || !description.trim()) return res.status(400).json({ error: "Description is required" });
+    if (!["low", "medium", "high", "critical"].includes(severity)) return res.status(400).json({ error: "Invalid severity" });
+    if (!SAFETY_CATEGORIES.includes(category)) return res.status(400).json({ error: "Invalid category" });
+    try {
+      const { data, error } = await db.from("safety_incidents").insert({
+        facility_id: facilityId, severity, category, location: location || null, plate: plate || null,
+        driver_id: driver_id || null, description: description.trim(), witnesses: witnesses || null,
+        immediate_action: immediate_action || null, photos: Array.isArray(photos) ? photos : [],
+        reported_by: userId,
+      }).select().single();
+      if (error) throw error;
+      logAudit({ action: "SAFETY_INCIDENT_REPORTED", entityType: "SAFETY_INCIDENT", entityId: String(data.id), details: { severity, category, plate }, ip: req.ip, facility_id: facilityId, severity: severity === "critical" || severity === "high" ? "warning" : "info" });
+      emitUpdate("safety_incident_created", data);
+      raiseException({ facility_id: facilityId, exception_type: "safety_incident", severity: severity === "critical" ? "critical" : severity === "high" ? "critical" : "warning", entity_type: plate ? "TRAILER" : "SAFETY", entity_id: plate || String(data.id), title: `Safety incident: ${category.replace(/_/g, " ")}`, description: description.trim(), source: "safety_center" });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/admin/safety-incidents/:id", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { status, corrective_action, root_cause } = req.body;
+    const userId = req.session?.user?.id || null;
+    try {
+      const patch: any = {};
+      if (corrective_action !== undefined) patch.corrective_action = corrective_action;
+      if (root_cause !== undefined) patch.root_cause = root_cause;
+      if (status === "investigating") patch.status = "investigating";
+      if (status === "resolved") { patch.status = "resolved"; patch.resolved_at = new Date().toISOString(); patch.resolved_by = userId; }
+      if (status === "open") patch.status = "open";
+      if (Object.keys(patch).length === 0) return res.status(400).json({ error: "No valid fields to update" });
+
+      const { data, error } = await db.from("safety_incidents").update(patch).eq("id", req.params.id).eq("facility_id", req.facilityId).select().single();
+      if (error) throw error;
+      logAudit({ action: "SAFETY_INCIDENT_UPDATED", entityType: "SAFETY_INCIDENT", entityId: String(req.params.id), details: { status }, ip: req.ip, facility_id: req.facilityId });
+      emitUpdate("safety_incident_updated", data);
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/admin/exceptions", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     const { status, severity } = req.query;
     try {
