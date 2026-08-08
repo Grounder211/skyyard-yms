@@ -615,12 +615,21 @@ async function startServer() {
   });
 
   // Custom Reports API
-  app.get("/api/admin/reports", async (req: any, res) => {
+  // SECURITY FIX: this and the five other /api/admin/* endpoints fixed in
+  // this pass (analytics, analytics/heatmap, carrier-balances, gate-logs)
+  // had no requireRole guard at all — same missing-auth pattern already
+  // found and fixed earlier this session on the appointments/GDPR
+  // endpoints, just not caught for these. Anyone, unauthenticated, could
+  // read saved report configs, carrier names/dwell/volume analytics,
+  // outstanding carrier balances (real financial data), and gate entry/
+  // exit logs with guard names. Role sets match each endpoint's actual
+  // frontend consumer's route guard in src/lib/permissions.ts.
+  app.get("/api/admin/reports", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const { data } = await db.from("custom_reports").select("*").eq("facility_id", req.facilityId);
     res.json(data || []);
   });
 
-  app.post("/api/admin/reports", async (req: any, res) => {
+  app.post("/api/admin/reports", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const { name, description, config } = req.body;
     try {
       await db.from("custom_reports").insert({ facility_id: req.facilityId, name, description, config_json: config });
@@ -1694,7 +1703,7 @@ async function startServer() {
     return { totalTrucks: countRes.count || 0, avgTat };
   };
 
-  app.get("/api/admin/analytics", async (req: any, res) => {
+  app.get("/api/admin/analytics", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const facilityId = req.facilityId;
     const start = (req.query.start as string) || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const end = (req.query.end as string) || new Date().toISOString();
@@ -1733,7 +1742,7 @@ async function startServer() {
   // hour-of-day over the last 90 days. Monday-first week (ISO), matching the
   // Swedish work-week convention this app is built for. Used for staffing
   // and appointment-slot capacity planning, not just a live snapshot.
-  app.get("/api/admin/analytics/heatmap", async (req: any, res) => {
+  app.get("/api/admin/analytics/heatmap", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const facilityId = req.facilityId;
     const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
     try {
@@ -2604,7 +2613,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/admin/carrier-balances", async (req: any, res) => {
+  app.get("/api/admin/carrier-balances", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const facilityId = req.facilityId;
     try {
       const { data: records } = await db.from("detention_records").select("id, carrier_id, amount_owed, invoice_status, created_at, notes").eq("facility_id", facilityId).neq("invoice_status", "paid");
@@ -2761,7 +2770,7 @@ async function startServer() {
   });
 
   // Live activity feed
-  app.get("/api/admin/gate-logs", async (req: any, res) => {
+  app.get("/api/admin/gate-logs", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     const facilityId = req.session?.facility_id || req.facilityId || 1;
     try {
       const { data } = await db.from("gate_logs").select("*, users(name)").eq("facility_id", facilityId).order("timestamp", { ascending: false }).limit(30);
@@ -2774,7 +2783,7 @@ async function startServer() {
   // Per-trailer movement timeline: merges gate events, moves, and the
   // hash-chained audit log into one chronological history for a plate —
   // used for detention disputes / incident review, not just a live snapshot.
-  app.get("/api/trailer/:plate/timeline", async (req: any, res) => {
+  app.get("/api/trailer/:plate/timeline", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     const { plate } = req.params;
     const facilityId = req.session?.facility_id || req.facilityId || 1;
     try {
@@ -2854,7 +2863,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/trailers/:plate/reefer-readings", async (req: any, res) => {
+  app.get("/api/trailers/:plate/reefer-readings", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     const { plate } = req.params;
     const facilityId = req.facilityId;
     const { data } = await db.from("reefer_readings").select("*").eq("facility_id", facilityId).eq("plate", plate).order("recorded_at", { ascending: false }).limit(20);
@@ -2900,7 +2909,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/trailers/:plate/seal", async (req: any, res) => {
+  app.get("/api/trailers/:plate/seal", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     const { plate } = req.params;
     const facilityId = req.facilityId;
     try {
