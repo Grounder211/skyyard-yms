@@ -619,20 +619,47 @@ async function startServer() {
   app.use(facilityContext);
 
   // Universal Search
+  // Global search only ever covered trailers/appointments/carriers by
+  // plate or name — drivers, exceptions, and gate passes are all real,
+  // fully-built entities in this app with no way to find them from search
+  // at all, despite the requested feature list explicitly asking search to
+  // cover drivers/tasks/exceptions alongside trucks/trailers/carriers.
+  // Drivers aren't facility-scoped in the schema (a driver isn't owned by
+  // one facility), matching how /api/driver/lookup already treats them
+  // elsewhere in this file — so unlike the other four queries here, the
+  // driver query intentionally has no facility_id filter.
   app.get("/api/search", async (req: any, res) => {
     const q = String(req.query.q || "");
     if (q.length < 2) return res.json([]);
     try {
       const facilityId = req.facilityId;
-      const [{ data: trailers }, { data: appts }, { data: carriers }] = await Promise.all([
-        db.from("trailers").select("id, plate, carrier").eq("facility_id", facilityId).ilike("plate", `%${q}%`).limit(5),
-        db.from("appointments").select("id, plate, carrier").eq("facility_id", facilityId).ilike("plate", `%${q}%`).limit(5),
-        db.from("carriers").select("id, name").ilike("name", `%${q}%`).limit(5),
+      const pattern = `%${q}%`;
+      // Each column gets its own .ilike() call (a plain filter value, not
+      // structurally parsed) rather than a hand-built .or() string — same
+      // fix as checkBlacklist earlier this session. Interpolating `q`
+      // straight into an or() filter string would let PostgREST's own
+      // comma/paren/dot syntax be reshaped by the search text itself.
+      const [{ data: trailers }, { data: appts }, { data: carriers }, { data: driversByName }, { data: driversByPhone }, { data: driversByPlate }, { data: exceptions }, { data: passesByNumber }, { data: passesByPlate }] = await Promise.all([
+        db.from("trailers").select("id, plate, carrier").eq("facility_id", facilityId).ilike("plate", pattern).limit(5),
+        db.from("appointments").select("id, plate, carrier").eq("facility_id", facilityId).ilike("plate", pattern).limit(5),
+        db.from("carriers").select("id, name").ilike("name", pattern).limit(5),
+        db.from("drivers").select("id, name, phone, default_plate").ilike("name", pattern).limit(5),
+        db.from("drivers").select("id, name, phone, default_plate").ilike("phone", pattern).limit(5),
+        db.from("drivers").select("id, name, phone, default_plate").ilike("default_plate", pattern).limit(5),
+        db.from("exceptions").select("id, title, exception_type, status").eq("facility_id", facilityId).ilike("title", pattern).limit(5),
+        db.from("gate_passes").select("id, pass_number, plate, carrier_name").eq("facility_id", facilityId).ilike("pass_number", pattern).limit(5),
+        db.from("gate_passes").select("id, pass_number, plate, carrier_name").eq("facility_id", facilityId).ilike("plate", pattern).limit(5),
       ]);
+      const dedupe = <T extends { id: any }>(rows: T[]) => Array.from(new Map(rows.map((r) => [r.id, r])).values());
+      const drivers = dedupe([...(driversByName || []), ...(driversByPhone || []), ...(driversByPlate || [])]).slice(0, 5);
+      const gatePasses = dedupe([...(passesByNumber || []), ...(passesByPlate || [])]).slice(0, 5);
       const results = [
         ...(trailers || []).map((t: any) => ({ id: `trailer-${t.id}`, title: t.plate, subtitle: `Trailer · ${t.carrier || ""}`, url: `/status/${t.id}` })),
         ...(appts || []).map((a: any) => ({ id: `appt-${a.id}`, title: a.plate, subtitle: `Appointment · ${a.carrier || ""}`, url: `/status/${a.id}` })),
         ...(carriers || []).map((c: any) => ({ id: `carrier-${c.id}`, title: c.name, subtitle: "Carrier", url: `/network` })),
+        ...drivers.map((d: any) => ({ id: `driver-${d.id}`, title: d.name || d.phone, subtitle: `Driver · ${d.default_plate || d.phone || ""}`, url: `/gate` })),
+        ...(exceptions || []).map((e: any) => ({ id: `exception-${e.id}`, title: e.title, subtitle: `Exception · ${e.status}`, url: `/exceptions` })),
+        ...gatePasses.map((g: any) => ({ id: `pass-${g.id}`, title: g.pass_number, subtitle: `Gate pass · ${g.plate} · ${g.carrier_name || ""}`, url: `/pipeline` })),
       ];
       res.json(results);
     } catch (e: any) {
