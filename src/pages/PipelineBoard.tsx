@@ -171,9 +171,9 @@ export default function PipelineBoard() {
                       </div>
                       {p.spot_name && <p className="text-[10px] font-bold text-indigo-600">{p.spot_name}</p>}
 
-                      {p.stage === "IN_PASS" && !(p.license_verified && p.vehicle_matched) && (
+                      {p.stage === "IN_PASS" && !(p.license_verified && p.vehicle_matched && p.documents_ok) && (
                         <button onClick={() => setVerifyTarget(p)} className="w-full text-[10px] font-bold bg-amber-100 text-amber-700 rounded-lg py-1.5 hover:bg-amber-200 transition-all">
-                          Verify driver & vehicle
+                          Verify driver, vehicle & seal
                         </button>
                       )}
 
@@ -222,9 +222,64 @@ export default function PipelineBoard() {
 }
 
 function VerifyModal({ pass, onClose, onSubmit, busy }: any) {
+  const { toast } = useToast();
   const [license, setLicense] = useState(!!pass.license_verified);
   const [vehicle, setVehicle] = useState(!!pass.vehicle_matched);
   const [docs, setDocs] = useState(!!pass.documents_ok);
+
+  const [seal, setSeal] = useState<any>(undefined); // undefined = loading, null = no seal on file
+  const [sealInput, setSealInput] = useState("");
+  const [sealBusy, setSealBusy] = useState(false);
+  const [sealMismatch, setSealMismatch] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`/api/trailers/${encodeURIComponent(pass.plate)}/seal`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then(setSeal)
+      .catch(() => setSeal(null));
+  }, [pass.plate]);
+
+  const verifySeal = async () => {
+    setSealBusy(true);
+    setSealMismatch(null);
+    try {
+      const res = await fetch(`/api/trailers/${encodeURIComponent(pass.plate)}/seal/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seal_number: sealInput }),
+      });
+      const data = await res.json();
+      if (res.ok && data.matched) {
+        setSeal(data.record);
+        setDocs(true);
+        toast("Seal verified — matches what's on file", "success");
+      } else if (res.status === 409) {
+        setSealMismatch(`Expected ${data.expected} — got ${data.presented || "(blank)"}`);
+      } else {
+        toast(data.error || "Seal verification failed", "error");
+      }
+    } catch {
+      toast("Network error verifying seal", "error");
+    }
+    setSealBusy(false);
+  };
+
+  const reportBroken = async () => {
+    const reason = window.prompt("Reason the seal is broken (shown in the trailer's audit history):");
+    if (reason === null) return;
+    const res = await fetch(`/api/trailers/${encodeURIComponent(pass.plate)}/seal/break`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    });
+    if (res.ok) {
+      setSeal(await res.json());
+      setDocs(false);
+      toast("Seal marked broken", "warning");
+    } else {
+      toast("Failed to record broken seal", "error");
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-[9998] bg-black/50 flex items-center justify-center p-6" onClick={onClose}>
@@ -234,17 +289,48 @@ function VerifyModal({ pass, onClose, onSubmit, busy }: any) {
           <button onClick={onClose} className="text-slate-400 hover:text-slate-900"><X size={18} /></button>
         </div>
         <p className="text-sm text-slate-500 mb-5">Confirm the driver and vehicle presented at the gate match what's on file before letting them proceed past in-pass.</p>
-        <div className="space-y-3 mb-6">
+        <div className="space-y-3 mb-5">
           <label className="flex items-center gap-3 text-sm font-medium text-slate-700">
             <input type="checkbox" checked={license} onChange={(e) => setLicense(e.target.checked)} className="w-4 h-4" /> Driver license matches
           </label>
           <label className="flex items-center gap-3 text-sm font-medium text-slate-700">
             <input type="checkbox" checked={vehicle} onChange={(e) => setVehicle(e.target.checked)} className="w-4 h-4" /> Vehicle / plate matches
           </label>
-          <label className="flex items-center gap-3 text-sm font-medium text-slate-700">
-            <input type="checkbox" checked={docs} onChange={(e) => setDocs(e.target.checked)} className="w-4 h-4" /> Documents (seal, permits) OK
-          </label>
         </div>
+
+        {seal === undefined ? (
+          <p className="text-xs text-slate-400 mb-5">Checking seal record...</p>
+        ) : seal ? (
+          <div className="mb-5 p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-2.5">
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Seal chain-of-custody</p>
+            {seal.status === "intact" && !seal.verified_at && (
+              <>
+                <p className="text-xs text-slate-500">Type the seal number physically on the trailer to confirm it matches what was applied at check-in.</p>
+                <input value={sealInput} onChange={(e) => setSealInput(e.target.value)} placeholder="Seal number" className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+                {sealMismatch && <p className="text-xs text-red-600 font-semibold">{sealMismatch}</p>}
+                <div className="flex gap-2">
+                  <button type="button" onClick={verifySeal} disabled={sealBusy} className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-xs font-bold hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-1.5">
+                    {sealBusy && <Loader2 size={12} className="animate-spin" />} Verify seal
+                  </button>
+                  <button type="button" onClick={reportBroken} className="px-3 py-2 rounded-lg text-xs font-bold bg-red-50 text-red-600 hover:bg-red-100">
+                    Report broken
+                  </button>
+                </div>
+              </>
+            )}
+            {seal.status === "intact" && seal.verified_at && (
+              <p className="text-xs text-teal-700 font-semibold flex items-center gap-1.5"><CheckCircle2 size={13} /> Seal {seal.seal_number} verified intact</p>
+            )}
+            {seal.status === "broken" && (
+              <p className="text-xs text-red-600 font-semibold flex items-center gap-1.5"><AlertTriangle size={13} /> Seal {seal.seal_number} broken — {seal.broken_reason || "no reason given"}</p>
+            )}
+          </div>
+        ) : (
+          <label className="flex items-center gap-3 text-sm font-medium text-slate-700 mb-5">
+            <input type="checkbox" checked={docs} onChange={(e) => setDocs(e.target.checked)} className="w-4 h-4" /> Documents (permits) OK — no seal on file
+          </label>
+        )}
+
         <button
           onClick={() => onSubmit(pass, { license_verified: license, vehicle_matched: vehicle, documents_ok: docs })}
           disabled={busy}

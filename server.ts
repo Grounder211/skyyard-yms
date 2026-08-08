@@ -1239,13 +1239,14 @@ async function startServer() {
       }
 
       // Staff already verified plate/carrier against the appointment (the
-      // discrepancy check above) and captured the seal number — record that
-      // as the gate pass's completed verification checklist rather than
-      // leaving it for a separate step.
+      // discrepancy check above) — record that as completed. documents_ok
+      // stays false even when a seal number was captured: applying a seal
+      // isn't the same as verifying it, and a real seal check now happens
+      // in the pipeline board's verify modal (seal chain-of-custody).
       const pass = await issueGatePass({ facilityId, plate, carrierName: carrierName || appt.carrier, driverId: appt.driver_id, spotName: result.spotName, issuedBy: req.session?.user?.id, entrySource: "staff_checkin" });
       if (pass) {
         await db.from("gate_passes").update({
-          license_verified: true, vehicle_matched: !hasPlateMismatch, documents_ok: !!sealNumber,
+          license_verified: true, vehicle_matched: !hasPlateMismatch, documents_ok: false,
           verified_by: req.session?.user?.id, verified_at: new Date().toISOString(),
         }).eq("id", pass.id);
       }
@@ -2389,6 +2390,68 @@ async function startServer() {
     const facilityId = req.facilityId;
     const { data } = await db.from("reefer_readings").select("*").eq("facility_id", facilityId).eq("plate", plate).order("recorded_at", { ascending: false }).limit(20);
     res.json(data || []);
+  });
+
+  // Seal chain-of-custody — gate_checkin_tx already writes an "applied" row
+  // to seal_records the moment a seal number is captured at check-in, but
+  // nothing ever verified or broke a seal after that: the pipeline's
+  // "Documents (seal, permits) OK" checkbox was just a checkbox, not a real
+  // comparison against what's on file.
+  app.get("/api/trailers/:plate/seal", async (req: any, res) => {
+    const { plate } = req.params;
+    const facilityId = req.facilityId;
+    try {
+      const { data: trailer } = await db.from("trailers").select("id").eq("plate", plate).eq("facility_id", facilityId).maybeSingle();
+      if (!trailer) return res.json(null);
+      const { data } = await db.from("seal_records").select("*").eq("trailer_id", trailer.id).order("created_at", { ascending: false }).limit(1).maybeSingle();
+      res.json(data || null);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/trailers/:plate/seal/verify", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { plate } = req.params;
+    const { seal_number } = req.body;
+    const facilityId = req.facilityId;
+    try {
+      const { data: trailer } = await db.from("trailers").select("id").eq("plate", plate).eq("facility_id", facilityId).maybeSingle();
+      if (!trailer) return res.status(404).json({ error: "Trailer not found" });
+      const { data: seal } = await db.from("seal_records").select("*").eq("trailer_id", trailer.id).order("created_at", { ascending: false }).limit(1).maybeSingle();
+      if (!seal) return res.status(404).json({ error: "No seal on file for this trailer" });
+      if (seal.status !== "intact") return res.status(400).json({ error: `Seal is already ${seal.status}` });
+
+      const matched = String(seal_number || "").trim().toUpperCase() === String(seal.seal_number || "").trim().toUpperCase();
+      if (!matched) {
+        logAudit({ action: "SEAL_MISMATCH", entityType: "TRAILER", entityId: plate, details: { expected: seal.seal_number, presented: seal_number }, ip: req.ip, facility_id: facilityId, severity: "warning" });
+        return res.status(409).json({ error: "SEAL_MISMATCH", expected: seal.seal_number, presented: seal_number });
+      }
+
+      const { data: updated } = await db.from("seal_records").update({ verified_by: String(req.session?.user?.id ?? "guard"), verified_at: new Date().toISOString() }).eq("id", seal.id).select().single();
+      logAudit({ action: "SEAL_VERIFIED", entityType: "TRAILER", entityId: plate, details: { seal_number: seal.seal_number }, ip: req.ip, facility_id: facilityId });
+      res.json({ matched: true, record: updated });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/trailers/:plate/seal/break", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { plate } = req.params;
+    const { reason } = req.body;
+    const facilityId = req.facilityId;
+    try {
+      const { data: trailer } = await db.from("trailers").select("id").eq("plate", plate).eq("facility_id", facilityId).maybeSingle();
+      if (!trailer) return res.status(404).json({ error: "Trailer not found" });
+      const { data: seal } = await db.from("seal_records").select("*").eq("trailer_id", trailer.id).order("created_at", { ascending: false }).limit(1).maybeSingle();
+      if (!seal) return res.status(404).json({ error: "No seal on file for this trailer" });
+      if (seal.status !== "intact") return res.status(400).json({ error: `Seal is already ${seal.status}` });
+
+      const { data: updated } = await db.from("seal_records").update({ status: "broken", broken_at: new Date().toISOString(), broken_reason: reason || null }).eq("id", seal.id).select().single();
+      logAudit({ action: "SEAL_BROKEN", entityType: "TRAILER", entityId: plate, details: { seal_number: seal.seal_number, reason }, ip: req.ip, facility_id: facilityId, severity: "warning" });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // Live yard-adjacent weather from SMHI (Swedish met agency, public API, no key).
