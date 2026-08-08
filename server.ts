@@ -13,6 +13,7 @@ import bcrypt from "bcryptjs";
 import twilio from "twilio";
 import { scoreSlot } from "./server/services/slotEngine.js";
 import { estimateDurationMinutes, estimateEndTime, intervalsOverlap } from "./server/services/appointmentDuration.js";
+import { evaluateReading, isReadingStale, STALE_READING_HOURS } from "./server/services/reeferMonitor.js";
 import crypto from "crypto";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import PDFDocument from "pdfkit";
@@ -110,7 +111,7 @@ async function startServer() {
 
     const { data: spots } = await db
       .from("spots")
-      .select("*, trailers!trailers_spot_id_fkey(id, plate, carrier, status, check_in_time, checked_in_at, equipment_type, seal_number, driver_license, po_number, sku_summary)")
+      .select("*, trailers!trailers_spot_id_fkey(id, plate, carrier, status, check_in_time, checked_in_at, equipment_type, seal_number, driver_license, po_number, sku_summary, reefer_temp_setpoint)")
       .eq("facility_id", facilityId);
 
     const flatSpots = (spots || []).map((s: any) => {
@@ -129,6 +130,7 @@ async function startServer() {
         driver_license: trailer?.driver_license,
         po_number: trailer?.po_number,
         sku_summary: trailer?.sku_summary,
+        reefer_temp_setpoint: trailer?.reefer_temp_setpoint,
       };
     });
 
@@ -922,12 +924,22 @@ async function startServer() {
       const soon30d = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
       const staleCutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
 
-      const [pendingApprovals, activeDetention, expiringVehicles, staleGatePasses] = await Promise.all([
+      const [pendingApprovals, activeDetention, expiringVehicles, staleGatePasses, reeferTrailers] = await Promise.all([
         db.from("walkin_registrations").select("id, truck_plate, carrier_name, created_at").eq("facility_id", facilityId).eq("status", "pending_approval"),
         db.from("detention_records").select("id, carrier_name, amount_owed, created_at").eq("facility_id", facilityId).eq("status", "ACTIVE"),
         db.from("vehicles").select("id, plate, inspection_expiry, carrier_id, carriers(name)").lte("inspection_expiry", soon30d).eq("active", true),
         db.from("gate_passes").select("id, plate, stage, updated_at").eq("facility_id", facilityId).not("stage", "in", "(OUT_PASS,EXITED)").lt("updated_at", staleCutoff),
+        db.from("trailers").select("id, plate, checked_in_at, check_in_time").eq("facility_id", facilityId).eq("equipment_type", "reefer").eq("status", "IN_YARD"),
       ]);
+
+      const reeferIds = (reeferTrailers.data || []).map((t: any) => t.id);
+      const { data: recentReadings } = reeferIds.length
+        ? await db.from("reefer_readings").select("trailer_id, status, reasons, recorded_at").in("trailer_id", reeferIds).order("recorded_at", { ascending: false })
+        : { data: [] as any[] };
+      const latestByTrailer = new Map<number, any>();
+      for (const r of recentReadings || []) {
+        if (!latestByTrailer.has(r.trailer_id)) latestByTrailer.set(r.trailer_id, r);
+      }
 
       const items: any[] = [];
       for (const w of pendingApprovals.data || []) {
@@ -942,6 +954,19 @@ async function startServer() {
       }
       for (const g of staleGatePasses.data || []) {
         items.push({ type: "stale_pass", severity: "warning", title: `Vehicle stuck at ${g.stage.replace(/_/g, " ")}`, description: `${g.plate} — no movement in over 2 hours`, link: "/pipeline", timestamp: g.updated_at });
+      }
+      for (const t of reeferTrailers.data || []) {
+        const latest = latestByTrailer.get(t.id);
+        const checkedInAt = t.checked_in_at || t.check_in_time || new Date().toISOString();
+        if (!latest) {
+          if (isReadingStale(checkedInAt)) {
+            items.push({ type: "reefer_unchecked", severity: "warning", title: "Reefer never checked", description: `${t.plate} — no temperature/fuel reading recorded since check-in`, link: "/tracking", timestamp: checkedInAt });
+          }
+        } else if (latest.status === "critical") {
+          items.push({ type: "reefer_critical", severity: "error", title: "Reefer out of range", description: `${t.plate} — ${(latest.reasons || []).join("; ") || "critical reading"}`, link: "/tracking", timestamp: latest.recorded_at });
+        } else if (isReadingStale(latest.recorded_at)) {
+          items.push({ type: "reefer_stale", severity: "warning", title: "Reefer reading overdue", description: `${t.plate} — last checked over ${STALE_READING_HOURS}h ago`, link: "/tracking", timestamp: latest.recorded_at });
+        }
       }
 
       items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
@@ -2292,6 +2317,59 @@ async function startServer() {
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  // Reefer monitoring without hardware — trailers had a reefer_temp_setpoint
+  // column and "reefer" as a selectable load type everywhere, but nothing
+  // ever recorded a real reading or alerted on one. Staff key in a
+  // temperature/fuel check (at the gate, or any walk-by); it's evaluated
+  // against the trailer's setpoint immediately and flows into Needs
+  // Attention if it's stale or out of range. Live telematics/IoT sensor
+  // feeds are hardware-dependent and out of scope here.
+  app.post("/api/trailers/:plate/reefer-reading", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { plate } = req.params;
+    const { temperature_c, fuel_level_pct, notes } = req.body;
+    const facilityId = req.facilityId;
+    if (temperature_c === undefined || temperature_c === null || isNaN(Number(temperature_c))) {
+      return res.status(400).json({ error: "temperature_c is required" });
+    }
+    try {
+      const { data: trailer } = await db.from("trailers").select("id, plate, equipment_type, reefer_temp_setpoint").eq("plate", plate).eq("facility_id", facilityId).maybeSingle();
+      if (!trailer) return res.status(404).json({ error: "Trailer not found" });
+      if (trailer.equipment_type !== "reefer") return res.status(400).json({ error: "Trailer is not equipment_type reefer" });
+
+      const tempC = Number(temperature_c);
+      const fuelPct = fuel_level_pct != null && fuel_level_pct !== "" ? Number(fuel_level_pct) : null;
+      const evaluation = evaluateReading(tempC, fuelPct, trailer.reefer_temp_setpoint);
+
+      const { data: reading, error } = await db.from("reefer_readings").insert({
+        facility_id: facilityId, trailer_id: trailer.id, plate: trailer.plate,
+        temperature_c: tempC, fuel_level_pct: fuelPct, status: evaluation.status, reasons: evaluation.reasons,
+        recorded_by: req.session?.user?.id || null, notes: notes || null,
+      }).select().single();
+      if (error) throw error;
+
+      logAudit({ action: "REEFER_READING_RECORDED", entityType: "TRAILER", entityId: plate, details: { temperature_c: tempC, fuel_level_pct: fuelPct, status: evaluation.status }, ip: req.ip, facility_id: facilityId, severity: evaluation.status === "critical" ? "warning" : "info" });
+
+      if (evaluation.status === "critical") {
+        const { data: admins } = await db.from("users").select("id, phone").eq("facility_id", facilityId).in("role", ["ADMIN", "superadmin"]);
+        for (const admin of admins || []) {
+          notify({ type: "REEFER_ALERT", recipientType: "ADMIN", recipientId: admin.id, data: { phone: admin.phone, title: "Reefer alert", body: `${plate}: ${evaluation.reasons.join("; ")}`, link: "/tracking" } });
+        }
+      }
+
+      emitUpdate("yard_update", { type: "REEFER_READING", plate });
+      res.json(reading);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/trailers/:plate/reefer-readings", async (req: any, res) => {
+    const { plate } = req.params;
+    const facilityId = req.facilityId;
+    const { data } = await db.from("reefer_readings").select("*").eq("facility_id", facilityId).eq("plate", plate).order("recorded_at", { ascending: false }).limit(20);
+    res.json(data || []);
   });
 
   // Live yard-adjacent weather from SMHI (Swedish met agency, public API, no key).

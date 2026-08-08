@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Radar, Truck, Clock, AlertTriangle, Activity, DoorOpen, LogIn, LogOut, ArrowRightLeft, X, History, Search } from "lucide-react";
+import { Radar, Truck, Clock, AlertTriangle, Activity, DoorOpen, LogIn, LogOut, ArrowRightLeft, X, History, Search, Thermometer, Fuel, Loader2 } from "lucide-react";
 import { io } from "socket.io-client";
 import { motion, AnimatePresence } from "motion/react";
 import { useToast } from "../contexts/ToastContext";
@@ -157,6 +157,49 @@ export default function LiveTracking() {
       .finally(() => setTimelineLoading(false));
   }, [selected?.plate]);
 
+  const [reeferReadings, setReeferReadings] = useState<any[]>([]);
+  const [reeferForm, setReeferForm] = useState({ temperature_c: "", fuel_level_pct: "" });
+  const [reeferBusy, setReeferBusy] = useState(false);
+
+  const loadReeferReadings = (plate: string) => {
+    fetch(`/api/trailers/${encodeURIComponent(plate)}/reefer-readings`)
+      .then((r) => r.json())
+      .then((d) => setReeferReadings(Array.isArray(d) ? d : []))
+      .catch(() => setReeferReadings([]));
+  };
+
+  useEffect(() => {
+    if (!selected?.plate || selected.equipment_type !== "reefer") {
+      setReeferReadings([]);
+      return;
+    }
+    loadReeferReadings(selected.plate);
+  }, [selected?.plate, selected?.equipment_type]);
+
+  const submitReeferReading = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selected?.plate || reeferForm.temperature_c === "") return;
+    setReeferBusy(true);
+    try {
+      const res = await fetch(`/api/trailers/${encodeURIComponent(selected.plate)}/reefer-reading`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ temperature_c: Number(reeferForm.temperature_c), fuel_level_pct: reeferForm.fuel_level_pct === "" ? null : Number(reeferForm.fuel_level_pct) }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast(data.status === "critical" ? `Recorded — ${data.reasons?.[0] || "out of range"}` : "Reading recorded", data.status === "critical" ? "error" : "success");
+        setReeferForm({ temperature_c: "", fuel_level_pct: "" });
+        loadReeferReadings(selected.plate);
+      } else {
+        toast(data.error || "Failed to record reading", "error");
+      }
+    } catch {
+      toast("Network error recording reading", "error");
+    }
+    setReeferBusy(false);
+  };
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-20 gap-4 text-slate-400 animate-pulse">
@@ -311,6 +354,40 @@ export default function LiveTracking() {
               <Row label="Cargo / SKU" value={selected.sku_summary || "—"} />
               <Row label="Time on site" value={elapsed(selected.checked_in_at || selected.check_in_time || new Date().toISOString())} mono />
             </div>
+
+            {selected.equipment_type === "reefer" && (
+              <div className="mt-6 pt-4 border-t border-slate-100">
+                <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">
+                  <Thermometer size={13} /> Reefer monitoring
+                </h4>
+                {selected.reefer_temp_setpoint != null && <p className="text-xs text-slate-500 mb-2">Setpoint: {selected.reefer_temp_setpoint}°C</p>}
+                {reeferReadings[0] ? (
+                  <div className={`rounded-xl px-3 py-2.5 mb-3 text-xs font-semibold border ${reeferReadings[0].status === "critical" ? "bg-red-50 border-red-200 text-red-700" : reeferReadings[0].status === "warning" ? "bg-amber-50 border-amber-200 text-amber-700" : "bg-teal-50 border-teal-200 text-teal-700"}`}>
+                    <div className="flex items-center gap-3">
+                      <span className="flex items-center gap-1"><Thermometer size={12} /> {reeferReadings[0].temperature_c}°C</span>
+                      {reeferReadings[0].fuel_level_pct != null && <span className="flex items-center gap-1"><Fuel size={12} /> {reeferReadings[0].fuel_level_pct}%</span>}
+                    </div>
+                    <p className="font-normal mt-1 opacity-80">{new Date(reeferReadings[0].recorded_at).toLocaleString()}</p>
+                    {(reeferReadings[0].reasons || []).length > 0 && <p className="font-normal mt-1">{reeferReadings[0].reasons.join("; ")}</p>}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400 mb-3">No readings recorded yet.</p>
+                )}
+                <form onSubmit={submitReeferReading} className="flex items-end gap-2">
+                  <div className="flex-1 space-y-1">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Temp °C</label>
+                    <input required type="number" step="0.1" value={reeferForm.temperature_c} onChange={(e) => setReeferForm({ ...reeferForm, temperature_c: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Fuel %</label>
+                    <input type="number" min="0" max="100" value={reeferForm.fuel_level_pct} onChange={(e) => setReeferForm({ ...reeferForm, fuel_level_pct: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                  </div>
+                  <button type="submit" disabled={reeferBusy} className="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-1.5">
+                    {reeferBusy && <Loader2 size={12} className="animate-spin" />} Log
+                  </button>
+                </form>
+              </div>
+            )}
 
             <div className="mt-6 pt-4 border-t border-slate-100">
               <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">
