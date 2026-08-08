@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Radar, Truck, Clock, AlertTriangle, Activity, DoorOpen, LogIn, LogOut, ArrowRightLeft, X, History } from "lucide-react";
+import { Radar, Truck, Clock, AlertTriangle, Activity, DoorOpen, LogIn, LogOut, ArrowRightLeft, X, History, Search } from "lucide-react";
 import { io } from "socket.io-client";
 import { motion, AnimatePresence } from "motion/react";
+import { useToast } from "../contexts/ToastContext";
 
 function elapsed(since: string) {
   const ms = Date.now() - new Date(since).getTime();
@@ -24,11 +25,15 @@ const EVENT_ICON: Record<string, any> = {
 };
 
 export default function LiveTracking() {
+  const { toast } = useToast();
   const [yard, setYard] = useState<any>({ spots: [], moves: [], detentionThresholdHours: 24 });
   const [logs, setLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
   const [, forceTick] = useState(0);
+  const [query, setQuery] = useState("");
+  const [dragOverSpotId, setDragOverSpotId] = useState<number | null>(null);
+  const [moving, setMoving] = useState(false);
 
   // Tracks which spot each plate last occupied, so a move between fetches
   // can be detected and animated (shared layoutId "flies" the trailer card
@@ -110,6 +115,32 @@ export default function LiveTracking() {
 
   const breachCount = useMemo(() => occupied.filter((s: any) => statusOf(s) === "breach").length, [occupied, threshold]);
 
+  const matchesQuery = (spot: any) => {
+    if (!query.trim()) return true;
+    const q = query.trim().toLowerCase();
+    return (spot.plate || "").toLowerCase().includes(q) || (spot.carrier || "").toLowerCase().includes(q) || (spot.po_number || "").toLowerCase().includes(q);
+  };
+
+  const requestMove = async (trailerId: number, fromSpotId: number, toSpotId: number) => {
+    if (fromSpotId === toSpotId) return;
+    setMoving(true);
+    try {
+      const res = await fetch("/api/create-move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trailerId, fromSpotId, toSpotId }),
+      });
+      if (res.ok) toast("Move request sent", "success");
+      else {
+        const data = await res.json().catch(() => ({}));
+        toast(data.error || "Move request failed", "error");
+      }
+    } catch {
+      toast("Move request failed — network error", "error");
+    }
+    setMoving(false);
+  };
+
   const [timeline, setTimeline] = useState<any[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
 
@@ -153,7 +184,7 @@ export default function LiveTracking() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 bg-white border border-slate-200 rounded-[2rem] p-8 shadow-spatial">
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
             <h3 className="font-bold text-slate-900 text-lg">Yard digital twin</h3>
             <div className="flex gap-4">
               <Legend color="bg-slate-200" label="Empty" />
@@ -161,6 +192,15 @@ export default function LiveTracking() {
               <Legend color="bg-amber-500" label="Approaching limit" />
               <Legend color="bg-red-500" label="Detention" />
             </div>
+          </div>
+          <div className="relative mb-6">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by plate, carrier, or PO — drag an occupied spot onto an empty one to request a move"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+            />
           </div>
           <div className="flex flex-wrap gap-3">
             {(yard.spots || []).map((spot: any) => {
@@ -171,11 +211,33 @@ export default function LiveTracking() {
                 status === "normal" ? "bg-teal-50 border-teal-300 text-teal-700" :
                 "bg-slate-50 border-slate-100 text-slate-400";
               const movedAt = spot.plate ? justMoved[spot.plate] : undefined;
+              const dimmed = query.trim() && !matchesQuery(spot);
+              const isDropTarget = !spot.plate && dragOverSpotId === spot.id;
               return (
                 <button
                   key={spot.id}
                   onClick={() => spot.plate && setSelected(spot)}
-                  className={`w-24 h-20 rounded-xl border flex flex-col items-center justify-center text-[10px] font-bold shadow-sm relative overflow-hidden ${bg} ${spot.plate ? "cursor-pointer hover:scale-105" : "cursor-default"} ${movedAt ? "ring-2 ring-indigo-400" : ""}`}
+                  draggable={!!spot.plate && !moving}
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData("application/json", JSON.stringify({ trailerId: spot.trailer_id, fromSpotId: spot.id }));
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragOver={(e) => {
+                    if (spot.plate) return;
+                    e.preventDefault();
+                    setDragOverSpotId(spot.id);
+                  }}
+                  onDragLeave={() => setDragOverSpotId((id) => (id === spot.id ? null : id))}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOverSpotId(null);
+                    if (spot.plate) return;
+                    try {
+                      const { trailerId, fromSpotId } = JSON.parse(e.dataTransfer.getData("application/json"));
+                      if (trailerId) requestMove(trailerId, fromSpotId, spot.id);
+                    } catch {}
+                  }}
+                  className={`w-24 h-20 rounded-xl border flex flex-col items-center justify-center text-[10px] font-bold shadow-sm relative overflow-hidden transition-all ${bg} ${spot.plate ? "cursor-grab active:cursor-grabbing hover:scale-105" : "cursor-default"} ${movedAt ? "ring-2 ring-indigo-400" : ""} ${dimmed ? "opacity-25" : ""} ${isDropTarget ? "ring-2 ring-indigo-500 scale-105" : ""}`}
                 >
                   {status === "breach" && <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />}
                   <span className="absolute top-1.5 left-1.5 opacity-60">{spot.name}</span>
