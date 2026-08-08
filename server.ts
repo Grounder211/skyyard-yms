@@ -19,6 +19,7 @@ import { db, unwrap } from "./server/supabaseClient.js";
 import { logger } from "./server/logger.js";
 import { getCurrentTemperature } from "./server/services/smhiWeather.js";
 import { generateSecret as generateTotpSecret, verifyToken as verifyTotpToken, otpauthUrl as totpUri } from "./server/services/totp.js";
+import { checkStageTransition } from "./server/services/gatePassStages.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -934,8 +935,6 @@ async function startServer() {
   });
 
   // --- Gate pass pipeline management ---
-  const STAGE_ORDER = ["IN_PASS", "PARKED", "LOADING", "UNLOADING", "READY_FOR_EXIT", "OUT_PASS", "EXITED"];
-
   app.get("/api/gate-pass/active", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     try {
       const { data } = await db.from("gate_passes").select("*, spots(name)").eq("facility_id", req.facilityId).neq("stage", "EXITED").order("issued_at", { ascending: true });
@@ -953,6 +952,7 @@ async function startServer() {
         verified_by: req.session.user.id, verified_at: new Date().toISOString(), updated_at: new Date().toISOString(),
       }).eq("id", req.params.id).eq("facility_id", req.facilityId).select().single();
       if (error) throw error;
+      logAudit({ action: "GATE_PASS_VERIFIED", entityType: "GATE_PASS", entityId: req.params.id, details: { license_verified: !!license_verified, vehicle_matched: !!vehicle_matched, documents_ok: !!documents_ok, plate: data.plate }, ip: req.ip, facility_id: req.facilityId });
       emitUpdate("yard_update", { type: "GATE_PASS" });
       res.json(data);
     } catch (e: any) {
@@ -962,24 +962,12 @@ async function startServer() {
 
   app.post("/api/gate-pass/:id/advance", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     const { stage } = req.body;
-    if (!STAGE_ORDER.includes(stage)) return res.status(400).json({ error: "Invalid stage" });
     try {
       const { data: pass } = await db.from("gate_passes").select("*").eq("id", req.params.id).eq("facility_id", req.facilityId).maybeSingle();
       if (!pass) return res.status(404).json({ error: "Gate pass not found" });
 
-      const currentIdx = STAGE_ORDER.indexOf(pass.stage);
-      const targetIdx = STAGE_ORDER.indexOf(stage);
-      // Only forward, and only by one step at a time — skipping a stage (e.g.
-      // IN_PASS straight to READY_FOR_EXIT) would hide whatever actually
-      // happened to the load in between. LOADING <-> UNLOADING is the one
-      // lateral exception, both mean "at the dock, cargo operation active."
-      const isLateralDockSwap = (pass.stage === "LOADING" && stage === "UNLOADING") || (pass.stage === "UNLOADING" && stage === "LOADING");
-      if (!isLateralDockSwap && targetIdx !== currentIdx + 1) {
-        return res.status(400).json({ error: `Cannot advance from ${pass.stage} to ${stage} — stages must move forward one at a time` });
-      }
-      if (pass.stage === "IN_PASS" && !(pass.license_verified && pass.vehicle_matched)) {
-        return res.status(400).json({ error: "Verify driver license and vehicle match before moving past IN_PASS" });
-      }
+      const transition = checkStageTransition(pass.stage, stage, { license_verified: pass.license_verified, vehicle_matched: pass.vehicle_matched });
+      if (!transition.ok) return res.status(400).json({ error: transition.error });
 
       const { data, error } = await db.from("gate_passes").update({ stage, updated_at: new Date().toISOString() }).eq("id", req.params.id).select().single();
       if (error) throw error;
