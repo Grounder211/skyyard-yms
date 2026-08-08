@@ -24,7 +24,7 @@ export default function BookingPage() {
   const [selectedDock, setSelectedDock] = useState<number | null>(null);
   const [recommended, setRecommended] = useState<any[]>([]);
 
-  const [form, setForm] = useState({ plate: "", driver_name: "", driver_phone: "", load_type: "standard", temperature_requirement: "" });
+  const [form, setForm] = useState({ plate: "", driver_name: "", driver_phone: "", load_type: "standard", temperature_requirement: "", load_weight_kg: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [confirmed, setConfirmed] = useState<any>(null);
@@ -45,15 +45,17 @@ export default function BookingPage() {
     setSlotsLoading(true);
     setSelectedTime(null);
     setSelectedDock(null);
-    fetch(`/api/slots?date=${date}&load_type=${form.load_type}`)
+    const weightParam = form.load_weight_kg ? `&load_weight_kg=${form.load_weight_kg}` : "";
+    fetch(`/api/slots?date=${date}&load_type=${form.load_type}${weightParam}`)
       .then((r) => r.json())
       .then((data) => setSlots(Array.isArray(data) ? data : []))
       .finally(() => setSlotsLoading(false));
-    fetch(`/api/slots/recommend?date=${date}&equipment_type=${form.load_type}&carrier_id=${carrier?.id || ""}`)
+    fetch(`/api/slots/recommend?date=${date}&equipment_type=${form.load_type}&carrier_id=${carrier?.id || ""}${weightParam}`)
       .then((r) => r.json())
       .then((data) => setRecommended(Array.isArray(data) ? data : []))
       .catch(() => setRecommended([]));
-  }, [carrier, date, form.load_type]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [carrier, date, form.load_type, form.load_weight_kg]);
 
   const bestDockForTime = (time: string) => recommended.filter((r) => r.start_time === time).sort((a, b) => b.score - a.score)[0];
   const topPick = recommended.find((r) => r.recommended);
@@ -143,6 +145,7 @@ export default function BookingPage() {
                 </div>
                 <TextField label="Driver name" value={form.driver_name} onChange={(v) => setForm({ ...form, driver_name: v })} />
                 <TextField label="Driver phone" value={form.driver_phone} onChange={(v) => setForm({ ...form, driver_phone: v })} placeholder="+46 70 123 4567" />
+                <TextField label="Load weight (kg, optional)" value={form.load_weight_kg} onChange={(v) => setForm({ ...form, load_weight_kg: v.replace(/[^0-9]/g, "") })} placeholder="e.g. 24000" />
                 {form.load_type === "reefer" && (
                   <TextField label="Required temperature (°C)" value={form.temperature_requirement} onChange={(v) => setForm({ ...form, temperature_requirement: v })} placeholder="-18" />
                 )}

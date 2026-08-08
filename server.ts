@@ -2015,13 +2015,21 @@ async function startServer() {
   // duration too (end_time if a real one was recorded, otherwise its own
   // load-type estimate).
   app.get("/api/slots", async (req: any, res) => {
-    const { date, load_type } = req.query;
+    const { date, load_type, load_weight_kg } = req.query;
     const facilityId = req.facilityId;
-    const requestedMinutes = estimateDurationMinutes(load_type as string);
+    // estimateDurationMinutes has always taken an optional weight argument
+    // (heavier loads take longer to secure) but no caller ever passed one —
+    // there was nowhere upstream to capture a weight, so the heavy-load
+    // adjustment was tested but dead code. load_weight_kg is threaded
+    // through from here down to both the requested slot's own estimate and
+    // each existing appointment's fallback estimate, so overlap math and
+    // the estimatedMinutes preview both reflect real load weight when known.
+    const requestedWeight = load_weight_kg ? Number(load_weight_kg) : undefined;
+    const requestedMinutes = estimateDurationMinutes(load_type as string, requestedWeight);
     const { data: docks } = await db.from("spots").select("id, name").eq("type", "DOCK").eq("facility_id", facilityId);
     const { data: dayAppointments } = await db
       .from("appointments")
-      .select("dock_id, start_time, end_time, load_type")
+      .select("dock_id, start_time, end_time, load_type, load_weight_kg")
       .eq("facility_id", facilityId)
       .neq("status", "CANCELLED")
       .gte("start_time", `${date}T00:00:00`)
@@ -2035,10 +2043,10 @@ async function startServer() {
       // without an explicit Z here the overlap math below would be skewed
       // by the server process's local timezone.
       const startTime = `${date}T${time}:00Z`;
-      const endTime = estimateEndTime(startTime, load_type as string);
+      const endTime = estimateEndTime(startTime, load_type as string, requestedWeight);
       const occupiedIds = new Set(
         (dayAppointments || [])
-          .filter((a: any) => intervalsOverlap(startTime, endTime, a.start_time, a.end_time || estimateEndTime(a.start_time, a.load_type)))
+          .filter((a: any) => intervalsOverlap(startTime, endTime, a.start_time, a.end_time || estimateEndTime(a.start_time, a.load_type, a.load_weight_kg)))
           .map((a: any) => a.dock_id)
       );
       const availableDocks = (docks || []).filter((d: any) => !occupiedIds.has(d.id));
@@ -2053,13 +2061,14 @@ async function startServer() {
   // anywhere in the frontend. Now scores every real dock x time-of-day
   // combination for the requested date, same source data as /api/slots.
   app.get("/api/slots/recommend", async (req: any, res) => {
-    const { date, equipment_type, carrier_id } = req.query;
+    const { date, equipment_type, carrier_id, load_weight_kg } = req.query;
     const facilityId = req.facilityId;
+    const requestedWeight = load_weight_kg ? Number(load_weight_kg) : undefined;
     const times = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00"];
     const { data: docks } = await db.from("spots").select("id, name").eq("type", "DOCK").eq("facility_id", facilityId);
     const { data: dayAppointments } = await db
       .from("appointments")
-      .select("dock_id, start_time, end_time, load_type")
+      .select("dock_id, start_time, end_time, load_type, load_weight_kg")
       .eq("facility_id", facilityId)
       .neq("status", "CANCELLED")
       .gte("start_time", `${date}T00:00:00`)
@@ -2073,10 +2082,10 @@ async function startServer() {
       // without an explicit Z here the overlap math below would be skewed
       // by the server process's local timezone.
       const startTime = `${date}T${time}:00Z`;
-      const endTime = estimateEndTime(startTime, equipment_type as string);
+      const endTime = estimateEndTime(startTime, equipment_type as string, requestedWeight);
       const occupiedIds = new Set(
         (dayAppointments || [])
-          .filter((a: any) => intervalsOverlap(startTime, endTime, a.start_time, a.end_time || estimateEndTime(a.start_time, a.load_type)))
+          .filter((a: any) => intervalsOverlap(startTime, endTime, a.start_time, a.end_time || estimateEndTime(a.start_time, a.load_type, a.load_weight_kg)))
           .map((a: any) => a.dock_id)
       );
       for (const dock of docks || []) {
@@ -2197,7 +2206,7 @@ async function startServer() {
 
   app.post("/api/book/:token", async (req: any, res) => {
     const { token } = req.params;
-    const { plate, driver_name, driver_phone, start_time, dock_id, load_type, temperature_requirement } = req.body;
+    const { plate, driver_name, driver_phone, start_time, dock_id, load_type, temperature_requirement, load_weight_kg } = req.body;
     try {
       const { data: carrier } = await db.from("carriers").select("*").eq("booking_token", token).gt("booking_token_expires", new Date().toISOString()).maybeSingle();
       if (!carrier) return res.status(404).json({ error: "Invalid or expired booking link" });
@@ -2210,7 +2219,8 @@ async function startServer() {
         return res.status(403).json({ error: "BLACKLIST_BLOCK", reason: blacklistHit.reason });
       }
 
-      const bookedEndTime = estimateEndTime(start_time, load_type);
+      const weightKg = load_weight_kg != null && load_weight_kg !== "" && !isNaN(Number(load_weight_kg)) ? Number(load_weight_kg) : null;
+      const bookedEndTime = estimateEndTime(start_time, load_type, weightKg);
       const capacity = await enforceAppointmentCapacity(1, start_time, bookedEndTime);
       if (!capacity.allowed) return res.status(409).json({ error: "CAPACITY_BLOCKED", reason: capacity.reason });
 
@@ -2223,7 +2233,7 @@ async function startServer() {
 
       const { data: newAppt, error } = await db.from("appointments").insert({
         plate, carrier: carrier.name, dock_id: dock_id || null, start_time, load_type: load_type || "standard",
-        end_time: bookedEndTime,
+        end_time: bookedEndTime, load_weight_kg: weightKg,
         temperature_requirement: load_type === "reefer" ? (temperature_requirement || null) : null,
         status: "SCHEDULED", source: "self_book", driver_id: driverId, carrier_id: carrier.id, facility_id: 1,
       }).select().single();
