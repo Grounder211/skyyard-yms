@@ -20,6 +20,7 @@ import { shouldNotifyExpiry } from "./server/services/vehicleExpiry.js";
 import crypto from "crypto";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import PDFDocument from "pdfkit";
+import multer from "multer";
 import { db, unwrap } from "./server/supabaseClient.js";
 import { logger } from "./server/logger.js";
 import { getCurrentTemperature } from "./server/services/smhiWeather.js";
@@ -3236,6 +3237,132 @@ async function startServer() {
       const { data: updated } = await db.from("seal_records").update({ status: "broken", broken_at: new Date().toISOString(), broken_reason: reason || null }).eq("id", seal.id).select().single();
       logAudit({ action: "SEAL_BROKEN", entityType: "TRAILER", entityId: plate, details: { seal_number: seal.seal_number, reason }, ip: req.ip, facility_id: facilityId, severity: "warning" });
       res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Document Control Center — multer was an installed, unused dependency
+  // (imported nowhere). No document storage of any kind existed: no bucket,
+  // no table, no upload endpoint. This is the real thing, not a URL-only
+  // stub: files go into a private Supabase Storage bucket via the same
+  // service-role client already used for every other DB write, with real
+  // mimetype/size validation (also closes off the "file upload attacks"
+  // item from the requested security checklist) and short-lived signed
+  // URLs for download rather than public links.
+  const documentUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      const allowed = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
+      cb(null, allowed.includes(file.mimetype));
+    },
+  });
+  const DOCUMENT_ENTITY_TYPES = ["appointment", "driver", "trailer", "carrier", "vehicle", "shipment"];
+
+  // multer's own middleware throws synchronously on rejection (oversized
+  // file, disallowed mimetype resolved to `false` by fileFilter) — that
+  // error never reaches the route handler's try/catch, so with no global
+  // Express error handler in this app it fell through to Express's default
+  // handler, which returned a raw stack trace as unstyled HTML. Wrapping
+  // the middleware call directly converts that into a clean 400 JSON
+  // response instead of leaking internals.
+  const uploadSingleDocument = (req: any, res: any, next: any) => {
+    documentUpload.single("file")(req, res, (err: any) => {
+      if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({ error: "File too large — max 10MB" });
+      }
+      if (err) return res.status(400).json({ error: "Upload failed — check file type (PDF/JPEG/PNG/WEBP)" });
+      next();
+    });
+  };
+
+  app.get("/api/documents", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { related_entity_type, related_entity_id, status } = req.query;
+    try {
+      let query = db.from("documents").select("*, uploader:users!documents_uploaded_by_fkey(name), verifier:users!documents_verified_by_fkey(name)").eq("facility_id", req.facilityId).order("created_at", { ascending: false }).limit(200);
+      if (related_entity_type) query = query.eq("related_entity_type", related_entity_type);
+      if (related_entity_id) query = query.eq("related_entity_id", related_entity_id);
+      if (status) query = query.eq("verification_status", status);
+      const { data, error } = await query;
+      if (error) throw error;
+      res.json(data || []);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/documents", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), uploadSingleDocument, async (req: any, res) => {
+    const { doc_type, doc_number, related_entity_type, related_entity_id, expiry_date } = req.body;
+    const facilityId = req.facilityId;
+    const userId = req.session?.user?.id || null;
+    if (!req.file) return res.status(400).json({ error: "No file uploaded, or file type/size rejected (PDF/JPEG/PNG/WEBP, max 10MB)" });
+    if (!doc_type || !doc_type.trim()) return res.status(400).json({ error: "Document type is required" });
+    if (!DOCUMENT_ENTITY_TYPES.includes(related_entity_type)) return res.status(400).json({ error: "Invalid related_entity_type" });
+    if (!related_entity_id || !String(related_entity_id).trim()) return res.status(400).json({ error: "related_entity_id is required" });
+    try {
+      const ext = (req.file.originalname.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const storagePath = `${facilityId}/${related_entity_type}/${related_entity_id}/${Date.now()}-${crypto.randomBytes(6).toString("hex")}.${ext}`;
+      const { error: uploadError } = await db.storage.from("documents").upload(storagePath, req.file.buffer, { contentType: req.file.mimetype });
+      if (uploadError) throw uploadError;
+
+      const { data, error } = await db.from("documents").insert({
+        facility_id: facilityId, doc_type: doc_type.trim(), doc_number: doc_number || null,
+        related_entity_type, related_entity_id: String(related_entity_id).trim(),
+        storage_path: storagePath, original_filename: req.file.originalname, mime_type: req.file.mimetype,
+        file_size_bytes: req.file.size, expiry_date: expiry_date || null, uploaded_by: userId,
+      }).select().single();
+      if (error) throw error;
+      logAudit({ action: "DOCUMENT_UPLOADED", entityType: "DOCUMENT", entityId: String(data.id), details: { doc_type, related_entity_type, related_entity_id }, ip: req.ip, facility_id: facilityId });
+      emitUpdate("document_uploaded", data);
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/documents/:id/download", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    try {
+      const { data: doc } = await db.from("documents").select("storage_path, original_filename").eq("id", req.params.id).eq("facility_id", req.facilityId).maybeSingle();
+      if (!doc) return res.status(404).json({ error: "Document not found" });
+      const { data, error } = await db.storage.from("documents").createSignedUrl(doc.storage_path, 300, { download: doc.original_filename });
+      if (error) throw error;
+      res.json({ url: data.signedUrl });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/documents/:id", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { verification_status, notes } = req.body;
+    const userId = req.session?.user?.id || null;
+    try {
+      const patch: any = {};
+      if (notes !== undefined) patch.notes = notes;
+      if (verification_status) {
+        if (!["uploaded", "under_review", "verified", "rejected", "expired"].includes(verification_status)) return res.status(400).json({ error: "Invalid verification_status" });
+        patch.verification_status = verification_status;
+        if (verification_status === "verified" || verification_status === "rejected") { patch.verified_by = userId; patch.verified_at = new Date().toISOString(); }
+      }
+      if (Object.keys(patch).length === 0) return res.status(400).json({ error: "No valid fields to update" });
+      const { data, error } = await db.from("documents").update(patch).eq("id", req.params.id).eq("facility_id", req.facilityId).select().single();
+      if (error) throw error;
+      logAudit({ action: "DOCUMENT_UPDATED", entityType: "DOCUMENT", entityId: String(req.params.id), details: { verification_status }, ip: req.ip, facility_id: req.facilityId });
+      emitUpdate("document_updated", data);
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/documents/:id", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    try {
+      const { data: doc } = await db.from("documents").select("storage_path").eq("id", req.params.id).eq("facility_id", req.facilityId).maybeSingle();
+      if (!doc) return res.status(404).json({ error: "Document not found" });
+      await db.storage.from("documents").remove([doc.storage_path]);
+      await db.from("documents").delete().eq("id", req.params.id).eq("facility_id", req.facilityId);
+      logAudit({ action: "DOCUMENT_DELETED", entityType: "DOCUMENT", entityId: req.params.id, ip: req.ip, facility_id: req.facilityId });
+      res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

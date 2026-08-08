@@ -23,6 +23,7 @@ import {
   Lock,
   ShieldAlert,
   HardHat,
+  FileText,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { Routes, Route, Link, useLocation } from "react-router-dom";
@@ -50,6 +51,7 @@ const DispatchBoard = React.lazy(() => import("./pages/DispatchBoard"));
 const PipelineBoard = React.lazy(() => import("./pages/PipelineBoard"));
 const ExceptionCenter = React.lazy(() => import("./pages/ExceptionCenter"));
 const SafetyCenter = React.lazy(() => import("./pages/SafetyCenter"));
+const DocumentCenter = React.lazy(() => import("./pages/DocumentCenter"));
 const LiveTracking = React.lazy(() => import("./pages/LiveTracking"));
 const SuperadminConsole = React.lazy(() => import("./pages/SuperadminConsole"));
 const SettingsPage = React.lazy(() => import("./pages/Settings"));
@@ -133,6 +135,7 @@ function StaffArea() {
             <Route path="/pipeline" element={guard("/pipeline", <PipelineBoard />)} />
             <Route path="/exceptions" element={guard("/exceptions", <ExceptionCenter />)} />
             <Route path="/safety" element={guard("/safety", <SafetyCenter />)} />
+            <Route path="/documents" element={guard("/documents", <DocumentCenter />)} />
             <Route path="/superadmin" element={guard("/superadmin", <SuperadminConsole />)} />
             <Route path="/settings" element={guard("/settings", <SettingsPage />)} />
             <Route path="/design" element={<DesignSystemExplorer />} />
@@ -182,6 +185,7 @@ function AppLayout({ children, user }: any) {
     { to: "/pipeline", icon: <ShieldCheck size={20} />, label: "Pipeline" },
     { to: "/exceptions", icon: <ShieldAlert size={20} />, label: "Exceptions" },
     { to: "/safety", icon: <HardHat size={20} />, label: "Safety" },
+    { to: "/documents", icon: <FileText size={20} />, label: "Documents" },
     { to: "/network", icon: <Globe size={20} />, label: t("nav.network") },
     { to: "/calendar", icon: <Calendar size={20} />, label: t("nav.calendar") },
     { to: "/finance", icon: <DollarSign size={20} />, label: t("nav.finance") },
