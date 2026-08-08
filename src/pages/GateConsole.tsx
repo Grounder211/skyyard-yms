@@ -53,6 +53,7 @@ export default function GateConsole() {
     direction: "INBOUND",
     po_number: "",
     sku_summary: "",
+    reefer_setpoint: "",
   });
   const [walkinResult, setWalkinResult] = useState<any>(null);
 
@@ -272,7 +273,7 @@ export default function GateConsole() {
         } else {
           toast(`Registered — assigned to ${data.spotName}`, "success");
         }
-        setWalkinForm({ driver_name: "", carrier_name: "", phone: "", truck_plate: "", trailer_number: "", load_type: "standard", direction: "INBOUND", po_number: "", sku_summary: "" });
+        setWalkinForm({ driver_name: "", carrier_name: "", phone: "", truck_plate: "", trailer_number: "", load_type: "standard", direction: "INBOUND", po_number: "", sku_summary: "", reefer_setpoint: "" });
         loadYard();
       }
     } catch {
@@ -521,6 +522,9 @@ export default function GateConsole() {
               ))}
             </select>
           </div>
+          {walkinForm.load_type === "reefer" && (
+            <Field label="Reefer setpoint (°C)" value={walkinForm.reefer_setpoint} onChange={(v) => setWalkinForm({ ...walkinForm, reefer_setpoint: v })} placeholder="-18" />
+          )}
           <div className="md:col-span-2 flex items-end">
             <button type="submit" disabled={busy} className="w-full bg-indigo-600 text-white py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 disabled:opacity-50 flex items-center justify-center gap-2">
               {busy && <Loader2 size={14} className="animate-spin" />} Register walk-in

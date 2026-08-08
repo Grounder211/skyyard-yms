@@ -727,7 +727,7 @@ async function startServer() {
   });
 
   app.post("/api/walkin/register", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
-    const { driver_name, carrier_name, phone, truck_plate, trailer_number, load_type, direction, po_number, sku_summary } = req.body;
+    const { driver_name, carrier_name, phone, truck_plate, trailer_number, load_type, direction, po_number, sku_summary, reefer_setpoint } = req.body;
     const facilityId = req.facilityId || 1;
 
     if (!driver_name || !carrier_name || !truck_plate || !phone) {
@@ -759,6 +759,16 @@ async function startServer() {
         notify({ type: "WALKIN_CONFIRMED", recipientType: "driver", recipientId: walkin.id, data: { phone, title: "Registration Sync", body: `SkyYard: Walk-in confirmed for ${truck_plate}. Proceeds to parking spot: ${assign.spotName}. Reference: WK-${walkin.id}` } });
         if (po_number || sku_summary) {
           await db.from("trailers").update({ po_number: po_number || null, sku_summary: sku_summary || null }).eq("plate", truck_plate).eq("facility_id", facilityId);
+        }
+        if (load_type === "reefer") {
+          // equipment_type never gets set from load_type anywhere else either
+          // — without this, a trailer checked in as a reefer load stays
+          // equipment_type "standard" and the reefer-reading endpoint
+          // (Phase N) rejects every reading for it with "not equipment_type
+          // reefer", making reefer monitoring unreachable through this path.
+          const patch: any = { equipment_type: "reefer" };
+          if (reefer_setpoint != null && reefer_setpoint !== "" && !isNaN(Number(reefer_setpoint))) patch.reefer_temp_setpoint = Number(reefer_setpoint);
+          await db.from("trailers").update(patch).eq("plate", truck_plate).eq("facility_id", facilityId);
         }
         const pass = await issueGatePass({ facilityId, plate: truck_plate, carrierName: carrier_name, spotName: assign.spotName, issuedBy: req.session?.user?.id, entrySource: "guard_walkin" });
         emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
@@ -1260,7 +1270,7 @@ async function startServer() {
   });
 
   app.post("/api/gate/checkin", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
-    const { appointmentId, plate, carrierName, sealNumber, overrideDiscrepancy, overrideNote, poNumber, skuSummary } = req.body;
+    const { appointmentId, plate, carrierName, sealNumber, overrideDiscrepancy, overrideNote, poNumber, skuSummary, reeferSetpoint } = req.body;
     const facilityId = req.facilityId;
     try {
       const { data: appt } = await db.from("appointments").select("*, drivers(phone, id)").eq("id", appointmentId).eq("facility_id", facilityId).maybeSingle();
@@ -1297,6 +1307,25 @@ async function startServer() {
 
       if (poNumber || skuSummary) {
         await db.from("trailers").update({ po_number: poNumber || null, sku_summary: skuSummary || null }).eq("plate", plate).eq("facility_id", facilityId);
+      }
+
+      // temperature_requirement sat on appointments unused — a carrier could
+      // book a reefer load and state the required temperature, but nothing
+      // ever carried that through to the trailer's reefer_temp_setpoint,
+      // which the reefer monitoring flow (Phase N) reads to judge whether a
+      // logged reading is in range. Without it, every reefer trailer's
+      // setpoint stayed null and readings only got checked against a generic
+      // safe-range fallback instead of what was actually requested.
+      // equipment_type also never gets set from load_type anywhere — without
+      // it the reefer-reading endpoint rejects every reading for this
+      // trailer with "not equipment_type reefer", making the whole feature
+      // unreachable through a real check-in.
+      if (appt.load_type === "reefer") {
+        const parsedRequirement = appt.temperature_requirement != null ? parseFloat(appt.temperature_requirement) : null;
+        const setpoint = reeferSetpoint != null && reeferSetpoint !== "" ? Number(reeferSetpoint) : (Number.isFinite(parsedRequirement) ? parsedRequirement : null);
+        const patch: any = { equipment_type: "reefer" };
+        if (setpoint != null && !isNaN(setpoint)) patch.reefer_temp_setpoint = setpoint;
+        await db.from("trailers").update(patch).eq("plate", plate).eq("facility_id", facilityId);
       }
 
       // Staff already verified plate/carrier against the appointment (the
@@ -1941,7 +1970,7 @@ async function startServer() {
 
   app.post("/api/book/:token", async (req: any, res) => {
     const { token } = req.params;
-    const { plate, driver_name, driver_phone, start_time, dock_id, load_type } = req.body;
+    const { plate, driver_name, driver_phone, start_time, dock_id, load_type, temperature_requirement } = req.body;
     try {
       const { data: carrier } = await db.from("carriers").select("*").eq("booking_token", token).gt("booking_token_expires", new Date().toISOString()).maybeSingle();
       if (!carrier) return res.status(404).json({ error: "Invalid or expired booking link" });
@@ -1963,6 +1992,7 @@ async function startServer() {
       const { data: newAppt, error } = await db.from("appointments").insert({
         plate, carrier: carrier.name, dock_id: dock_id || null, start_time, load_type: load_type || "standard",
         end_time: estimateEndTime(start_time, load_type),
+        temperature_requirement: load_type === "reefer" ? (temperature_requirement || null) : null,
         status: "SCHEDULED", source: "self_book", driver_id: driverId, carrier_id: carrier.id, facility_id: 1,
       }).select().single();
       if (error) throw error;

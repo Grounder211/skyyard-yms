@@ -24,7 +24,7 @@ export default function BookingPage() {
   const [selectedDock, setSelectedDock] = useState<number | null>(null);
   const [recommended, setRecommended] = useState<any[]>([]);
 
-  const [form, setForm] = useState({ plate: "", driver_name: "", driver_phone: "", load_type: "standard" });
+  const [form, setForm] = useState({ plate: "", driver_name: "", driver_phone: "", load_type: "standard", temperature_requirement: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [confirmed, setConfirmed] = useState<any>(null);
@@ -143,6 +143,9 @@ export default function BookingPage() {
                 </div>
                 <TextField label="Driver name" value={form.driver_name} onChange={(v) => setForm({ ...form, driver_name: v })} />
                 <TextField label="Driver phone" value={form.driver_phone} onChange={(v) => setForm({ ...form, driver_phone: v })} placeholder="+46 70 123 4567" />
+                {form.load_type === "reefer" && (
+                  <TextField label="Required temperature (°C)" value={form.temperature_requirement} onChange={(v) => setForm({ ...form, temperature_requirement: v })} placeholder="-18" />
+                )}
               </div>
 
               <div className="space-y-1.5">
