@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Globe2, Coins, Clock, Bell, Warehouse, FileLock2, CheckCircle2, Loader2, DoorOpen, ShieldCheck, KeyRound, Copy, Code2, Ban, AlertCircle, MapPin } from "lucide-react";
+import { Globe2, Coins, Clock, Bell, Warehouse, FileLock2, CheckCircle2, Loader2, DoorOpen, ShieldCheck, KeyRound, Copy, Code2, Ban, AlertCircle, MapPin, Download } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { Link } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
@@ -193,6 +193,21 @@ export default function Settings() {
       body: JSON.stringify({ status }),
     });
     load();
+  };
+
+  const downloadExport = async (id: string) => {
+    const res = await fetch(`/api/admin/data-requests/${id}/export`);
+    if (!res.ok) {
+      toast("Failed to generate export", "error");
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `data-export-${id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   if (loading || !settings) {
@@ -463,6 +478,11 @@ export default function Settings() {
                 </div>
                 <div className="flex items-center gap-2">
                   <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${r.status === "completed" ? "bg-teal-100 text-teal-700" : "bg-amber-100 text-amber-700"}`}>{r.status}</span>
+                  {r.request_type === "access" && (
+                    <button onClick={() => downloadExport(r.id)} className="text-xs font-bold text-slate-500 hover:text-slate-900 flex items-center gap-1">
+                      <Download size={12} /> Export
+                    </button>
+                  )}
                   {r.status !== "completed" && (
                     <button onClick={() => updateRequest(r.id, "completed")} className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1">
                       <CheckCircle2 size={12} /> Mark done

@@ -2377,7 +2377,12 @@ async function startServer() {
     const { request_type, phone_or_email } = req.body;
     try {
       const isEmail = String(phone_or_email).includes("@");
-      await db.from("data_subject_requests").insert({ facility_id: 1, request_type, requester_phone: isEmail ? null : phone_or_email, requester_email: isEmail ? phone_or_email : null });
+      // The Settings admin queue already displayed "Deadline
+      // {deadline_at}" and promised a 72-hour IMY/GDPR response window in
+      // its own copy, but this insert never actually set deadline_at —
+      // every request showed "Invalid Date" to staff.
+      const deadlineAt = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
+      await db.from("data_subject_requests").insert({ facility_id: 1, request_type, requester_phone: isEmail ? null : phone_or_email, requester_email: isEmail ? phone_or_email : null, status: "pending", deadline_at: deadlineAt });
       res.json({ success: true, message: "Request received. We will process it within 72 hours." });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -2414,8 +2419,12 @@ async function startServer() {
     }
   });
 
-  // GDPR admin queue
-  app.get("/api/admin/data-requests", async (req: any, res) => {
+  // GDPR admin queue — GET/PATCH had no requireRole at all, unlike every
+  // other staff endpoint in this file. Any unauthenticated caller could
+  // list every data subject request (requester_phone/email is PII) or
+  // mark them completed — an access-control gap inside the feature that
+  // exists specifically to handle PII responsibly.
+  app.get("/api/admin/data-requests", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     try {
       const { data } = await db.from("data_subject_requests").select("*").order("created_at", { ascending: false });
       res.json(data || []);
@@ -2424,7 +2433,7 @@ async function startServer() {
     }
   });
 
-  app.patch("/api/admin/data-requests/:id", async (req: any, res) => {
+  app.patch("/api/admin/data-requests/:id", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const { status, notes } = req.body;
     try {
       const patch: any = {};
@@ -2433,6 +2442,48 @@ async function startServer() {
       if (status === "completed") patch.completed_at = new Date().toISOString();
       await db.from("data_subject_requests").update(patch).eq("id", req.params.id);
       res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Real data export for an access request — download_url existed but
+  // nothing ever produced anything to download. Gathers every real record
+  // tied to the requester's phone/email across the tables that actually
+  // hold personal data in this app and returns it as a JSON export;
+  // records the export's own URL back onto the request.
+  app.get("/api/admin/data-requests/:id/export", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    try {
+      const { data: request } = await db.from("data_subject_requests").select("*").eq("id", req.params.id).maybeSingle();
+      if (!request) return res.status(404).json({ error: "Request not found" });
+      const phone = request.requester_phone;
+      const email = request.requester_email;
+      if (!phone && !email) return res.status(400).json({ error: "Request has no phone or email to search for" });
+
+      const [drivers, walkins] = await Promise.all([
+        phone ? db.from("drivers").select("id, name, phone, default_plate, carrier_name, created_at").eq("phone", phone) : Promise.resolve({ data: [] as any[] }),
+        phone ? db.from("walkin_registrations").select("id, driver_name, carrier_name, phone, truck_plate, status, created_at").eq("phone", phone) : Promise.resolve({ data: [] as any[] }),
+      ]);
+      const appointments = phone
+        ? await db.from("appointments").select("id, plate, carrier, start_time, status").eq("driver_id", (drivers.data || [])[0]?.id ?? -1)
+        : { data: [] as any[] };
+
+      const exportPayload = {
+        request: { id: request.id, request_type: request.request_type, requester_email: email, requester_phone: phone, created_at: request.created_at },
+        drivers: drivers.data || [],
+        walkin_registrations: walkins.data || [],
+        appointments: appointments.data || [],
+        generated_at: new Date().toISOString(),
+      };
+
+      const downloadUrl = `/api/admin/data-requests/${request.id}/export`;
+      if (request.download_url !== downloadUrl) {
+        await db.from("data_subject_requests").update({ download_url: downloadUrl }).eq("id", request.id);
+      }
+      logAudit({ action: "GDPR_EXPORT_GENERATED", entityType: "DATA_SUBJECT_REQUEST", entityId: String(request.id), details: { hasPhone: !!phone, hasEmail: !!email }, ip: req.ip, facility_id: request.facility_id, severity: "warning" });
+
+      res.setHeader("Content-Disposition", `attachment; filename=data-export-${request.id}.json`);
+      res.json(exportPayload);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
