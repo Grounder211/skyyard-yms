@@ -750,7 +750,7 @@ async function startServer() {
   // every other staff-mutation endpoint in this file. Any unauthenticated
   // caller could create, retime, or delete appointments in the yard.
   app.post("/api/appointments", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
-    const { plate, carrier, start_time, duration_minutes, dock_id, load_type, priority_level } = req.body;
+    const { plate, carrier, start_time, duration_minutes, dock_id, load_type, priority_level, special_instructions } = req.body;
     const facilityId = req.facilityId || 1;
     try {
       const endTime = new Date(new Date(start_time).getTime() + (duration_minutes || estimateDurationMinutes(load_type)) * 60_000).toISOString();
@@ -765,6 +765,7 @@ async function startServer() {
         dock_id: dock_id || null,
         load_type: load_type || "LOAD",
         priority_level: priority_level || 2,
+        special_instructions: special_instructions || null,
         facility_id: facilityId,
         status: "SCHEDULED",
       }).select().single();
@@ -783,7 +784,7 @@ async function startServer() {
     const updates = req.body;
     const facilityId = req.facilityId || 1;
     try {
-      const allowedFields = ["plate", "carrier", "start_time", "actual_duration_minutes", "status", "priority_level", "dock_id"];
+      const allowedFields = ["plate", "carrier", "start_time", "actual_duration_minutes", "status", "priority_level", "dock_id", "special_instructions"];
       const patch: any = {};
       for (const field of allowedFields) if (updates[field] !== undefined) patch[field] = updates[field];
 
@@ -2237,7 +2238,7 @@ async function startServer() {
 
   app.post("/api/book/:token", bookingLimiter, async (req: any, res) => {
     const { token } = req.params;
-    const { plate, driver_name, driver_phone, start_time, dock_id, load_type, temperature_requirement, load_weight_kg } = req.body;
+    const { plate, driver_name, driver_phone, start_time, dock_id, load_type, temperature_requirement, load_weight_kg, special_instructions } = req.body;
     try {
       const { data: carrier } = await db.from("carriers").select("*").eq("booking_token", token).gt("booking_token_expires", new Date().toISOString()).maybeSingle();
       if (!carrier) return res.status(404).json({ error: "Invalid or expired booking link" });
@@ -2262,9 +2263,13 @@ async function startServer() {
         driverId = drv?.id || null;
       }
 
+      // Capped — this is a public, unauthenticated field on a rate-limited
+      // but still open endpoint; no reason to accept unbounded text.
+      const instructions = typeof special_instructions === "string" && special_instructions.trim() ? special_instructions.trim().slice(0, 500) : null;
+
       const { data: newAppt, error } = await db.from("appointments").insert({
         plate, carrier: carrier.name, dock_id: dock_id || null, start_time, load_type: load_type || "standard",
-        end_time: bookedEndTime, load_weight_kg: weightKg,
+        end_time: bookedEndTime, load_weight_kg: weightKg, special_instructions: instructions,
         temperature_requirement: load_type === "reefer" ? (temperature_requirement || null) : null,
         status: "SCHEDULED", source: "self_book", driver_id: driverId, carrier_id: carrier.id, facility_id: 1,
       }).select().single();

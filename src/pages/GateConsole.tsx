@@ -13,6 +13,7 @@ import {
   LogOut,
   Loader2,
   AlertTriangle,
+  MessageSquareText,
 } from "lucide-react";
 import { io } from "socket.io-client";
 import { QRCodeSVG } from "qrcode.react";
@@ -587,6 +588,15 @@ export default function GateConsole() {
               </div>
             ) : (
               <div className="space-y-4">
+                {checkinTarget?.special_instructions && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800 flex items-start gap-2.5">
+                    <MessageSquareText size={16} className="shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold uppercase tracking-widest text-[10px] mb-1">Special instructions</p>
+                      <p>{checkinTarget.special_instructions}</p>
+                    </div>
+                  </div>
+                )}
                 <Field
                   label="Plate"
                   required

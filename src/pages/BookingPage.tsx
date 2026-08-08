@@ -24,7 +24,7 @@ export default function BookingPage() {
   const [selectedDock, setSelectedDock] = useState<number | null>(null);
   const [recommended, setRecommended] = useState<any[]>([]);
 
-  const [form, setForm] = useState({ plate: "", driver_name: "", driver_phone: "", load_type: "standard", temperature_requirement: "", load_weight_kg: "" });
+  const [form, setForm] = useState({ plate: "", driver_name: "", driver_phone: "", load_type: "standard", temperature_requirement: "", load_weight_kg: "", special_instructions: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [confirmed, setConfirmed] = useState<any>(null);
@@ -149,6 +149,18 @@ export default function BookingPage() {
                 {form.load_type === "reefer" && (
                   <TextField label="Required temperature (°C)" value={form.temperature_requirement} onChange={(v) => setForm({ ...form, temperature_requirement: v })} placeholder="-18" />
                 )}
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Special instructions (optional)</label>
+                <textarea
+                  value={form.special_instructions}
+                  onChange={(e) => setForm({ ...form, special_instructions: e.target.value.slice(0, 500) })}
+                  placeholder="e.g. fragile cargo, forklift required, driver needs translator"
+                  rows={2}
+                  maxLength={500}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 resize-none"
+                />
               </div>
 
               <div className="space-y-1.5">
