@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { Warehouse, CalendarDays, Loader2, CheckCircle2, AlertCircle, DoorOpen } from "lucide-react";
+import { Warehouse, CalendarDays, Loader2, CheckCircle2, AlertCircle, DoorOpen, Sparkles } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 
 const LOAD_TYPES = ["standard", "reefer", "flatbed", "tanker", "hazmat", "oversized"];
@@ -22,6 +22,7 @@ export default function BookingPage() {
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedTime, setSelectedTime] = useState<any>(null);
   const [selectedDock, setSelectedDock] = useState<number | null>(null);
+  const [recommended, setRecommended] = useState<any[]>([]);
 
   const [form, setForm] = useState({ plate: "", driver_name: "", driver_phone: "", load_type: "standard" });
   const [busy, setBusy] = useState(false);
@@ -48,7 +49,14 @@ export default function BookingPage() {
       .then((r) => r.json())
       .then((data) => setSlots(Array.isArray(data) ? data : []))
       .finally(() => setSlotsLoading(false));
+    fetch(`/api/slots/recommend?date=${date}&equipment_type=${form.load_type}&carrier_id=${carrier?.id || ""}`)
+      .then((r) => r.json())
+      .then((data) => setRecommended(Array.isArray(data) ? data : []))
+      .catch(() => setRecommended([]));
   }, [carrier, date, form.load_type]);
+
+  const bestDockForTime = (time: string) => recommended.filter((r) => r.start_time === time).sort((a, b) => b.score - a.score)[0];
+  const topPick = recommended.find((r) => r.recommended);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -161,9 +169,10 @@ export default function BookingPage() {
                         disabled={s.availableCount === 0}
                         onClick={() => {
                           setSelectedTime(s);
-                          setSelectedDock(s.docks[0]?.id || null);
+                          const best = bestDockForTime(s.time);
+                          setSelectedDock(best?.dock_id || s.docks[0]?.id || null);
                         }}
-                        className={`px-3 py-2.5 rounded-xl text-sm font-bold border transition-all ${
+                        className={`relative px-3 py-2.5 rounded-xl text-sm font-bold border transition-all ${
                           selectedTime?.time === s.time
                             ? "bg-indigo-600 border-indigo-600 text-white"
                             : s.availableCount === 0
@@ -171,11 +180,15 @@ export default function BookingPage() {
                             : "bg-white border-slate-200 text-slate-700 hover:border-indigo-300"
                         }`}
                       >
+                        {topPick?.start_time === s.time && (
+                          <Sparkles size={11} className="absolute -top-1.5 -right-1.5 text-amber-500 bg-white rounded-full p-0.5" strokeWidth={2.5} />
+                        )}
                         {s.time}
                       </button>
                     ))}
                   </div>
                 )}
+                {topPick && <p className="text-xs text-slate-400 flex items-center gap-1.5"><Sparkles size={11} className="text-amber-500" /> {topPick.start_time} at {topPick.dock_name} is the best match — {topPick.reason}.</p>}
               </div>
 
               <button type="submit" disabled={busy} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">

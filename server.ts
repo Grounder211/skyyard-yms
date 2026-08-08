@@ -1674,14 +1674,26 @@ async function startServer() {
     res.json(slots);
   });
 
-  // AI-scored dock recommendation
+  // AI-scored dock recommendation — was previously scoring two hardcoded
+  // fake slots (dock_id 1/2, never the real docks) and wasn't called from
+  // anywhere in the frontend. Now scores every real dock x time-of-day
+  // combination for the requested date, same source data as /api/slots.
   app.get("/api/slots/recommend", async (req: any, res) => {
     const { date, equipment_type, carrier_id } = req.query;
     const facilityId = req.facilityId;
-    const availableSlots = [
-      { dock_id: 1, start_time: "08:00" },
-      { dock_id: 2, start_time: "10:00" },
-    ];
+    const times = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00"];
+    const { data: docks } = await db.from("spots").select("id, name").eq("type", "DOCK").eq("facility_id", facilityId);
+
+    const availableSlots: { dock_id: number; dock_name: string; start_time: string }[] = [];
+    for (const time of times) {
+      const startTime = `${date}T${time}:00`;
+      const { data: occupied } = await db.from("appointments").select("dock_id").eq("facility_id", facilityId).neq("status", "CANCELLED").eq("start_time", startTime);
+      const occupiedIds = new Set((occupied || []).map((d: any) => d.dock_id));
+      for (const dock of docks || []) {
+        if (!occupiedIds.has(dock.id)) availableSlots.push({ dock_id: dock.id, dock_name: dock.name, start_time: time });
+      }
+    }
+
     const scored = await Promise.all(availableSlots.map(s => scoreSlot({ ...s, date }, {
       equipmentType: equipment_type as string, carrierId: carrier_id as string, facilityId, date: date as string,
     })));
@@ -1791,13 +1803,6 @@ async function startServer() {
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
-  });
-
-  app.get("/book/:token", async (req, res) => {
-    const { token } = req.params;
-    const { data: carrier } = await db.from("carriers").select("*").eq("booking_token", token).gt("booking_token_expires", new Date().toISOString()).maybeSingle();
-    if (!carrier) return res.status(404).send("Invalid or expired booking link");
-    res.json(carrier);
   });
 
   app.get("/api/book/:token", async (req: any, res) => {
