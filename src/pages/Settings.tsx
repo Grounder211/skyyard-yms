@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Globe2, Coins, Clock, Bell, Warehouse, FileLock2, CheckCircle2, Loader2, DoorOpen, ShieldCheck, KeyRound, Copy, Code2, Ban, AlertCircle, MapPin, Download } from "lucide-react";
+import { Globe2, Coins, Clock, Bell, Warehouse, FileLock2, CheckCircle2, Loader2, DoorOpen, ShieldCheck, KeyRound, Copy, Code2, Ban, AlertCircle, MapPin, Download, CalendarOff, Plus, Trash2, Gauge } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { Link } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
@@ -23,6 +23,46 @@ export default function Settings() {
 
   const [coords, setCoords] = useState({ latitude: "", longitude: "" });
   const [coordsSaving, setCoordsSaving] = useState(false);
+
+  const [blackouts, setBlackouts] = useState<any[]>([]);
+  const [blackoutForm, setBlackoutForm] = useState({ start_time: "", end_time: "", reason: "" });
+  const [blackoutBusy, setBlackoutBusy] = useState(false);
+
+  const loadBlackouts = () => {
+    fetch("/api/admin/blackouts")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setBlackouts(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  };
+
+  const addBlackout = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!blackoutForm.start_time || !blackoutForm.end_time || !blackoutForm.reason.trim()) return;
+    setBlackoutBusy(true);
+    const res = await fetch("/api/admin/blackouts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(blackoutForm),
+    });
+    setBlackoutBusy(false);
+    if (res.ok) {
+      toast("Blackout window added", "success");
+      setBlackoutForm({ start_time: "", end_time: "", reason: "" });
+      loadBlackouts();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      toast(data.error || "Failed to add blackout window", "error");
+    }
+  };
+
+  const removeBlackout = async (id: number) => {
+    if (!confirm("Remove this blackout window? Appointments will be bookable in this period again.")) return;
+    const res = await fetch(`/api/admin/blackouts/${id}`, { method: "DELETE" });
+    if (res.ok) {
+      toast("Blackout window removed", "success");
+      loadBlackouts();
+    }
+  };
 
   const [totpEnabled, setTotpEnabled] = useState(false);
   const [totpSetup, setTotpSetup] = useState<{ secret: string; otpauth_url: string } | null>(null);
@@ -98,6 +138,7 @@ export default function Settings() {
       .catch(() => {});
     loadTotpStatus();
     loadApiKeys();
+    loadBlackouts();
   };
 
   useEffect(load, []);
@@ -161,6 +202,7 @@ export default function Settings() {
         timezone: settings.timezone,
         detention_rate_per_hour: settings.detention_rate_per_hour,
         detention_threshold_hours: settings.detention_threshold_hours,
+        max_appointments_per_hour: settings.max_appointments_per_hour,
       }),
     });
     setSaving(false);
@@ -261,6 +303,13 @@ export default function Settings() {
           <div className="space-y-1.5">
             <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Detention rate / hour</label>
             <input type="number" value={settings.detention_rate_per_hour ?? 75} onChange={(e) => setSettings({ ...settings, detention_rate_per_hour: Number(e.target.value) })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5">
+              <Gauge size={12} /> Max appointments / hour
+            </label>
+            <input type="number" min={1} placeholder="Unlimited" value={settings.max_appointments_per_hour ?? ""} onChange={(e) => setSettings({ ...settings, max_appointments_per_hour: e.target.value === "" ? null : Number(e.target.value) })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+            <p className="text-[11px] text-slate-400">Blocks new bookings once this many appointments start in the same clock hour. Leave blank for no cap.</p>
           </div>
         </div>
 
@@ -425,6 +474,51 @@ export default function Settings() {
                     </button>
                   )}
                 </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-[2rem] p-8 space-y-5">
+        <div>
+          <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
+            <CalendarOff size={18} className="text-indigo-600" /> Appointment blackout windows
+          </h3>
+          <p className="text-sm text-slate-500 mt-1">Close the yard to new bookings for a period — maintenance, holidays, storm closures. Blocks both staff scheduling and carrier self-booking.</p>
+        </div>
+
+        <form onSubmit={addBlackout} className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Starts</label>
+            <input type="datetime-local" required value={blackoutForm.start_time} onChange={(e) => setBlackoutForm({ ...blackoutForm, start_time: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Ends</label>
+            <input type="datetime-local" required value={blackoutForm.end_time} onChange={(e) => setBlackoutForm({ ...blackoutForm, end_time: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm" />
+          </div>
+          <div className="space-y-1.5 sm:col-span-1">
+            <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Reason</label>
+            <input required value={blackoutForm.reason} onChange={(e) => setBlackoutForm({ ...blackoutForm, reason: e.target.value })} placeholder="e.g. Midsummer closure" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm" />
+          </div>
+          <button type="submit" disabled={blackoutBusy} className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+            {blackoutBusy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} Add
+          </button>
+        </form>
+
+        {blackouts.length === 0 ? (
+          <p className="text-sm text-slate-400 py-4 text-center border-t border-slate-100 pt-6">No upcoming blackout windows.</p>
+        ) : (
+          <div className="divide-y divide-slate-100 border-t border-slate-100 pt-2">
+            {blackouts.map((b) => (
+              <div key={b.id} className="flex items-center justify-between gap-4 py-3">
+                <div className="min-w-0">
+                  <p className="font-bold text-slate-900 text-sm truncate">{b.reason}</p>
+                  <p className="text-xs text-slate-500">{new Date(b.start_time).toLocaleString()} — {new Date(b.end_time).toLocaleString()}{b.creator?.name ? ` · added by ${b.creator.name}` : ""}</p>
+                </div>
+                <button onClick={() => removeBlackout(b.id)} className="shrink-0 text-xs font-bold text-red-600 hover:text-red-700 flex items-center gap-1">
+                  <Trash2 size={12} /> Remove
+                </button>
               </div>
             ))}
           </div>

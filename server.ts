@@ -13,6 +13,7 @@ import bcrypt from "bcryptjs";
 import twilio from "twilio";
 import { scoreSlot } from "./server/services/slotEngine.js";
 import { estimateDurationMinutes, estimateEndTime, intervalsOverlap } from "./server/services/appointmentDuration.js";
+import { checkAppointmentCapacity, hourBucket } from "./server/services/appointmentCapacity.js";
 import { evaluateReading, isReadingStale, STALE_READING_HOURS } from "./server/services/reeferMonitor.js";
 import { evaluateSla, isNoShow } from "./server/services/complianceMonitor.js";
 import { shouldNotifyExpiry } from "./server/services/vehicleExpiry.js";
@@ -341,6 +342,30 @@ async function startServer() {
     return data;
   };
 
+  // Neither the staff-entered appointment endpoint nor the carrier
+  // self-service booking endpoint enforced any capacity limit — any number
+  // of trucks could be booked into the same hour, and there was no way to
+  // block out a maintenance window or holiday closure. Pure decision logic
+  // lives in appointmentCapacity.ts; this just gathers the DB state it needs.
+  const enforceAppointmentCapacity = async (facilityId: number, startTime: string, endTime: string, excludeAppointmentId?: number) => {
+    const { data: settings } = await db.from("facility_settings").select("max_appointments_per_hour").eq("facility_id", facilityId).maybeSingle();
+    const bucket = hourBucket(startTime);
+    let countQuery = db.from("appointments").select("*", { count: "exact", head: true }).eq("facility_id", facilityId)
+      .not("status", "in", "(CANCELLED,no_show)").gte("start_time", bucket.start).lt("start_time", bucket.end);
+    if (excludeAppointmentId) countQuery = countQuery.neq("id", excludeAppointmentId);
+    const [{ count: appointmentsInSameHour }, { data: blackouts }] = await Promise.all([
+      countQuery,
+      db.from("appointment_blackouts").select("start_time, end_time, reason").eq("facility_id", facilityId)
+        .lt("start_time", endTime).gt("end_time", startTime),
+    ]);
+    return checkAppointmentCapacity({
+      startTime, endTime,
+      maxAppointmentsPerHour: settings?.max_appointments_per_hour ?? null,
+      appointmentsInSameHour: appointmentsInSameHour || 0,
+      blackouts: blackouts || [],
+    });
+  };
+
   const evaluateWorkflows = async (event: string, data: any, facilityId: number) => {
     const { data: rules } = await db.from("workflow_rules").select("*").eq("facility_id", facilityId).eq("trigger_event", event).eq("active", true);
     for (const rule of rules || []) {
@@ -589,7 +614,7 @@ async function startServer() {
 
   app.post("/api/settings/general", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const facilityId = req.session?.facility_id || req.facilityId || 1;
-    const { currency, locale, timezone, detention_rate_per_hour, detention_threshold_hours } = req.body;
+    const { currency, locale, timezone, detention_rate_per_hour, detention_threshold_hours, max_appointments_per_hour } = req.body;
     try {
       const patch: any = { updated_at: new Date().toISOString() };
       if (currency) patch.currency = currency;
@@ -597,7 +622,47 @@ async function startServer() {
       if (timezone) patch.timezone = timezone;
       if (detention_rate_per_hour !== undefined) patch.detention_rate_per_hour = detention_rate_per_hour;
       if (detention_threshold_hours !== undefined) patch.detention_threshold_hours = detention_threshold_hours;
+      if (max_appointments_per_hour !== undefined) patch.max_appointments_per_hour = max_appointments_per_hour === "" ? null : Number(max_appointments_per_hour);
       await db.from("facility_settings").update(patch).eq("facility_id", facilityId);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/blackouts", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const facilityId = req.facilityId || 1;
+    try {
+      const { data, error } = await db.from("appointment_blackouts").select("*, creator:users!appointment_blackouts_created_by_fkey(name)")
+        .eq("facility_id", facilityId).gte("end_time", new Date().toISOString()).order("start_time", { ascending: true });
+      if (error) throw error;
+      res.json(data || []);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/blackouts", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const { start_time, end_time, reason } = req.body;
+    const facilityId = req.facilityId || 1;
+    const userId = req.session?.user?.id || null;
+    if (!start_time || !end_time || !reason) return res.status(400).json({ error: "start_time, end_time and reason are required" });
+    if (new Date(end_time).getTime() <= new Date(start_time).getTime()) return res.status(400).json({ error: "end_time must be after start_time" });
+    try {
+      const { data, error } = await db.from("appointment_blackouts").insert({ facility_id: facilityId, start_time, end_time, reason, created_by: userId }).select().single();
+      if (error) throw error;
+      logAudit({ action: "BLACKOUT_CREATED", entityType: "BLACKOUT", entityId: String(data.id), details: { start_time, end_time, reason }, ip: req.ip, facility_id: facilityId });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/admin/blackouts/:id", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const facilityId = req.facilityId || 1;
+    try {
+      await db.from("appointment_blackouts").delete().eq("id", req.params.id).eq("facility_id", facilityId);
+      logAudit({ action: "BLACKOUT_REMOVED", entityType: "BLACKOUT", entityId: req.params.id, ip: req.ip, facility_id: facilityId });
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -656,10 +721,15 @@ async function startServer() {
     const { plate, carrier, start_time, duration_minutes, dock_id, load_type, priority_level } = req.body;
     const facilityId = req.facilityId || 1;
     try {
+      const endTime = new Date(new Date(start_time).getTime() + (duration_minutes || estimateDurationMinutes(load_type)) * 60_000).toISOString();
+
+      const capacity = await enforceAppointmentCapacity(facilityId, start_time, endTime);
+      if (!capacity.allowed) return res.status(409).json({ error: "CAPACITY_BLOCKED", reason: capacity.reason });
+
       const { data: newAppt, error } = await db.from("appointments").insert({
         plate, carrier, start_time,
         actual_duration_minutes: duration_minutes || 60,
-        end_time: new Date(new Date(start_time).getTime() + (duration_minutes || estimateDurationMinutes(load_type)) * 60_000).toISOString(),
+        end_time: endTime,
         dock_id: dock_id || null,
         load_type: load_type || "LOAD",
         priority_level: priority_level || 2,
@@ -686,6 +756,18 @@ async function startServer() {
       for (const field of allowedFields) if (updates[field] !== undefined) patch[field] = updates[field];
 
       if (Object.keys(patch).length === 0) return res.status(400).json({ error: "No valid fields to update" });
+
+      // Rescheduling into an over-capacity hour or a blackout window hit no
+      // check at all — same gap as the create path, just reachable via drag/
+      // reschedule instead of new-booking. Check before writing, against the
+      // *prospective* window, excluding this appointment's own current row.
+      if (patch.start_time) {
+        const { data: existing } = await db.from("appointments").select("actual_duration_minutes, load_type").eq("id", id).eq("facility_id", facilityId).maybeSingle();
+        const minutes = patch.actual_duration_minutes || existing?.actual_duration_minutes || estimateDurationMinutes(existing?.load_type);
+        const prospectiveEnd = new Date(new Date(patch.start_time).getTime() + minutes * 60_000).toISOString();
+        const capacity = await enforceAppointmentCapacity(facilityId, patch.start_time, prospectiveEnd, Number(id));
+        if (!capacity.allowed) return res.status(409).json({ error: "CAPACITY_BLOCKED", reason: capacity.reason });
+      }
 
       let { data: updated, error } = await db.from("appointments").update(patch).eq("id", id).eq("facility_id", facilityId).select().single();
       if (error) throw error;
@@ -2068,6 +2150,10 @@ async function startServer() {
         return res.status(403).json({ error: "BLACKLIST_BLOCK", reason: blacklistHit.reason });
       }
 
+      const bookedEndTime = estimateEndTime(start_time, load_type);
+      const capacity = await enforceAppointmentCapacity(1, start_time, bookedEndTime);
+      if (!capacity.allowed) return res.status(409).json({ error: "CAPACITY_BLOCKED", reason: capacity.reason });
+
       let driverId: number | null = null;
       if (driver_phone) {
         await db.from("drivers").upsert({ phone: driver_phone, name: driver_name || null }, { onConflict: "phone", ignoreDuplicates: true });
@@ -2077,7 +2163,7 @@ async function startServer() {
 
       const { data: newAppt, error } = await db.from("appointments").insert({
         plate, carrier: carrier.name, dock_id: dock_id || null, start_time, load_type: load_type || "standard",
-        end_time: estimateEndTime(start_time, load_type),
+        end_time: bookedEndTime,
         temperature_requirement: load_type === "reefer" ? (temperature_requirement || null) : null,
         status: "SCHEDULED", source: "self_book", driver_id: driverId, carrier_id: carrier.id, facility_id: 1,
       }).select().single();
