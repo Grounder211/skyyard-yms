@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Radar, Truck, Clock, AlertTriangle, Activity, DoorOpen, LogIn, LogOut, ArrowRightLeft, X, History, Search, Thermometer, Fuel, Loader2 } from "lucide-react";
+import { Radar, Truck, Clock, AlertTriangle, Activity, DoorOpen, LogIn, LogOut, ArrowRightLeft, X, History, Search, Thermometer, Fuel, Loader2, Building2 } from "lucide-react";
 import { io } from "socket.io-client";
 import { motion, AnimatePresence } from "motion/react";
 import { useToast } from "../contexts/ToastContext";
+import { useAuth } from "../contexts/AuthContext";
 
 function elapsed(since: string) {
   const ms = Date.now() - new Date(since).getTime();
@@ -26,6 +27,7 @@ const EVENT_ICON: Record<string, any> = {
 
 export default function LiveTracking() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [yard, setYard] = useState<any>({ spots: [], moves: [], detentionThresholdHours: 24 });
   const [logs, setLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -175,6 +177,50 @@ export default function LiveTracking() {
     }
     loadReeferReadings(selected.plate);
   }, [selected?.plate, selected?.equipment_type]);
+
+  const [facilities, setFacilities] = useState<any[]>([]);
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferForm, setTransferForm] = useState({ destination_facility_id: "", eta: "", notes: "" });
+  const [transferBusy, setTransferBusy] = useState(false);
+
+  useEffect(() => {
+    if (user?.role !== "superadmin") return;
+    fetch("/api/superadmin/facilities")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setFacilities(Array.isArray(d) ? d : []))
+      .catch(() => setFacilities([]));
+  }, [user?.role]);
+
+  useEffect(() => {
+    setTransferOpen(false);
+    setTransferForm({ destination_facility_id: "", eta: "", notes: "" });
+  }, [selected?.plate]);
+
+  const submitTransfer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selected?.trailer_id || !transferForm.destination_facility_id) return;
+    setTransferBusy(true);
+    try {
+      const res = await fetch(`/api/admin/trailers/${selected.trailer_id}/transfer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...transferForm, destination_facility_id: Number(transferForm.destination_facility_id) }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast(`Transfer initiated for ${selected.plate}`, "success");
+        setTransferOpen(false);
+        setSelected(null);
+        setTransferForm({ destination_facility_id: "", eta: "", notes: "" });
+        load();
+      } else {
+        toast(data.error || "Transfer failed", "error");
+      }
+    } catch {
+      toast("Network error initiating transfer", "error");
+    }
+    setTransferBusy(false);
+  };
 
   const submitReeferReading = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -386,6 +432,36 @@ export default function LiveTracking() {
                     {reeferBusy && <Loader2 size={12} className="animate-spin" />} Log
                   </button>
                 </form>
+              </div>
+            )}
+
+            {user?.role === "superadmin" && (
+              <div className="mt-6 pt-4 border-t border-slate-100">
+                <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">
+                  <Building2 size={13} /> Facility transfer
+                </h4>
+                {!transferOpen ? (
+                  <button type="button" onClick={() => setTransferOpen(true)} className="w-full text-xs font-bold bg-slate-100 text-slate-600 rounded-lg py-2 hover:bg-slate-200 transition-all">
+                    Transfer to another facility
+                  </button>
+                ) : (
+                  <form onSubmit={submitTransfer} className="space-y-2.5">
+                    <select required value={transferForm.destination_facility_id} onChange={(e) => setTransferForm({ ...transferForm, destination_facility_id: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs">
+                      <option value="">Destination facility...</option>
+                      {facilities.map((f: any) => (
+                        <option key={f.id} value={f.id}>{f.name}</option>
+                      ))}
+                    </select>
+                    <input type="datetime-local" value={transferForm.eta} onChange={(e) => setTransferForm({ ...transferForm, eta: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" placeholder="ETA" />
+                    <input value={transferForm.notes} onChange={(e) => setTransferForm({ ...transferForm, notes: e.target.value })} placeholder="Notes (optional)" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => setTransferOpen(false)} className="flex-1 text-xs font-bold bg-slate-100 text-slate-500 rounded-lg py-1.5 hover:bg-slate-200">Cancel</button>
+                      <button type="submit" disabled={transferBusy} className="flex-1 bg-indigo-600 text-white text-xs font-bold rounded-lg py-1.5 hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-1.5">
+                        {transferBusy && <Loader2 size={12} className="animate-spin" />} Initiate transfer
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
             )}
 
