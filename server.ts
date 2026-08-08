@@ -1133,6 +1133,47 @@ async function startServer() {
     }
   });
 
+  // Driver ratings — driver_ratings had a full schema (punctuality/
+  // cooperation/compliance scores) but nothing anywhere ever wrote or read
+  // it. The natural moment to capture it is right after a gate pass exits,
+  // while the interaction is still fresh for whoever was at the gate.
+  app.post("/api/gate-pass/:id/rate", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
+    const { punctuality_score, cooperation_score, compliance_score, notes } = req.body;
+    const facilityId = req.facilityId;
+    try {
+      const { data: pass } = await db.from("gate_passes").select("*").eq("id", req.params.id).eq("facility_id", facilityId).maybeSingle();
+      if (!pass) return res.status(404).json({ error: "Gate pass not found" });
+      if (pass.stage !== "EXITED") return res.status(400).json({ error: "Can only rate a gate pass after it has exited" });
+      if (!pass.driver_id) return res.status(400).json({ error: "No driver on file for this gate pass" });
+
+      const scores = [punctuality_score, cooperation_score, compliance_score].filter((s) => typeof s === "number");
+      if (scores.length === 0) return res.status(400).json({ error: "At least one score is required" });
+      const rating = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+
+      const { data: inserted, error } = await db.from("driver_ratings").insert({
+        facility_id: facilityId, driver_id: pass.driver_id, rating,
+        punctuality_score: punctuality_score ?? null, cooperation_score: cooperation_score ?? null, compliance_score: compliance_score ?? null,
+        notes: notes || null, rated_by: req.session?.user?.id || null,
+      }).select().single();
+      if (error) throw error;
+
+      logAudit({ action: "DRIVER_RATED", entityType: "GATE_PASS", entityId: String(pass.id), details: { driver_id: pass.driver_id, rating }, ip: req.ip, facility_id: facilityId });
+      res.json(inserted);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/drivers/:id/ratings", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    try {
+      const { data } = await db.from("driver_ratings").select("*").eq("driver_id", req.params.id).order("created_at", { ascending: false }).limit(20);
+      const avg = (data || []).length ? Math.round((data as any[]).reduce((s, r) => s + (r.rating || 0), 0) / data!.length) : null;
+      res.json({ average: avg, count: (data || []).length, ratings: data || [] });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Gate badge scan — pre-registered driver (see /api/driver/profile) scans
   // their permanent QR at the gate instead of filling a form or waiting for
   // approval. Blacklist-checked, auto-assigns a spot via the same

@@ -93,16 +93,36 @@ export default function PipelineBoard() {
     }
   };
 
+  const [rateTarget, setRateTarget] = useState<any>(null);
+
   const confirmExit = async (pass: any) => {
     setBusy(pass.id);
     const res = await fetch(`/api/gate-pass/${pass.id}/exit`, { method: "POST" });
     setBusy(null);
     if (res.ok) {
+      const data = await res.json().catch(() => null);
       toast(`${pass.plate} exited`, "success");
+      if (data?.driver_id) setRateTarget(data);
       load();
     } else {
       const data = await res.json().catch(() => ({}));
       toast(data.error || "Failed to confirm exit", "error");
+    }
+  };
+
+  const submitRating = async (id: number, scores: { punctuality_score: number; cooperation_score: number; compliance_score: number; notes: string }) => {
+    setBusy(id);
+    const res = await fetch(`/api/gate-pass/${id}/rate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(scores),
+    });
+    setBusy(null);
+    setRateTarget(null);
+    if (res.ok) toast("Driver rated", "success");
+    else {
+      const data = await res.json().catch(() => ({}));
+      toast(data.error || "Failed to record rating", "error");
     }
   };
 
@@ -217,6 +237,7 @@ export default function PipelineBoard() {
 
       {verifyTarget && <VerifyModal pass={verifyTarget} onClose={() => setVerifyTarget(null)} onSubmit={submitVerify} busy={busy === verifyTarget.id} />}
       {slipTarget && <SlipModal pass={slipTarget} onClose={() => setSlipTarget(null)} />}
+      {rateTarget && <RateModal pass={rateTarget} onClose={() => setRateTarget(null)} onSubmit={submitRating} busy={busy === rateTarget.id} />}
     </div>
   );
 }
@@ -338,6 +359,69 @@ function VerifyModal({ pass, onClose, onSubmit, busy }: any) {
         >
           {busy && <Loader2 size={14} className="animate-spin" />} Save verification
         </button>
+      </div>
+    </div>
+  );
+}
+
+function ScoreButtons({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  return (
+    <div className="flex gap-1.5">
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          key={n}
+          type="button"
+          onClick={() => onChange(n)}
+          className={`w-8 h-8 rounded-lg text-xs font-bold transition-all ${value === n ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}
+        >
+          {n}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function RateModal({ pass, onClose, onSubmit, busy }: any) {
+  const [punctuality, setPunctuality] = useState(5);
+  const [cooperation, setCooperation] = useState(5);
+  const [compliance, setCompliance] = useState(5);
+  const [notes, setNotes] = useState("");
+
+  return (
+    <div className="fixed inset-0 z-[9998] bg-black/50 flex items-center justify-center p-6" onClick={onClose}>
+      <div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold text-lg text-slate-900">Rate driver — {pass.plate}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-900"><X size={18} /></button>
+        </div>
+        <p className="text-sm text-slate-500 mb-5">Quick feedback on this visit, 1-5. Optional — skip if you'd rather not.</p>
+        <div className="space-y-4 mb-6">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-slate-700">Punctuality</span>
+            <ScoreButtons value={punctuality} onChange={setPunctuality} />
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-slate-700">Cooperation</span>
+            <ScoreButtons value={cooperation} onChange={setCooperation} />
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-slate-700">Compliance</span>
+            <ScoreButtons value={compliance} onChange={setCompliance} />
+          </div>
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes (optional)" rows={2} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+        </div>
+        <div className="flex gap-2">
+          <button onClick={onClose} className="flex-1 bg-slate-100 text-slate-500 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-200">
+            Skip
+          </button>
+          <button
+            onClick={() => onSubmit(pass.id, { punctuality_score: punctuality, cooperation_score: cooperation, compliance_score: compliance, notes })}
+            disabled={busy}
+            className="flex-1 bg-indigo-600 text-white py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {busy && <Loader2 size={14} className="animate-spin" />} Save rating
+          </button>
+        </div>
       </div>
     </div>
   );
