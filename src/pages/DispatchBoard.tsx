@@ -1,15 +1,21 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowRight, Truck, DoorOpen, LogOut, CheckCircle2, X, Loader2, MapPin } from "lucide-react";
+import { ArrowRight, Truck, DoorOpen, LogOut, CheckCircle2, X, Loader2, MapPin, UserCheck, UserX, Hand } from "lucide-react";
 import { io } from "socket.io-client";
 import { useToast } from "../contexts/ToastContext";
+import { useAuth } from "../contexts/AuthContext";
 
 export default function DispatchBoard() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [yard, setYard] = useState<any>({ spots: [], moves: [] });
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
   const [targetSpot, setTargetSpot] = useState<number | "">("");
+  const [assignTo, setAssignTo] = useState<number | "">("");
   const [busy, setBusy] = useState(false);
+  const [hostlers, setHostlers] = useState<any[]>([]);
+  const [myTasksOnly, setMyTasksOnly] = useState(false);
+  const [claimBusyId, setClaimBusyId] = useState<number | null>(null);
 
   const load = async () => {
     try {
@@ -21,13 +27,17 @@ export default function DispatchBoard() {
 
   useEffect(() => {
     load();
+    if (user?.role === "superadmin" || user?.role === "ADMIN") {
+      fetch("/api/admin/hostlers").then((r) => (r.ok ? r.json() : [])).then((d) => setHostlers(Array.isArray(d) ? d : [])).catch(() => {});
+    }
     const socket = io();
     socket.on("yard_update", load);
     socket.on("move_update", load);
     return () => {
       socket.disconnect();
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.role]);
 
   const spots = yard.spots || [];
   const moves = yard.moves || [];
@@ -47,11 +57,12 @@ export default function DispatchBoard() {
       const res = await fetch("/api/create-move", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ trailerId: selected.trailer_id || selected.id, fromSpotId: selected.id, toSpotId: targetSpot }),
+        body: JSON.stringify({ trailerId: selected.trailer_id || selected.id, fromSpotId: selected.id, toSpotId: targetSpot, assignedTo: assignTo || undefined }),
       });
       if (res.ok) {
         toast("Move order created", "success");
         setSelected(null);
+        setAssignTo("");
         load();
       } else {
         toast("Failed to create move", "error");
@@ -112,6 +123,36 @@ export default function DispatchBoard() {
     setCompletingId(null);
   };
 
+  const claimMove = async (moveId: number) => {
+    if (claimBusyId === moveId) return;
+    setClaimBusyId(moveId);
+    try {
+      const res = await fetch(`/api/moves/${moveId}/claim`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) { toast("Task claimed", "success"); load(); }
+      else toast(data.error || "Failed to claim task", res.status === 409 ? "info" : "error");
+    } catch {
+      toast("Network error claiming task", "error");
+    }
+    setClaimBusyId(null);
+  };
+
+  const releaseMove = async (moveId: number) => {
+    if (claimBusyId === moveId) return;
+    setClaimBusyId(moveId);
+    try {
+      const res = await fetch(`/api/moves/${moveId}/release`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) { toast("Task released back to the pool", "success"); load(); }
+      else toast(data.error || "Failed to release task", "error");
+    } catch {
+      toast("Network error releasing task", "error");
+    }
+    setClaimBusyId(null);
+  };
+
+  const visibleMoves = myTasksOnly ? moves.filter((m: any) => m.assigned_to === user?.id) : moves;
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-20 gap-4 text-slate-400 animate-pulse">
@@ -156,22 +197,52 @@ export default function DispatchBoard() {
         </div>
 
         <div className="bg-white border border-slate-200 rounded-[2rem] p-8 shadow-spatial">
-          <h3 className="font-bold text-slate-900 text-lg mb-6 flex items-center gap-2">
-            <ArrowRight size={18} className="text-amber-600" /> Pending moves
-          </h3>
+          <div className="flex items-center justify-between gap-3 mb-6">
+            <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
+              <ArrowRight size={18} className="text-amber-600" /> Move tasks
+            </h3>
+            {user?.role === "HOSTLER" && (
+              <label className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-widest text-slate-500 cursor-pointer">
+                <input type="checkbox" checked={myTasksOnly} onChange={(e) => setMyTasksOnly(e.target.checked)} className="accent-indigo-600" /> My tasks only
+              </label>
+            )}
+          </div>
           <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
-            {moves.length === 0 && <p className="text-sm text-slate-400 py-8 text-center">No moves in progress.</p>}
-            {moves.map((m: any) => (
-              <div key={m.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                <p className="font-bold text-slate-900 text-sm">{m.plate}</p>
-                <p className="text-xs text-slate-500 flex items-center gap-1 mt-1">
-                  {m.from_name} <ArrowRight size={10} /> {m.to_name}
-                </p>
-                <button onClick={() => completeMove(m.id)} disabled={completingId === m.id} className="mt-3 w-full bg-slate-900 text-white text-xs font-bold py-2 rounded-lg hover:bg-indigo-600 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50">
-                  {completingId === m.id ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />} Mark complete
-                </button>
-              </div>
-            ))}
+            {visibleMoves.length === 0 && <p className="text-sm text-slate-400 py-8 text-center">{myTasksOnly ? "No tasks claimed by you." : "No moves in progress."}</p>}
+            {visibleMoves.map((m: any) => {
+              const isMine = m.assigned_to === user?.id;
+              const isClaimed = !!m.assigned_to;
+              return (
+                <div key={m.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="font-bold text-slate-900 text-sm">{m.plate}</p>
+                      <p className="text-xs text-slate-500 flex items-center gap-1 mt-1">
+                        {m.from_name} <ArrowRight size={10} /> {m.to_name}
+                      </p>
+                    </div>
+                    <span className={`shrink-0 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${isClaimed ? "bg-indigo-100 text-indigo-700" : "bg-slate-200 text-slate-500"}`}>
+                      {isClaimed ? (isMine ? "You" : m.assignee_name || "Assigned") : "Unassigned"}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    {!isClaimed && (
+                      <button onClick={() => claimMove(m.id)} disabled={claimBusyId === m.id} className="flex-1 bg-white border border-indigo-200 text-indigo-700 text-xs font-bold py-2 rounded-lg hover:bg-indigo-50 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50">
+                        {claimBusyId === m.id ? <Loader2 size={12} className="animate-spin" /> : <Hand size={12} />} Claim
+                      </button>
+                    )}
+                    {isClaimed && (isMine || user?.role === "ADMIN" || user?.role === "superadmin") && (
+                      <button onClick={() => releaseMove(m.id)} disabled={claimBusyId === m.id} className="bg-white border border-slate-200 text-slate-500 text-xs font-bold px-3 py-2 rounded-lg hover:bg-slate-100 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50">
+                        <UserX size={12} />
+                      </button>
+                    )}
+                    <button onClick={() => completeMove(m.id)} disabled={completingId === m.id} className="flex-1 bg-slate-900 text-white text-xs font-bold py-2 rounded-lg hover:bg-indigo-600 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50">
+                      {completingId === m.id ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />} Complete
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -201,6 +272,19 @@ export default function DispatchBoard() {
                   ))}
                 </select>
               </div>
+              {hostlers.length > 0 && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5">
+                    <UserCheck size={12} /> Assign to (optional)
+                  </label>
+                  <select value={assignTo} onChange={(e) => setAssignTo(e.target.value ? Number(e.target.value) : "")} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                    <option value="">Leave unassigned — claimable by any hostler</option>
+                    {hostlers.map((h: any) => (
+                      <option key={h.id} value={h.id}>{h.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <button onClick={createMove} disabled={busy || !targetSpot} className="w-full bg-indigo-600 text-white py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                 {busy && <Loader2 size={14} className="animate-spin" />} Create move order
               </button>

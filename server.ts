@@ -142,7 +142,7 @@ async function startServer() {
 
     const { data: moveRows } = await db
       .from("move_orders")
-      .select("*, trailers(plate), from_spot:spots!move_orders_from_spot_id_fkey(name), to_spot:spots!move_orders_to_spot_id_fkey(name)")
+      .select("*, trailers(plate), from_spot:spots!move_orders_from_spot_id_fkey(name), to_spot:spots!move_orders_to_spot_id_fkey(name), assignee:users!move_orders_assigned_to_fkey(id, name)")
       .eq("facility_id", facilityId)
       .neq("status", "COMPLETED");
 
@@ -151,6 +151,7 @@ async function startServer() {
       plate: m.trailers?.plate,
       from_name: m.from_spot?.name,
       to_name: m.to_spot?.name,
+      assignee_name: m.assignee?.name || null,
     }));
 
     const { data: fSettings } = await db.from("facility_settings").select("detention_threshold_hours").eq("facility_id", facilityId).maybeSingle();
@@ -1057,6 +1058,11 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  app.get("/api/admin/hostlers", requireRole("superadmin", "ADMIN", "HOSTLER"), async (req: any, res) => {
+    const { data } = await db.from("users").select("id, name").eq("facility_id", req.facilityId).eq("role", "HOSTLER").order("name", { ascending: true });
+    res.json(data || []);
+  });
+
   app.get("/api/admin/walkin/pending", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const { data } = await db.from("walkin_registrations").select("*").eq("facility_id", req.facilityId).eq("status", "pending_approval").order("created_at", { ascending: true });
     res.json(data || []);
@@ -1512,16 +1518,70 @@ async function startServer() {
   });
 
   app.post("/api/create-move", requireRole("superadmin", "ADMIN", "HOSTLER"), async (req: any, res) => {
-    const { trailerId, fromSpotId, toSpotId } = req.body;
+    const { trailerId, fromSpotId, toSpotId, assignedTo } = req.body;
     const facilityId = req.facilityId;
     try {
-      const { data: move, error } = await db.from("move_orders").insert({ trailer_id: trailerId, from_spot_id: fromSpotId, to_spot_id: toSpotId, status: "PENDING", facility_id: facilityId }).select().single();
+      const { data: move, error } = await db.from("move_orders").insert({
+        trailer_id: trailerId, from_spot_id: fromSpotId, to_spot_id: toSpotId, facility_id: facilityId,
+        assigned_to: assignedTo || null, status: assignedTo ? "IN_PROGRESS" : "PENDING",
+      }).select().single();
       if (error) throw error;
       logAudit({ action: "MOVE_CREATED", entityType: "TRAILER", entityId: String(trailerId), details: { fromSpotId, toSpotId }, ip: req.ip, facility_id: facilityId });
       emitUpdate("move_update", { type: "NEW_MOVE" });
       res.json({ success: true, move });
     } catch (e: any) {
       res.status(500).json({ error: "Failed to create move order" });
+    }
+  });
+
+  // move_orders.assigned_to has existed in the schema (with a real FK to
+  // users, and a status CHECK that already allows IN_PROGRESS) since before
+  // this session, but nothing ever read or wrote it — every move sat in one
+  // shared, unowned pool. Any hostler could complete any move and there was
+  // no way to see "my" queue vs. everyone else's. This wires the column up
+  // as a real claim workflow: PENDING (unassigned) -> claim -> IN_PROGRESS
+  // (owned) -> complete-move (existing endpoint, unchanged) -> COMPLETED.
+  app.post("/api/moves/:id/claim", requireRole("superadmin", "ADMIN", "HOSTLER"), async (req: any, res) => {
+    const { id } = req.params;
+    const facilityId = req.facilityId;
+    const userId = req.session?.user?.id;
+    try {
+      const { data: move } = await db.from("move_orders").select("id, status, assigned_to").eq("id", id).eq("facility_id", facilityId).maybeSingle();
+      if (!move) return res.status(404).json({ error: "Move order not found" });
+      if (move.status !== "PENDING") return res.status(409).json({ error: `Move is ${move.status.toLowerCase()}, not available to claim` });
+      if (move.assigned_to) return res.status(409).json({ error: "Already claimed by another operator" });
+
+      const { data: updated, error } = await db.from("move_orders").update({ assigned_to: userId, status: "IN_PROGRESS" })
+        .eq("id", id).eq("facility_id", facilityId).eq("status", "PENDING").is("assigned_to", null).select().single();
+      if (error || !updated) return res.status(409).json({ error: "Already claimed by another operator" });
+
+      logAudit({ action: "MOVE_CLAIMED", entityType: "MOVE_ORDER", entityId: String(id), ip: req.ip, facility_id: facilityId });
+      emitUpdate("move_update", { type: "MOVE_CLAIMED", id: Number(id) });
+      res.json({ success: true, move: updated });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/moves/:id/release", requireRole("superadmin", "ADMIN", "HOSTLER"), async (req: any, res) => {
+    const { id } = req.params;
+    const facilityId = req.facilityId;
+    const userId = req.session?.user?.id;
+    const role = req.session?.user?.role;
+    try {
+      const { data: move } = await db.from("move_orders").select("id, status, assigned_to").eq("id", id).eq("facility_id", facilityId).maybeSingle();
+      if (!move) return res.status(404).json({ error: "Move order not found" });
+      if (move.assigned_to && move.assigned_to !== userId && role !== "superadmin" && role !== "ADMIN") {
+        return res.status(403).json({ error: "This task is claimed by another operator" });
+      }
+      const { data: updated, error } = await db.from("move_orders").update({ assigned_to: null, status: "PENDING" }).eq("id", id).eq("facility_id", facilityId).select().single();
+      if (error) throw error;
+
+      logAudit({ action: "MOVE_RELEASED", entityType: "MOVE_ORDER", entityId: String(id), ip: req.ip, facility_id: facilityId });
+      emitUpdate("move_update", { type: "MOVE_RELEASED", id: Number(id) });
+      res.json({ success: true, move: updated });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
   });
 
