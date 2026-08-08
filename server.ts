@@ -899,6 +899,47 @@ async function startServer() {
     res.json(data || []);
   });
 
+  // Command-center aggregator — the Dashboard's "Recent Alerts" panel was
+  // hardcoded fake demo data (four static JSX rows, no API call at all).
+  // This pulls every real thing already in the system that needs a human
+  // decision — pending gate-pass approvals, active detention, vehicles with
+  // inspections expiring soon, and gate passes stuck too long in one stage —
+  // into a single feed instead of four separate pages nobody checks all of.
+  app.get("/api/admin/needs-attention", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const facilityId = req.facilityId;
+    try {
+      const soon30d = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+      const staleCutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+
+      const [pendingApprovals, activeDetention, expiringVehicles, staleGatePasses] = await Promise.all([
+        db.from("walkin_registrations").select("id, truck_plate, carrier_name, created_at").eq("facility_id", facilityId).eq("status", "pending_approval"),
+        db.from("detention_records").select("id, carrier_name, amount_owed, created_at").eq("facility_id", facilityId).eq("status", "ACTIVE"),
+        db.from("vehicles").select("id, plate, inspection_expiry, carrier_id, carriers(name)").lte("inspection_expiry", soon30d).eq("active", true),
+        db.from("gate_passes").select("id, plate, stage, updated_at").eq("facility_id", facilityId).not("stage", "in", "(OUT_PASS,EXITED)").lt("updated_at", staleCutoff),
+      ]);
+
+      const items: any[] = [];
+      for (const w of pendingApprovals.data || []) {
+        items.push({ type: "approval", severity: "warning", title: "Gate entry awaiting approval", description: `${w.truck_plate} — ${w.carrier_name}`, link: "/gate", timestamp: w.created_at });
+      }
+      for (const d of activeDetention.data || []) {
+        items.push({ type: "detention", severity: "error", title: "Detention accruing", description: `${d.carrier_name || "Unknown carrier"} — ${d.amount_owed ? Number(d.amount_owed).toFixed(0) : "?"} owed so far`, link: "/finance", timestamp: d.created_at });
+      }
+      for (const v of expiringVehicles.data || []) {
+        const overdue = v.inspection_expiry < new Date().toISOString().split("T")[0];
+        items.push({ type: "inspection", severity: overdue ? "error" : "warning", title: overdue ? "Inspection overdue" : "Inspection expiring soon", description: `${v.plate} — ${(v as any).carriers?.name || "Unassigned"} — ${v.inspection_expiry}`, link: "/superadmin", timestamp: v.inspection_expiry });
+      }
+      for (const g of staleGatePasses.data || []) {
+        items.push({ type: "stale_pass", severity: "warning", title: `Vehicle stuck at ${g.stage.replace(/_/g, " ")}`, description: `${g.plate} — no movement in over 2 hours`, link: "/pipeline", timestamp: g.updated_at });
+      }
+
+      items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      res.json(items);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Twilio inbound SMS webhook — lets an admin approve/reject by texting back
   // "YES <id>" / "NO <id>" instead of opening the app. Requires manually
   // pointing the Twilio phone number's "A MESSAGE COMES IN" webhook at this

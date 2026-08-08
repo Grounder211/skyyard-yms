@@ -290,9 +290,20 @@ function AppLayout({ children, user }: any) {
 
 // --- SCREENS ---
 
+function timeAgo(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const min = Math.round(ms / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return `${Math.round(hr / 24)}d ago`;
+}
+
 function Dashboard() {
   const [stats, setStats] = React.useState<any>({});
   const [spots, setSpots] = React.useState<any[]>([]);
+  const [attention, setAttention] = React.useState<any[]>([]);
 
   React.useEffect(() => {
     fetch("/api/yard-status")
@@ -301,6 +312,10 @@ function Dashboard() {
         setStats(data.stats);
         setSpots(data.spots);
       });
+    const loadAttention = () => fetch("/api/admin/needs-attention").then(r => r.ok ? r.json() : []).then(setAttention).catch(() => {});
+    loadAttention();
+    const t = setInterval(loadAttention, 60000);
+    return () => clearInterval(t);
   }, []);
 
   return (
@@ -362,16 +377,18 @@ function Dashboard() {
 
         <Reveal preset="fade-up" delay={350}>
           <div className="bg-white border border-slate-200 rounded-[2rem] p-8 divide-y divide-slate-100 shadow-spatial">
-            <h3 className="font-bold text-slate-900 text-lg pb-6">Recent Alerts</h3>
-            <div className="py-4 space-y-5">
-              <AlertItem severity="error" msg="D-04 threshold exceeded" time="2m ago" />
-              <AlertItem severity="warning" msg="Unscheduled arrival at Gate 2" time="15m ago" />
-              <AlertItem severity="info" msg="Refil of Slot 42 recorded" time="1h ago" />
-              <AlertItem severity="info" msg="Shift change complete" time="2h ago" />
+            <h3 className="font-bold text-slate-900 text-lg pb-6 flex items-center justify-between">
+              Needs Attention
+              {attention.length > 0 && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">{attention.length}</span>}
+            </h3>
+            <div className="py-4 space-y-5 max-h-72 overflow-y-auto">
+              {attention.length === 0 && <p className="text-sm text-slate-400 text-center py-4">Nothing needs attention right now.</p>}
+              {attention.slice(0, 8).map((a, i) => (
+                <Link key={i} to={a.link} className="block">
+                  <AlertItem severity={a.severity} msg={`${a.title} — ${a.description}`} time={timeAgo(a.timestamp)} />
+                </Link>
+              ))}
             </div>
-            <button className="w-full pt-6 text-sm font-bold text-indigo-600 hover:text-indigo-700 transition-colors flex items-center justify-center gap-2">
-              View All Logs <ChevronRight size={16} />
-            </button>
           </div>
         </Reveal>
       </div>
