@@ -2164,12 +2164,21 @@ async function startServer() {
   });
 
   app.post("/api/admin/payments", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
-    const { carrier_id, amount, payment_method, invoice_numbers } = req.body;
+    const { carrier_id, amount, payment_method, invoice_numbers, detention_record_ids } = req.body;
     const facilityId = req.facilityId;
     try {
       await db.from("payments").insert({ facility_id: facilityId, carrier_id, amount, payment_method, invoice_numbers: invoice_numbers || [] });
       if (invoice_numbers && invoice_numbers.length > 0) {
         await db.from("detention_records").update({ invoice_status: "paid" }).in("notes", invoice_numbers);
+      }
+      // Recording a payment could previously only clear a balance if it had
+      // already been through /api/admin/invoices/generate (matched by
+      // invoice number in `notes`) — a payment against a still-pending
+      // (never-invoiced) balance silently cleared nothing. Accept direct
+      // detention_record ids too so a payment always actually settles what
+      // it claims to.
+      if (detention_record_ids && detention_record_ids.length > 0) {
+        await db.from("detention_records").update({ invoice_status: "paid" }).in("id", detention_record_ids).eq("facility_id", facilityId);
       }
       res.json({ success: true });
     } catch (e: any) {
@@ -2180,14 +2189,22 @@ async function startServer() {
   app.get("/api/admin/carrier-balances", async (req: any, res) => {
     const facilityId = req.facilityId;
     try {
-      const { data: records } = await db.from("detention_records").select("carrier_id, amount_owed, invoice_status, created_at").eq("facility_id", facilityId).neq("invoice_status", "paid");
-      const byCarrier: Record<number, { balance: number; oldest_invoice: string | null }> = {};
+      const { data: records } = await db.from("detention_records").select("id, carrier_id, amount_owed, invoice_status, created_at, notes").eq("facility_id", facilityId).neq("invoice_status", "paid");
+      const byCarrier: Record<number, { balance: number; oldest_invoice: string | null; invoice_numbers: string[]; detention_record_ids: number[] }> = {};
       for (const r of records || []) {
         if (!r.carrier_id) continue;
-        if (!byCarrier[r.carrier_id]) byCarrier[r.carrier_id] = { balance: 0, oldest_invoice: null };
+        if (!byCarrier[r.carrier_id]) byCarrier[r.carrier_id] = { balance: 0, oldest_invoice: null, invoice_numbers: [], detention_record_ids: [] };
         byCarrier[r.carrier_id].balance += Number(r.amount_owed || 0);
+        byCarrier[r.carrier_id].detention_record_ids.push(r.id);
         if (r.invoice_status === "invoiced" && (!byCarrier[r.carrier_id].oldest_invoice || r.created_at < byCarrier[r.carrier_id].oldest_invoice!)) {
           byCarrier[r.carrier_id].oldest_invoice = r.created_at;
+        }
+        // notes holds the invoice number once /api/admin/invoices/generate has
+        // run for this record — surfaced here so a payment can reference the
+        // exact invoice(s) it's settling instead of staff having to reopen
+        // the downloaded PDF to find the number.
+        if (r.invoice_status === "invoiced" && r.notes && !byCarrier[r.carrier_id].invoice_numbers.includes(r.notes)) {
+          byCarrier[r.carrier_id].invoice_numbers.push(r.notes);
         }
       }
       const ids = Object.keys(byCarrier).map(Number);
