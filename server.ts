@@ -2112,12 +2112,70 @@ async function startServer() {
     res.json({ days, totalTrucks: count || 0 });
   });
 
-  app.post("/api/analytics/query", async (req: any, res) => {
-    const { metric, groupBy } = req.body;
+  // ReportBuilder's metric library (m1-m5) rendered a fake pulsing-bar
+  // animation captioned "Real-time {chartType} preview simulation" for
+  // ANY selection — Generate Preview had no click handler at all, Export
+  // CSV had no handler either, and this endpoint ignored the `metric`/
+  // `groupBy` it was given and just dumped raw appointment rows. This
+  // computes each metric for real over a trailing window.
+  const METRIC_LABELS: Record<string, string> = {
+    m1: "Average TAT (Truck Turnaround Time)",
+    m2: "Dock Utilization %",
+    m3: "Detention Revenue",
+    m4: "No-Show Rate",
+    m5: "Peak Hour Volume",
+  };
+
+  app.post("/api/analytics/query", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { metrics, days } = req.body;
     const facilityId = req.facilityId;
+    const periodDays = Number(days) > 0 ? Number(days) : 30;
+    const cutoff = new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000).toISOString();
+    const wanted: string[] = Array.isArray(metrics) && metrics.length ? metrics : Object.keys(METRIC_LABELS);
+
     try {
-      const { data } = await db.from("appointments").select("*").eq("facility_id", facilityId);
-      res.json({ metric, groupBy, rows: data || [] });
+      const results: any[] = [];
+
+      if (wanted.includes("m1")) {
+        const { data } = await db.from("gate_passes").select("issued_at, exited_at").eq("facility_id", facilityId).not("exited_at", "is", null).gte("issued_at", cutoff);
+        const minutes = (data || []).map((p: any) => (new Date(p.exited_at).getTime() - new Date(p.issued_at).getTime()) / 60000).filter((m) => m >= 0);
+        const avg = minutes.length ? minutes.reduce((a, b) => a + b, 0) / minutes.length : 0;
+        results.push({ id: "m1", label: METRIC_LABELS.m1, value: Math.round(avg), unit: "min", sampleSize: minutes.length });
+      }
+
+      if (wanted.includes("m2")) {
+        const [{ data: docks }, { data: appts }] = await Promise.all([
+          db.from("spots").select("id").eq("facility_id", facilityId).eq("type", "DOCK"),
+          db.from("appointments").select("actual_duration_minutes, dock_id").eq("facility_id", facilityId).not("dock_id", "is", null).gte("start_time", cutoff),
+        ]);
+        const busyMinutes = (appts || []).reduce((s: number, a: any) => s + (a.actual_duration_minutes || 0), 0);
+        const capacityMinutes = (docks?.length || 0) * periodDays * 24 * 60;
+        const pct = capacityMinutes > 0 ? Math.min(100, (busyMinutes / capacityMinutes) * 100) : 0;
+        results.push({ id: "m2", label: METRIC_LABELS.m2, value: Math.round(pct * 10) / 10, unit: "%", sampleSize: appts?.length || 0 });
+      }
+
+      if (wanted.includes("m3")) {
+        const { data } = await db.from("detention_records").select("amount_owed").eq("facility_id", facilityId).gte("created_at", cutoff);
+        const total = (data || []).reduce((s: number, r: any) => s + Number(r.amount_owed || 0), 0);
+        results.push({ id: "m3", label: METRIC_LABELS.m3, value: Math.round(total * 100) / 100, unit: "currency", sampleSize: data?.length || 0 });
+      }
+
+      if (wanted.includes("m4")) {
+        const { data } = await db.from("appointments").select("status").eq("facility_id", facilityId).gte("start_time", cutoff);
+        const total = data?.length || 0;
+        const noShows = (data || []).filter((a: any) => a.status === "no_show").length;
+        results.push({ id: "m4", label: METRIC_LABELS.m4, value: total ? Math.round((noShows / total) * 1000) / 10 : 0, unit: "%", sampleSize: total });
+      }
+
+      if (wanted.includes("m5")) {
+        const { data } = await db.from("gate_logs").select("timestamp").eq("facility_id", facilityId).eq("event_type", "entry").gte("timestamp", cutoff);
+        const byHour = new Array(24).fill(0);
+        for (const row of data || []) byHour[new Date(row.timestamp).getHours()]++;
+        const peakHour = byHour.indexOf(Math.max(...byHour));
+        results.push({ id: "m5", label: METRIC_LABELS.m5, value: byHour[peakHour] || 0, unit: `entries at ${String(peakHour).padStart(2, "0")}:00`, series: byHour.map((count, hour) => ({ label: `${String(hour).padStart(2, "0")}:00`, value: count })), sampleSize: data?.length || 0 });
+      }
+
+      res.json({ periodDays, metrics: results });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

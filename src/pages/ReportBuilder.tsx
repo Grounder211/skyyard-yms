@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Plus, Table, BarChart, PieChart, LineChart, Save, Download, ChevronRight, X, GripVertical } from "lucide-react";
+import { Plus, Table, BarChart, PieChart, LineChart, Save, Download, ChevronRight, X, GripVertical, Loader2 } from "lucide-react";
 import { useToast } from "../contexts/ToastContext";
 
 const AVAILABLE_METRICS = [
@@ -15,20 +15,57 @@ export default function ReportBuilder() {
   const [chartType, setChartType] = useState("bar");
   const [reportName, setReportName] = useState("");
   const [isPivotMode, setIsPivotMode] = useState(false);
-  const { showToast } = useToast();
+  const { toast } = useToast();
+
+  const [results, setResults] = useState<any[] | null>(null);
+  const [generating, setGenerating] = useState(false);
 
   const handleAddMetric = (metric: any) => {
     if (selectedMetrics.find(m => m.id === metric.id)) return;
     setSelectedMetrics([...selectedMetrics, metric]);
+    setResults(null);
   };
 
   const handleRemoveMetric = (id: string) => {
     setSelectedMetrics(selectedMetrics.filter(m => m.id !== id));
+    setResults(null);
+  };
+
+  const handleGeneratePreview = async () => {
+    if (selectedMetrics.length === 0) return;
+    setGenerating(true);
+    try {
+      const res = await fetch("/api/analytics/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ metrics: selectedMetrics.map((m) => m.id), days: 30 }),
+      });
+      const data = await res.json();
+      if (res.ok) setResults(data.metrics);
+      else toast(data.error || "Failed to generate preview", "error");
+    } catch {
+      toast("Network error generating preview", "error");
+    }
+    setGenerating(false);
+  };
+
+  const handleExportCsv = () => {
+    if (!results || results.length === 0) return;
+    const header = "metric,value,unit,sample_size";
+    const rows = results.map((r) => `"${r.label}",${r.value},"${r.unit}",${r.sampleSize}`);
+    const csv = [header, ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${reportName || "report"}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleSave = async () => {
-    if (!reportName) return showToast("Please give your report a name", "error");
-    
+    if (!reportName) return toast("Please give your report a name", "error");
+
     const config = {
       metrics: selectedMetrics.map(m => m.id),
       chartType,
@@ -41,9 +78,10 @@ export default function ReportBuilder() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: reportName, description: "Custom BI Report", config })
       });
-      if (res.ok) showToast("Report saved to library", "success");
+      if (res.ok) toast("Report saved to library", "success");
+      else toast("Failed to save report", "error");
     } catch (e) {
-      showToast("Failed to save report", "error");
+      toast("Failed to save report", "error");
     }
   };
 
@@ -55,7 +93,7 @@ export default function ReportBuilder() {
           <p className="text-slate-500 font-medium mt-2 text-lg">Visual multi-metric BI configurator.</p>
         </div>
         <div className="flex gap-3">
-          <button className="bg-white border border-slate-200 text-slate-600 px-5 py-3 rounded-2xl text-sm font-bold hover:bg-slate-50 transition-all flex items-center gap-2">
+          <button onClick={handleExportCsv} disabled={!results} className="bg-white border border-slate-200 text-slate-600 px-5 py-3 rounded-2xl text-sm font-bold hover:bg-slate-50 transition-all flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed">
             <Download size={18}/> Export CSV
           </button>
           <button 
@@ -129,29 +167,42 @@ export default function ReportBuilder() {
           </div>
 
           {/* Preview Canvas */}
-          <div className="flex-1 bg-slate-50 border-2 border-dashed border-slate-200 rounded-[3rem] flex items-center justify-center relative overflow-hidden group">
-            <div className="absolute inset-0 bg-white/20 backdrop-blur-[2px] opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-               <div className="bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold shadow-xl flex items-center gap-2">
-                  <Plus size={20}/> Generate Preview
-               </div>
-            </div>
-            
-            {selectedMetrics.length > 0 ? (
-              <div className="p-12 text-center space-y-4">
-                <div className="flex justify-center gap-4">
-                   <div className="h-40 w-8 bg-indigo-500 rounded-lg animate-pulse" style={{ animationDelay: '100ms'}} />
-                   <div className="h-60 w-8 bg-indigo-400 rounded-lg animate-pulse" style={{ animationDelay: '200ms'}} />
-                   <div className="h-32 w-8 bg-indigo-600 rounded-lg animate-pulse" style={{ animationDelay: '300ms'}} />
-                   <div className="h-52 w-8 bg-indigo-300 rounded-lg animate-pulse" style={{ animationDelay: '400ms'}} />
-                </div>
-                <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">Real-time {chartType} preview simulation</p>
-              </div>
-            ) : (
+          <div className="flex-1 bg-slate-50 border-2 border-dashed border-slate-200 rounded-[3rem] flex items-center justify-center relative overflow-hidden group p-8">
+            {selectedMetrics.length === 0 && (
               <div className="text-center space-y-4">
                  <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto text-slate-300">
                     <Table size={32}/>
                  </div>
                  <p className="text-slate-400 font-medium max-w-[240px]">Select metrics from the left panel to visualize terminal data.</p>
+              </div>
+            )}
+
+            {selectedMetrics.length > 0 && !results && (
+              <button
+                onClick={handleGeneratePreview}
+                disabled={generating}
+                className="bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold shadow-xl flex items-center gap-2 hover:bg-indigo-700 transition-all disabled:opacity-60"
+              >
+                {generating ? <Loader2 size={20} className="animate-spin" /> : <Plus size={20}/>} Generate Preview
+              </button>
+            )}
+
+            {results && (
+              <div className="w-full grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {results.map((r) => (
+                  <div key={r.id} className="bg-white border border-slate-200 rounded-2xl p-5 text-left">
+                    <p className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest mb-1">{r.label}</p>
+                    <p className="text-3xl font-black text-slate-900">
+                      {r.unit === "currency" ? `$${r.value.toLocaleString()}` : r.value.toLocaleString()}
+                      {r.unit !== "currency" && r.unit !== "min" && <span className="text-sm font-bold text-slate-400 ml-1">{r.unit}</span>}
+                      {r.unit === "min" && <span className="text-sm font-bold text-slate-400 ml-1">min avg</span>}
+                    </p>
+                    <p className="text-[11px] text-slate-400 mt-1">Last 30 days · {r.sampleSize} records</p>
+                  </div>
+                ))}
+                <button onClick={handleGeneratePreview} disabled={generating} className="sm:col-span-2 text-xs font-bold text-indigo-600 hover:text-indigo-700 py-2 flex items-center justify-center gap-1.5">
+                  {generating && <Loader2 size={12} className="animate-spin" />} Refresh
+                </button>
               </div>
             )}
           </div>
