@@ -618,7 +618,10 @@ async function startServer() {
     }
   });
 
-  app.post("/api/appointments", async (req: any, res) => {
+  // Create/edit/delete were all wide open — no requireRole at all, unlike
+  // every other staff-mutation endpoint in this file. Any unauthenticated
+  // caller could create, retime, or delete appointments in the yard.
+  app.post("/api/appointments", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
     const { plate, carrier, start_time, duration_minutes, dock_id, load_type, priority_level } = req.body;
     const facilityId = req.facilityId || 1;
     try {
@@ -642,7 +645,7 @@ async function startServer() {
     }
   });
 
-  app.patch("/api/appointments/:id", async (req: any, res) => {
+  app.patch("/api/appointments/:id", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
     const { id } = req.params;
     const updates = req.body;
     const facilityId = req.facilityId || 1;
@@ -653,8 +656,25 @@ async function startServer() {
 
       if (Object.keys(patch).length === 0) return res.status(400).json({ error: "No valid fields to update" });
 
-      const { data: updated, error } = await db.from("appointments").update(patch).eq("id", id).eq("facility_id", facilityId).select().single();
+      let { data: updated, error } = await db.from("appointments").update(patch).eq("id", id).eq("facility_id", facilityId).select().single();
       if (error) throw error;
+
+      // Rescheduling (start_time or duration change) without recomputing
+      // end_time would leave a stale window behind — the duration-aware
+      // overlap checks in /api/slots (Phase M) would keep scoring dock
+      // availability against the appointment's old time slot. Recompute
+      // from `updated.start_time` (Postgres's own parse of whatever the
+      // client sent) rather than re-parsing the raw client string with JS
+      // Date — an offset-less datetime-local value like "2026-08-11T14:00"
+      // parses as UTC in Postgres but as *local* time in V8, and those two
+      // parses silently disagreeing produced an end_time before start_time.
+      if (patch.start_time || patch.actual_duration_minutes) {
+        const minutes = updated.actual_duration_minutes || estimateDurationMinutes(updated.load_type);
+        const endTime = new Date(new Date(updated.start_time).getTime() + minutes * 60_000).toISOString();
+        const { data: withEnd, error: endError } = await db.from("appointments").update({ end_time: endTime }).eq("id", id).eq("facility_id", facilityId).select().single();
+        if (endError) throw endError;
+        updated = withEnd;
+      }
 
       emitUpdate("appointment_updated", updated);
       res.json(updated);
@@ -663,7 +683,7 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/appointments/:id", async (req: any, res) => {
+  app.delete("/api/appointments/:id", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
     const { id } = req.params;
     const facilityId = req.facilityId || 1;
     try {
@@ -1777,17 +1797,6 @@ async function startServer() {
     const valid = scored.map((s, i) => ({ ...availableSlots[i], ...s })).filter(s => s.score > 0).sort((a, b) => b.score - a.score);
     if (valid.length > 0) (valid[0] as any).recommended = true;
     res.json(valid);
-  });
-
-  app.patch("/api/appointments/:id/reschedule", async (req: any, res) => {
-    const { id } = req.params;
-    const { slot_start, dock_door_id } = req.body;
-    try {
-      await db.from("appointments").update({ start_time: slot_start, dock_id: dock_door_id }).eq("id", id);
-      res.json({ success: true });
-    } catch (e) {
-      res.status(500).json({ error: "Reschedule failed" });
-    }
   });
 
   // Carrier management: there was previously no way to create a carrier at
