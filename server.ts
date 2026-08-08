@@ -330,17 +330,32 @@ async function startServer() {
     }
   };
 
+  // SECURITY FIX: this used to build the PostgREST OR-filter by interpolating
+  // `plate`/`carrierName` directly into the filter string — both are
+  // attacker-controlled on public, unauthenticated routes (self-service
+  // walk-in check-in, carrier self-booking). PostgREST's or()/and() syntax
+  // treats commas/parens/dots as structural, so a crafted plate value like
+  // `X),or(1.eq.1,x.eq.` could reshape the query — in the best case erroring
+  // the request, in the worst case forging a filter that matches nothing (or
+  // everything) and silently bypassing the blacklist block this function
+  // exists to enforce. Rewritten to use .eq() for the attacker-controlled
+  // values, which supabase-js sends as plain filter values, not
+  // structurally-parsed filter syntax — no interpolation-based injection
+  // surface. `now` is server-generated, not user input, so interpolating it
+  // into the expiry OR-clause remains safe.
   const checkBlacklist = async (facilityId: number, plate: string, carrierName?: string) => {
     const now = new Date().toISOString();
-    const { data } = await db
-      .from("blacklist")
-      .select("*")
-      .eq("facility_id", facilityId)
-      .or(`and(entity_type.eq.plate,entity_value.eq.${plate}),and(entity_type.eq.carrier,entity_value.eq.${carrierName || "__none__"})`)
-      .or(`expires_at.is.null,expires_at.gt.${now}`)
-      .limit(1)
-      .maybeSingle();
-    return data;
+    const notExpired = (q: any) => q.or(`expires_at.is.null,expires_at.gt.${now}`).limit(1).maybeSingle();
+
+    const [{ data: plateHit }, { data: carrierHit }] = await Promise.all([
+      plate
+        ? notExpired(db.from("blacklist").select("*").eq("facility_id", facilityId).eq("entity_type", "plate").eq("entity_value", plate))
+        : Promise.resolve({ data: null } as any),
+      carrierName
+        ? notExpired(db.from("blacklist").select("*").eq("facility_id", facilityId).eq("entity_type", "carrier").eq("entity_value", carrierName))
+        : Promise.resolve({ data: null } as any),
+    ]);
+    return plateHit || carrierHit;
   };
 
   // Neither the staff-entered appointment endpoint nor the carrier
@@ -443,6 +458,22 @@ async function startServer() {
     legacyHeaders: false,
     keyGenerator: (req: any) => `${ipKeyGenerator(req.ip)}:${req.session?.pending_2fa_user_id || req.session?.user?.id || ""}`,
     message: { error: "Too many attempts. Try again in 15 minutes." },
+  });
+
+  // Carrier self-booking (POST /api/book/:token) had no rate limiting at
+  // all — a fully public endpoint, gated only by a token that's routinely
+  // shared/forwarded, that writes appointments and sends a real SMS to
+  // whatever driver_phone the caller supplies. Unbounded, that's both a
+  // capacity-flooding DoS against real carriers (fill every slot) and an
+  // SMS-bombing vector against an arbitrary phone number at the operator's
+  // expense. Capped per-IP+token, same family as the other public limiters.
+  const bookingLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: any) => `${ipKeyGenerator(req.ip)}:${req.params?.token || ""}`,
+    message: { error: "Too many booking attempts. Try again in 15 minutes." },
   });
 
   // --- Staff Authentication ---
@@ -2204,7 +2235,7 @@ async function startServer() {
     res.json({ carrier, facilityId: 1 });
   });
 
-  app.post("/api/book/:token", async (req: any, res) => {
+  app.post("/api/book/:token", bookingLimiter, async (req: any, res) => {
     const { token } = req.params;
     const { plate, driver_name, driver_phone, start_time, dock_id, load_type, temperature_requirement, load_weight_kg } = req.body;
     try {
