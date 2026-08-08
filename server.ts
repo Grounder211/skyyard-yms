@@ -253,10 +253,37 @@ async function startServer() {
       }).select().single();
       if (error) throw error;
       emitUpdate("exception_created", row);
+      enqueueWebhook("EXCEPTION_CREATED", row, data.facility_id);
       return row;
     } catch (e) {
       logger.error("Exception logging failed", { error: e });
       return null;
+    }
+  };
+
+  // Event-driven webhook delivery already existed as a fully-built consumer
+  // (cron worker below, HMAC-signed, retried with backoff) reading from
+  // webhook_queue — but nothing anywhere ever inserted a row into that
+  // table. No subscriptions table existed either, so there was no way to
+  // register an endpoint in the first place. This is the producer side:
+  // looks up active subscriptions for the facility that opted into this
+  // event type, and enqueues one delivery job per subscription. Fire-and-
+  // forget from the caller's perspective — a webhook failing to enqueue
+  // must never fail the operation that triggered it.
+  const enqueueWebhook = async (eventType: string, payload: any, facilityId: number) => {
+    try {
+      const { data: subs } = await db.from("webhook_subscriptions").select("id, url, secret")
+        .eq("facility_id", facilityId).eq("active", true).contains("events", [eventType]);
+      if (!subs || subs.length === 0) return;
+      const rows = subs.map((s: any) => ({
+        facility_id: facilityId, event_type: eventType,
+        payload_json: { event: eventType, timestamp: new Date().toISOString(), data: payload },
+        webhook_url: s.url, webhook_secret: s.secret, status: "pending", attempts: 0,
+      }));
+      await db.from("webhook_queue").insert(rows);
+      await db.from("webhook_subscriptions").update({ last_triggered_at: new Date().toISOString() }).in("id", subs.map((s: any) => s.id));
+    } catch (e) {
+      logger.error("Webhook enqueue failed", { error: e, eventType });
     }
   };
 
@@ -782,6 +809,7 @@ async function startServer() {
 
       emitUpdate("appointment_created", newAppt);
       evaluateWorkflows("appointment_created", newAppt, facilityId);
+      enqueueWebhook("APPOINTMENT_CREATED", newAppt, facilityId);
       res.json(newAppt);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -842,8 +870,13 @@ async function startServer() {
     const { id } = req.params;
     const facilityId = req.facilityId || 1;
     try {
+      // Fetched before delete — a webhook subscriber needs to know which
+      // appointment was cancelled (plate/carrier/time), not just an id
+      // that no longer resolves to anything by the time they receive it.
+      const { data: existing } = await db.from("appointments").select("*").eq("id", id).eq("facility_id", facilityId).maybeSingle();
       await db.from("appointments").delete().eq("id", id).eq("facility_id", facilityId);
       emitUpdate("appointment_deleted", { id });
+      if (existing) enqueueWebhook("APPOINTMENT_CANCELLED", existing, facilityId);
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -1207,6 +1240,7 @@ async function startServer() {
       if (error) throw error;
       logAudit({ action: "EXCEPTION_UPDATED", entityType: "EXCEPTION", entityId: String(req.params.id), details: { status, resolution_notes: !!resolution_notes }, ip: req.ip, facility_id: req.facilityId });
       emitUpdate("exception_updated", data);
+      if (status === "resolved") enqueueWebhook("EXCEPTION_RESOLVED", data, req.facilityId);
       res.json(data);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -1662,6 +1696,7 @@ async function startServer() {
       }
 
       emitUpdate("yard_update", { type: "MOVE_COMPLETE" });
+      enqueueWebhook("TRAILER_MOVED", { moveId, trailerId: result.trailerId, plate: result.plate, toSpotName: result.toSpotName, toSpotType: result.toSpotType }, req.facilityId || 1);
       res.json({ success: true });
     } catch (e: any) {
       if (String(e.message).includes("MOVE_ALREADY_COMPLETED")) {
@@ -1704,6 +1739,7 @@ async function startServer() {
       }
 
       emitUpdate("yard_update", { type: "DISPATCH" });
+      enqueueWebhook("TRUCK_DEPARTED", { trailerId, plate: trailer?.plate, carrier: trailer?.carrier }, req.facilityId || 1);
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: "Dispatch failed" });
@@ -1866,6 +1902,59 @@ async function startServer() {
   });
 
   // API v1: Platform Integration
+  const WEBHOOK_EVENT_TYPES = ["APPOINTMENT_CREATED", "APPOINTMENT_CANCELLED", "EXCEPTION_CREATED", "EXCEPTION_RESOLVED", "TRAILER_MOVED", "TRUCK_DEPARTED"];
+
+  app.get("/api/admin/webhooks", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    try {
+      const { data } = await db.from("webhook_subscriptions").select("id, url, events, active, created_at, last_triggered_at").eq("facility_id", req.facilityId).order("created_at", { ascending: false });
+      res.json(data || []);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/webhooks", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const { url, events } = req.body;
+    const userId = req.session?.user?.id || null;
+    if (!url || !/^https?:\/\//.test(url)) return res.status(400).json({ error: "A valid http(s) URL is required" });
+    const selectedEvents = (Array.isArray(events) ? events : []).filter((e: string) => WEBHOOK_EVENT_TYPES.includes(e));
+    if (selectedEvents.length === 0) return res.status(400).json({ error: "Select at least one event" });
+    try {
+      const secret = crypto.randomBytes(32).toString("hex");
+      const { data, error } = await db.from("webhook_subscriptions").insert({
+        facility_id: req.facilityId, url, events: selectedEvents, secret, created_by: userId,
+      }).select("id, url, events, active, created_at").single();
+      if (error) throw error;
+      logAudit({ action: "WEBHOOK_SUBSCRIPTION_CREATED", entityType: "WEBHOOK", entityId: String(data.id), details: { url, events: selectedEvents }, ip: req.ip, facility_id: req.facilityId });
+      // Secret is only ever shown once, at creation — same pattern as API keys.
+      res.json({ ...data, secret });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/admin/webhooks/:id", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const { active } = req.body;
+    if (typeof active !== "boolean") return res.status(400).json({ error: "active must be true or false" });
+    try {
+      const { data, error } = await db.from("webhook_subscriptions").update({ active }).eq("id", req.params.id).eq("facility_id", req.facilityId).select().single();
+      if (error) throw error;
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/admin/webhooks/:id", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    try {
+      await db.from("webhook_subscriptions").delete().eq("id", req.params.id).eq("facility_id", req.facilityId);
+      logAudit({ action: "WEBHOOK_SUBSCRIPTION_DELETED", entityType: "WEBHOOK", entityId: req.params.id, ip: req.ip, facility_id: req.facilityId });
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Management endpoints for api_keys — same gap as carriers earlier this
   // session: apiKeyAuth (verification) existed, but nothing anywhere could
   // ever create a row for it to verify. The whole /api/v1 external
@@ -2332,6 +2421,7 @@ async function startServer() {
 
       logAudit({ action: "SELF_BOOKED", entityType: "APPOINTMENT", entityId: String(newAppt.id), details: { plate, carrier: carrier.name }, ip: req.ip, facility_id: 1 });
       emitUpdate("appointment_created", newAppt);
+      enqueueWebhook("APPOINTMENT_CREATED", newAppt, 1);
 
       if (driver_phone) await sendSms(driver_phone, `SkyYard: Booking confirmed for ${plate} on ${start_time}. Reference: APT-${newAppt.id}.`);
 
