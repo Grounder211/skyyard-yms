@@ -17,6 +17,7 @@ import { checkAppointmentCapacity, hourBucket } from "./server/services/appointm
 import { evaluateReading, isReadingStale, STALE_READING_HOURS } from "./server/services/reeferMonitor.js";
 import { evaluateSla, isNoShow, isOnTimeArrival } from "./server/services/complianceMonitor.js";
 import { shouldNotifyExpiry } from "./server/services/vehicleExpiry.js";
+import { nextExpiryAlertLevel } from "./server/services/documentExpiry.js";
 import crypto from "crypto";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import PDFDocument from "pdfkit";
@@ -3432,6 +3433,40 @@ async function startServer() {
 
   cron.schedule("0 7 * * *", () => { runVehicleExpiryCheck(); });
 
+  // Document Expiry Worker — Priority 3. Multi-level thresholds (30/14/7/3/
+  // 1 days, then expired), deduplicated via expiry_alert_level so tightening
+  // from "30 days out" to "7 days out" fires exactly once per crossing, not
+  // once per cron tick. Raises a real exception (so it shows in the
+  // Exception Center and Manager Action Center) and flips verification_
+  // status to "expired" once the date has actually passed.
+  const runDocumentExpiryCheck = async () => {
+    const soon30d = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+    const { data: docs } = await db.from("documents").select("id, facility_id, doc_type, doc_number, related_entity_type, related_entity_id, expiry_date, expiry_alert_level, verification_status")
+      .not("expiry_date", "is", null).lte("expiry_date", soon30d).neq("verification_status", "rejected");
+    let alerted = 0;
+    for (const d of docs || []) {
+      const level = nextExpiryAlertLevel(d.expiry_date, d.expiry_alert_level);
+      if (level === null) continue;
+      const expired = level === 0;
+      const label = expired ? "expired" : `expires in ${level} day${level === 1 ? "" : "s"}`;
+      const patch: any = { expiry_alert_level: level };
+      if (expired) patch.verification_status = "expired";
+      await db.from("documents").update(patch).eq("id", d.id);
+      raiseException({
+        facility_id: d.facility_id, exception_type: "document_expiring", severity: expired ? "critical" : level <= 7 ? "warning" : "info",
+        entity_type: d.related_entity_type.toUpperCase(), entity_id: d.related_entity_id,
+        title: `${d.doc_type}${d.doc_number ? ` (${d.doc_number})` : ""} ${label}`,
+        description: `${d.related_entity_type} ${d.related_entity_id} — expiry ${d.expiry_date}`, source: "document_expiry_worker",
+      });
+      notify({ type: "DOCUMENT_EXPIRING", recipientType: "ADMIN", recipientId: null, data: { title: expired ? "Document expired" : "Document expiring soon", body: `${d.doc_type} for ${d.related_entity_type} ${d.related_entity_id} ${label}`, link: "/documents" } });
+      logAudit({ action: "DOCUMENT_EXPIRY_ALERT", entityType: "DOCUMENT", entityId: String(d.id), details: { level, expired }, facility_id: d.facility_id, severity: expired ? "warning" : "info" });
+      alerted++;
+    }
+    return alerted;
+  };
+
+  cron.schedule("0 8 * * *", () => { runDocumentExpiryCheck(); });
+
   // Manual trigger for the same worker the daily cron runs — lets staff
   // (or a live verification pass) run the check on demand instead of
   // waiting for the 07:00 schedule.
@@ -3439,6 +3474,15 @@ async function startServer() {
     try {
       const notified = await runVehicleExpiryCheck();
       res.json({ success: true, notified });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/documents/run-expiry-check", requireRole("superadmin", "ADMIN"), async (req, res) => {
+    try {
+      const alerted = await runDocumentExpiryCheck();
+      res.json({ success: true, alerted });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
