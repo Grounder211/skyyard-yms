@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Radar, Truck, Clock, AlertTriangle, Activity, DoorOpen, LogIn, LogOut, ArrowRightLeft, X, History, Search, Thermometer, Fuel, Loader2, Building2 } from "lucide-react";
+import { Radar, Truck, Clock, AlertTriangle, Activity, DoorOpen, LogIn, LogOut, ArrowRightLeft, X, History, Search, Thermometer, Fuel, Loader2, Building2, ShieldAlert, Weight, Camera } from "lucide-react";
 import { io } from "socket.io-client";
 import { motion, AnimatePresence } from "motion/react";
 import { useToast } from "../contexts/ToastContext";
@@ -246,6 +246,42 @@ export default function LiveTracking() {
     setReeferBusy(false);
   };
 
+  const [inspectionForm, setInspectionForm] = useState({ hazmat_class: "", tare_weight_kg: "", damage_note: "" });
+  const [inspectionBusy, setInspectionBusy] = useState(false);
+
+  useEffect(() => {
+    setInspectionForm({ hazmat_class: selected?.hazmat_class || "", tare_weight_kg: selected?.tare_weight_kg != null ? String(selected.tare_weight_kg) : "", damage_note: "" });
+  }, [selected?.plate]);
+
+  const submitInspection = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selected?.plate) return;
+    setInspectionBusy(true);
+    try {
+      const res = await fetch(`/api/trailers/${encodeURIComponent(selected.plate)}/inspection`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          hazmat_class: inspectionForm.hazmat_class || null,
+          tare_weight_kg: inspectionForm.tare_weight_kg,
+          damage_note: inspectionForm.damage_note || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast("Inspection updated", "success");
+        setSelected((s: any) => (s ? { ...s, hazmat_class: data.hazmat_class, tare_weight_kg: data.tare_weight_kg, damage_photos: data.damage_photos } : s));
+        setInspectionForm((f) => ({ ...f, damage_note: "" }));
+        load();
+      } else {
+        toast(data.error || "Failed to update inspection", "error");
+      }
+    } catch {
+      toast("Network error updating inspection", "error");
+    }
+    setInspectionBusy(false);
+  };
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-20 gap-4 text-slate-400 animate-pulse">
@@ -399,6 +435,44 @@ export default function LiveTracking() {
               <Row label="PO number" value={selected.po_number || "—"} />
               <Row label="Cargo / SKU" value={selected.sku_summary || "—"} />
               <Row label="Time on site" value={elapsed(selected.checked_in_at || selected.check_in_time || new Date().toISOString())} mono />
+            </div>
+
+            <div className="mt-6 pt-4 border-t border-slate-100">
+              <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">
+                <ShieldAlert size={13} /> Trailer inspection
+              </h4>
+              {selected.hazmat_class && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mb-2 inline-block font-semibold">Hazmat class {selected.hazmat_class}</p>}
+              {Array.isArray(selected.damage_photos) && selected.damage_photos.length > 0 && (
+                <div className="space-y-1.5 mb-3">
+                  {selected.damage_photos.map((d: any, i: number) => (
+                    <div key={i} className="text-xs bg-red-50 border border-red-100 text-red-700 rounded-lg px-2.5 py-1.5">
+                      <p className="font-semibold flex items-center gap-1"><Camera size={11} /> {d.note}</p>
+                      <p className="opacity-70 mt-0.5">{new Date(d.reported_at).toLocaleString()}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <form onSubmit={submitInspection} className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Hazmat class</label>
+                    <input value={inspectionForm.hazmat_class} onChange={(e) => setInspectionForm({ ...inspectionForm, hazmat_class: e.target.value })} placeholder="e.g. 3" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1"><Weight size={10} /> Tare weight (kg)</label>
+                    <input type="number" value={inspectionForm.tare_weight_kg} onChange={(e) => setInspectionForm({ ...inspectionForm, tare_weight_kg: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                  </div>
+                </div>
+                <div className="flex items-end gap-2">
+                  <div className="flex-1 space-y-1">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Report damage</label>
+                    <input value={inspectionForm.damage_note} onChange={(e) => setInspectionForm({ ...inspectionForm, damage_note: e.target.value })} placeholder="Describe any damage found" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                  </div>
+                  <button type="submit" disabled={inspectionBusy} className="bg-slate-900 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-slate-800 disabled:opacity-50 flex items-center gap-1.5">
+                    {inspectionBusy && <Loader2 size={12} className="animate-spin" />} Save
+                  </button>
+                </div>
+              </form>
             </div>
 
             {selected.equipment_type === "reefer" && (

@@ -112,7 +112,7 @@ async function startServer() {
 
     const { data: spots } = await db
       .from("spots")
-      .select("*, trailers!trailers_spot_id_fkey(id, plate, carrier, status, check_in_time, checked_in_at, equipment_type, seal_number, driver_license, po_number, sku_summary, reefer_temp_setpoint)")
+      .select("*, trailers!trailers_spot_id_fkey(id, plate, carrier, status, check_in_time, checked_in_at, equipment_type, seal_number, driver_license, po_number, sku_summary, reefer_temp_setpoint, hazmat_class, tare_weight_kg, damage_photos)")
       .eq("facility_id", facilityId);
 
     const flatSpots = (spots || []).map((s: any) => {
@@ -132,6 +132,9 @@ async function startServer() {
         po_number: trailer?.po_number,
         sku_summary: trailer?.sku_summary,
         reefer_temp_setpoint: trailer?.reefer_temp_setpoint,
+        hazmat_class: trailer?.hazmat_class,
+        tare_weight_kg: trailer?.tare_weight_kg,
+        damage_photos: trailer?.damage_photos,
       };
     });
 
@@ -2535,6 +2538,40 @@ async function startServer() {
   // nothing ever verified or broke a seal after that: the pipeline's
   // "Documents (seal, permits) OK" checkbox was just a checkbox, not a real
   // comparison against what's on file.
+  // Trailer inspection capture — hazmat_class and tare_weight_kg sat unused
+  // on trailers with no form anywhere to set them, and damage_photos (jsonb)
+  // had no write path at all. Real photo upload would need a Supabase
+  // Storage bucket wired up, which doesn't exist in this app yet and is out
+  // of scope here — damage_photos is used as a damage-report log instead
+  // (note + reporter + timestamp, optional external photo URL if staff
+  // already has one) rather than leaving the column dead.
+  app.post("/api/trailers/:plate/inspection", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
+    const { plate } = req.params;
+    const { hazmat_class, tare_weight_kg, damage_note, damage_photo_url } = req.body;
+    const facilityId = req.facilityId;
+    try {
+      const { data: trailer } = await db.from("trailers").select("id, damage_photos").eq("plate", plate).eq("facility_id", facilityId).maybeSingle();
+      if (!trailer) return res.status(404).json({ error: "Trailer not found" });
+
+      const patch: any = {};
+      if (hazmat_class !== undefined) patch.hazmat_class = hazmat_class || null;
+      if (tare_weight_kg !== undefined && tare_weight_kg !== "") patch.tare_weight_kg = Number(tare_weight_kg);
+      if (damage_note) {
+        const existing = Array.isArray(trailer.damage_photos) ? trailer.damage_photos : [];
+        patch.damage_photos = [...existing, { note: damage_note, photo_url: damage_photo_url || null, reported_by: req.session?.user?.id || null, reported_at: new Date().toISOString() }];
+      }
+      if (Object.keys(patch).length === 0) return res.status(400).json({ error: "Nothing to update" });
+
+      const { data: updated, error } = await db.from("trailers").update(patch).eq("id", trailer.id).select().single();
+      if (error) throw error;
+
+      logAudit({ action: "TRAILER_INSPECTION_UPDATED", entityType: "TRAILER", entityId: plate, details: { hazmat_class, tare_weight_kg, damage_note: !!damage_note }, ip: req.ip, facility_id: facilityId, severity: damage_note ? "warning" : "info" });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/trailers/:plate/seal", async (req: any, res) => {
     const { plate } = req.params;
     const facilityId = req.facilityId;
