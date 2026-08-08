@@ -307,6 +307,8 @@ export default function LiveTracking() {
               <Row label="Spot" value={selected.name} />
               <Row label="Equipment" value={selected.equipment_type || "standard"} />
               <Row label="Seal" value={selected.seal_number || "—"} />
+              <Row label="PO number" value={selected.po_number || "—"} />
+              <Row label="Cargo / SKU" value={selected.sku_summary || "—"} />
               <Row label="Time on site" value={elapsed(selected.checked_in_at || selected.check_in_time || new Date().toISOString())} mono />
             </div>
 

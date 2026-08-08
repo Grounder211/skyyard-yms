@@ -39,7 +39,7 @@ export default function GateConsole() {
   }, []);
 
   const [checkinTarget, setCheckinTarget] = useState<any>(null);
-  const [checkinForm, setCheckinForm] = useState({ plate: "", carrierName: "", sealNumber: "" });
+  const [checkinForm, setCheckinForm] = useState({ plate: "", carrierName: "", sealNumber: "", poNumber: "", skuSummary: "" });
   const [discrepancy, setDiscrepancy] = useState<any>(null);
   const [busy, setBusy] = useState(false);
 
@@ -51,6 +51,8 @@ export default function GateConsole() {
     trailer_number: "",
     load_type: "standard",
     direction: "INBOUND",
+    po_number: "",
+    sku_summary: "",
   });
   const [walkinResult, setWalkinResult] = useState<any>(null);
 
@@ -139,7 +141,7 @@ export default function GateConsole() {
 
   const openCheckin = (appt: any) => {
     setCheckinTarget(appt);
-    setCheckinForm({ plate: appt.plate || "", carrierName: appt.carrier || "", sealNumber: "" });
+    setCheckinForm({ plate: appt.plate || "", carrierName: appt.carrier || "", sealNumber: "", poNumber: "", skuSummary: "" });
     setDiscrepancy(null);
   };
 
@@ -207,6 +209,8 @@ export default function GateConsole() {
           plate: checkinForm.plate,
           carrierName: checkinForm.carrierName,
           sealNumber: checkinForm.sealNumber || undefined,
+          poNumber: checkinForm.poNumber || undefined,
+          skuSummary: checkinForm.skuSummary || undefined,
           overrideDiscrepancy,
         }),
       });
@@ -255,7 +259,7 @@ export default function GateConsole() {
         } else {
           toast(`Registered — assigned to ${data.spotName}`, "success");
         }
-        setWalkinForm({ driver_name: "", carrier_name: "", phone: "", truck_plate: "", trailer_number: "", load_type: "standard", direction: "INBOUND" });
+        setWalkinForm({ driver_name: "", carrier_name: "", phone: "", truck_plate: "", trailer_number: "", load_type: "standard", direction: "INBOUND", po_number: "", sku_summary: "" });
         loadYard();
       }
     } catch {
@@ -486,6 +490,8 @@ export default function GateConsole() {
           <Field label="Phone" required value={walkinForm.phone} onChange={(v) => setWalkinForm({ ...walkinForm, phone: v })} placeholder="+46 70 123 4567" />
           <Field label="Truck plate" required value={walkinForm.truck_plate} onChange={(v) => setWalkinForm({ ...walkinForm, truck_plate: v })} />
           <Field label="Trailer number" value={walkinForm.trailer_number} onChange={(v) => setWalkinForm({ ...walkinForm, trailer_number: v })} />
+          <Field label="PO number (optional)" value={walkinForm.po_number} onChange={(v) => setWalkinForm({ ...walkinForm, po_number: v })} />
+          <Field label="Cargo / SKU summary (optional)" value={walkinForm.sku_summary} onChange={(v) => setWalkinForm({ ...walkinForm, sku_summary: v })} />
           <div className="space-y-1.5">
             <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Load type</label>
             <select value={walkinForm.load_type} onChange={(e) => setWalkinForm({ ...walkinForm, load_type: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
@@ -567,6 +573,8 @@ export default function GateConsole() {
                 <Field label="Plate" required value={checkinForm.plate} onChange={(v) => setCheckinForm({ ...checkinForm, plate: v })} />
                 <Field label="Carrier" required value={checkinForm.carrierName} onChange={(v) => setCheckinForm({ ...checkinForm, carrierName: v })} />
                 <Field label="Seal number (optional)" value={checkinForm.sealNumber} onChange={(v) => setCheckinForm({ ...checkinForm, sealNumber: v })} />
+                <Field label="PO number (optional)" value={checkinForm.poNumber} onChange={(v) => setCheckinForm({ ...checkinForm, poNumber: v })} />
+                <Field label="Cargo / SKU summary (optional)" value={checkinForm.skuSummary} onChange={(v) => setCheckinForm({ ...checkinForm, skuSummary: v })} />
                 <button
                   onClick={() => submitCheckin(false)}
                   disabled={busy}

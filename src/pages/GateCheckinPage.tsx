@@ -23,6 +23,7 @@ export default function GateCheckinPage() {
   const [form, setForm] = useState({
     truck_plate: "", carrier_name: "", trailer_number: "", load_type: "standard",
     direction: "INBOUND", consent: false, website: "", // website = honeypot, never shown
+    po_number: "", sku_summary: "",
   });
 
   const requestOtp = async (e: React.FormEvent) => {
@@ -149,6 +150,14 @@ export default function GateCheckinPage() {
                     {DIRECTIONS.map((d) => <option key={d} value={d}>{d}</option>)}
                   </select>
                 </div>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase tracking-widest text-slate-400">PO number (optional)</label>
+                <input value={form.po_number} onChange={(e) => setForm({ ...form, po_number: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Cargo / SKU summary (optional)</label>
+                <input value={form.sku_summary} onChange={(e) => setForm({ ...form, sku_summary: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm" />
               </div>
 
               <label className="flex items-start gap-2.5 text-xs text-slate-500 pt-2">

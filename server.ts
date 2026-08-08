@@ -109,7 +109,7 @@ async function startServer() {
 
     const { data: spots } = await db
       .from("spots")
-      .select("*, trailers!trailers_spot_id_fkey(id, plate, carrier, status, check_in_time, checked_in_at, equipment_type, seal_number, driver_license)")
+      .select("*, trailers!trailers_spot_id_fkey(id, plate, carrier, status, check_in_time, checked_in_at, equipment_type, seal_number, driver_license, po_number, sku_summary)")
       .eq("facility_id", facilityId);
 
     const flatSpots = (spots || []).map((s: any) => {
@@ -126,6 +126,8 @@ async function startServer() {
         equipment_type: trailer?.equipment_type,
         seal_number: trailer?.seal_number,
         driver_license: trailer?.driver_license,
+        po_number: trailer?.po_number,
+        sku_summary: trailer?.sku_summary,
       };
     });
 
@@ -696,7 +698,7 @@ async function startServer() {
   });
 
   app.post("/api/walkin/register", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
-    const { driver_name, carrier_name, phone, truck_plate, trailer_number, load_type, direction } = req.body;
+    const { driver_name, carrier_name, phone, truck_plate, trailer_number, load_type, direction, po_number, sku_summary } = req.body;
     const facilityId = req.facilityId || 1;
 
     if (!driver_name || !carrier_name || !truck_plate || !phone) {
@@ -726,6 +728,9 @@ async function startServer() {
       if (assign?.assigned) {
         logAudit({ action: "WALKIN_AUTO_CHECKIN", entityType: "WALKIN", entityId: String(walkin.id), details: { truck_plate, spot: assign.spotName }, ip: req.ip, facility_id: facilityId });
         notify({ type: "WALKIN_CONFIRMED", recipientType: "driver", recipientId: walkin.id, data: { phone, title: "Registration Sync", body: `SkyYard: Walk-in confirmed for ${truck_plate}. Proceeds to parking spot: ${assign.spotName}. Reference: WK-${walkin.id}` } });
+        if (po_number || sku_summary) {
+          await db.from("trailers").update({ po_number: po_number || null, sku_summary: sku_summary || null }).eq("plate", truck_plate).eq("facility_id", facilityId);
+        }
         const pass = await issueGatePass({ facilityId, plate: truck_plate, carrierName: carrier_name, spotName: assign.spotName, issuedBy: req.session?.user?.id, entrySource: "guard_walkin" });
         emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
         return res.json({ success: true, id: `WK-${walkin.id}`, spotName: assign.spotName, passNumber: pass?.pass_number });
@@ -791,6 +796,9 @@ async function startServer() {
 
     if (assign?.assigned) {
       await db.from("walkin_registrations").update({ reviewed_by: adminUserId, reviewed_at: new Date().toISOString() }).eq("id", walkinId);
+      if (walkin.po_number || walkin.sku_summary) {
+        await db.from("trailers").update({ po_number: walkin.po_number || null, sku_summary: walkin.sku_summary || null }).eq("plate", walkin.truck_plate).eq("facility_id", facilityId);
+      }
       logAudit({ action: "WALKIN_APPROVED", entityType: "WALKIN", entityId: String(walkinId), details: { spot: assign.spotName }, facility_id: facilityId });
       notify({ type: "WALKIN_APPROVED", recipientType: "driver", recipientId: walkin.driver_id, data: { phone: walkin.phone, title: "Entry Approved", body: `SkyYard: You're approved. Proceed to spot ${assign.spotName}. Reference: WK-${walkinId}` } });
       await issueGatePass({ facilityId, plate: walkin.truck_plate, carrierName: walkin.carrier_name, driverId: walkin.driver_id, spotName: assign.spotName, issuedBy: adminUserId, entrySource: "self_service_approved" });
@@ -816,7 +824,7 @@ async function startServer() {
   };
 
   app.post("/api/public/walkin-checkin", requireDriverAuth, publicWalkinLimiter, async (req: any, res) => {
-    const { truck_plate, carrier_name, trailer_number, load_type, direction, consent, website } = req.body;
+    const { truck_plate, carrier_name, trailer_number, load_type, direction, consent, website, po_number, sku_summary } = req.body;
     const facilityId = req.body.facility_id || 1;
 
     // Honeypot: a hidden field real drivers never see or fill; only bots fill every field.
@@ -844,6 +852,7 @@ async function startServer() {
         driver_name: driver.name || "Unknown", carrier_name, phone: driver.phone, truck_plate,
         trailer_number: trailer_number || null, load_type, direction, status: "pending_approval",
         driver_id: driver.id, facility_id: facilityId, source: "self_service_qr", consent_given: true,
+        po_number: po_number || null, sku_summary: sku_summary || null,
       }).select("id, status_token").single();
       if (error) throw error;
 
@@ -1158,7 +1167,7 @@ async function startServer() {
   });
 
   app.post("/api/gate/checkin", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
-    const { appointmentId, plate, carrierName, sealNumber, overrideDiscrepancy, overrideNote } = req.body;
+    const { appointmentId, plate, carrierName, sealNumber, overrideDiscrepancy, overrideNote, poNumber, skuSummary } = req.body;
     const facilityId = req.facilityId;
     try {
       const { data: appt } = await db.from("appointments").select("*, drivers(phone, id)").eq("id", appointmentId).eq("facility_id", facilityId).maybeSingle();
@@ -1192,6 +1201,10 @@ async function startServer() {
       }
 
       logAudit({ action: "GATE_CHECKIN", entityType: "TRAILER", entityId: plate, details: { appointmentId, spot: result.spotName, overrideDiscrepancy }, ip: req.ip, facility_id: facilityId });
+
+      if (poNumber || skuSummary) {
+        await db.from("trailers").update({ po_number: poNumber || null, sku_summary: skuSummary || null }).eq("plate", plate).eq("facility_id", facilityId);
+      }
 
       // Staff already verified plate/carrier against the appointment (the
       // discrepancy check above) and captured the seal number — record that
