@@ -55,6 +55,7 @@ const BookingPage = React.lazy(() => import("./pages/BookingPage"));
 const PrivacyRequest = React.lazy(() => import("./pages/PrivacyRequest"));
 const GateCheckinPage = React.lazy(() => import("./pages/GateCheckinPage"));
 const GateCheckinStatusPage = React.lazy(() => import("./pages/GateCheckinStatusPage"));
+const KioskCheckinPage = React.lazy(() => import("./pages/KioskCheckinPage"));
 
 export default function App() {
   return (
@@ -77,6 +78,7 @@ function RootRoutes() {
       <Route path="/privacy" element={<Suspense fallback={<PageLoader />}><PrivacyRequest /></Suspense>} />
       <Route path="/gate-checkin/status/:token" element={<Suspense fallback={<PageLoader />}><GateCheckinStatusPage /></Suspense>} />
       <Route path="/gate-checkin/:facilityId" element={<Suspense fallback={<PageLoader />}><GateCheckinPage /></Suspense>} />
+      <Route path="/kiosk/:facilityId" element={<Suspense fallback={<PageLoader />}><KioskCheckinPage /></Suspense>} />
       <Route path="*" element={<StaffArea />} />
     </Routes>
   );
