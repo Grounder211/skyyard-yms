@@ -15,6 +15,7 @@ import { scoreSlot } from "./server/services/slotEngine.js";
 import { estimateDurationMinutes, estimateEndTime, intervalsOverlap } from "./server/services/appointmentDuration.js";
 import { evaluateReading, isReadingStale, STALE_READING_HOURS } from "./server/services/reeferMonitor.js";
 import { evaluateSla, isNoShow } from "./server/services/complianceMonitor.js";
+import { shouldNotifyExpiry } from "./server/services/vehicleExpiry.js";
 import crypto from "crypto";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import PDFDocument from "pdfkit";
@@ -1946,6 +1947,10 @@ async function startServer() {
     for (const field of allowedFields) if (req.body[field] !== undefined) patch[field] = req.body[field];
     if (patch.plate) patch.plate = String(patch.plate).toUpperCase();
     if (Object.keys(patch).length === 0) return res.status(400).json({ error: "No valid fields to update" });
+    // Clear the expiry-notified flag whenever the expiry date itself changes
+    // (e.g. after a renewal) so the new date gets its own notification cycle
+    // instead of staying permanently suppressed by the old one.
+    if (patch.inspection_expiry !== undefined) patch.expiry_notified_at = null;
     try {
       const { data, error } = await db.from("vehicles").update(patch).eq("id", id).select("*, carriers(name)").single();
       if (error) throw error;
@@ -2660,6 +2665,46 @@ async function startServer() {
     try {
       await db.from("facilities").update({ latitude, longitude }).eq("id", facilityId);
       res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Vehicle Inspection Expiry Notifier — expiry_notified_at existed to
+  // dedupe a recurring notification but nothing ever ran one. Needs
+  // Attention (Phase H) surfaces expiring inspections to staff who happen
+  // to check the dashboard; this proactively notifies the carrier (and
+  // admins) once per expiry date instead of relying on someone noticing.
+  const runVehicleExpiryCheck = async () => {
+    const { data: vehicles } = await db.from("vehicles").select("id, plate, inspection_expiry, expiry_notified_at, carrier_id, carriers(name, email, contact_phone)").eq("active", true).not("inspection_expiry", "is", null);
+    let notified = 0;
+    for (const v of vehicles || []) {
+      if (!shouldNotifyExpiry(v.inspection_expiry, v.expiry_notified_at)) continue;
+      const carrier: any = v.carriers;
+      const overdue = v.inspection_expiry < new Date().toISOString().split("T")[0];
+      const body = `${v.plate} inspection ${overdue ? "expired" : "expires"} ${v.inspection_expiry}. Please renew and update the fleet record.`;
+
+      if (v.carrier_id) {
+        notify({ type: "VEHICLE_INSPECTION_EXPIRING", recipientType: "CARRIER", recipientId: v.carrier_id, data: { phone: carrier?.contact_phone, email: carrier?.email, title: "Vehicle inspection expiring", body, link: "/superadmin" } });
+      }
+      notify({ type: "VEHICLE_INSPECTION_EXPIRING", recipientType: "ADMIN", recipientId: null, data: { title: "Vehicle inspection expiring", body: `${carrier?.name || "Unassigned carrier"} — ${body}`, link: "/superadmin" } });
+
+      await db.from("vehicles").update({ expiry_notified_at: new Date().toISOString() }).eq("id", v.id);
+      logAudit({ action: "VEHICLE_EXPIRY_NOTIFIED", entityType: "VEHICLE", entityId: String(v.id), details: { plate: v.plate, inspection_expiry: v.inspection_expiry }, facility_id: 1, severity: overdue ? "warning" : "info" });
+      notified++;
+    }
+    return notified;
+  };
+
+  cron.schedule("0 7 * * *", () => { runVehicleExpiryCheck(); });
+
+  // Manual trigger for the same worker the daily cron runs — lets staff
+  // (or a live verification pass) run the check on demand instead of
+  // waiting for the 07:00 schedule.
+  app.post("/api/admin/vehicles/run-expiry-check", requireRole("superadmin", "ADMIN"), async (req, res) => {
+    try {
+      const notified = await runVehicleExpiryCheck();
+      res.json({ success: true, notified });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
