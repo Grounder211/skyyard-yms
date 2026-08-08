@@ -15,7 +15,7 @@ import { scoreSlot } from "./server/services/slotEngine.js";
 import { estimateDurationMinutes, estimateEndTime, intervalsOverlap } from "./server/services/appointmentDuration.js";
 import { checkAppointmentCapacity, hourBucket } from "./server/services/appointmentCapacity.js";
 import { evaluateReading, isReadingStale, STALE_READING_HOURS } from "./server/services/reeferMonitor.js";
-import { evaluateSla, isNoShow } from "./server/services/complianceMonitor.js";
+import { evaluateSla, isNoShow, isOnTimeArrival } from "./server/services/complianceMonitor.js";
 import { shouldNotifyExpiry } from "./server/services/vehicleExpiry.js";
 import crypto from "crypto";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
@@ -2005,13 +2005,39 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // Carrier dashboard only ever showed a live count of active trucks and
+  // today's appointments — nothing about how the carrier actually performs
+  // against their own scheduled slots, despite every field needed for real
+  // KPIs (start_time, checked_in_at, grace_period_minutes, no_show_flag)
+  // already existing on every appointment row. Computed over the trailing
+  // 90 days, using the same isNoShow/isOnTimeArrival logic the SLA/no-show
+  // cron workers already use, so the numbers agree with what staff see.
   app.get("/api/carrier/dashboard", requireCarrierAuth, async (req, res) => {
     const carrierId = (req as any).session.carrier_id;
     const { data: carrier } = await db.from("carriers").select("name").eq("id", carrierId).maybeSingle();
     const { count: activeTrucks } = await db.from("walkin_registrations").select("*", { count: "exact", head: true }).eq("carrier_name", carrier?.name || "__none__").not("status", "in", "(completed,cancelled)");
     const today = new Date().toISOString().split("T")[0];
     const { count: todayAppts } = await db.from("appointments").select("*", { count: "exact", head: true }).eq("carrier_id", carrierId).gte("start_time", `${today}T00:00:00`).lte("start_time", `${today}T23:59:59`);
-    res.json({ activeTrucks: activeTrucks || 0, todayAppts: todayAppts || 0 });
+
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    const now = new Date().toISOString();
+    const { data: pastAppts } = await db.from("appointments")
+      .select("start_time, checked_in_at, grace_period_minutes, no_show_flag, status")
+      .eq("carrier_id", carrierId).lt("start_time", now).gte("start_time", ninetyDaysAgo).neq("status", "CANCELLED");
+
+    const total = (pastAppts || []).length;
+    const noShowCount = (pastAppts || []).filter((a: any) => a.no_show_flag).length;
+    const checkedIn = (pastAppts || []).filter((a: any) => a.checked_in_at);
+    const onTimeCount = checkedIn.filter((a: any) => isOnTimeArrival(a.start_time, a.checked_in_at, a.grace_period_minutes)).length;
+
+    const kpis = {
+      periodDays: 90, totalAppointments: total,
+      noShowRate: total > 0 ? Math.round((noShowCount / total) * 1000) / 10 : 0,
+      onTimeRate: checkedIn.length > 0 ? Math.round((onTimeCount / checkedIn.length) * 1000) / 10 : null,
+      complianceRate: total > 0 ? Math.round((checkedIn.length / total) * 1000) / 10 : 0,
+    };
+
+    res.json({ activeTrucks: activeTrucks || 0, todayAppts: todayAppts || 0, kpis });
   });
 
   app.get("/api/carrier/appointments", requireCarrierAuth, async (req: any, res) => {

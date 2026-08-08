@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { evaluateSla, isNoShow } from "./complianceMonitor.js";
+import { evaluateSla, isNoShow, isOnTimeArrival } from "./complianceMonitor.js";
 
 describe("evaluateSla", () => {
   it("is ok well under threshold", () => {
@@ -51,5 +51,34 @@ describe("isNoShow", () => {
     const start = new Date("2026-08-10T09:00:00Z").toISOString(); // 20 min ago
     expect(isNoShow(start, 15, now)).toBe(true); // shorter grace than default
     expect(isNoShow(start, 30, now)).toBe(false); // longer grace than default
+  });
+});
+
+describe("isOnTimeArrival", () => {
+  const start = "2026-08-10T09:00:00Z";
+
+  it("is on time when checked in exactly at start_time", () => {
+    expect(isOnTimeArrival(start, "2026-08-10T09:00:00Z", 30)).toBe(true);
+  });
+
+  it("is on time when checked in within the grace period", () => {
+    expect(isOnTimeArrival(start, "2026-08-10T09:20:00Z", 30)).toBe(true);
+  });
+
+  it("is on time exactly at the grace-period boundary", () => {
+    expect(isOnTimeArrival(start, "2026-08-10T09:30:00Z", 30)).toBe(true);
+  });
+
+  it("is late once past the grace period", () => {
+    expect(isOnTimeArrival(start, "2026-08-10T09:31:00Z", 30)).toBe(false);
+  });
+
+  it("is on time when checked in early", () => {
+    expect(isOnTimeArrival(start, "2026-08-10T08:45:00Z", 30)).toBe(true);
+  });
+
+  it("uses a 60-minute default when grace_period_minutes is not set", () => {
+    expect(isOnTimeArrival(start, "2026-08-10T09:45:00Z", null)).toBe(true);
+    expect(isOnTimeArrival(start, "2026-08-10T10:15:00Z", undefined)).toBe(false);
   });
 });
