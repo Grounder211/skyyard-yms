@@ -1390,6 +1390,12 @@ async function startServer() {
       emitUpdate("yard_update", { type: "MOVE_COMPLETE" });
       res.json({ success: true });
     } catch (e: any) {
+      if (String(e.message).includes("MOVE_ALREADY_COMPLETED")) {
+        return res.status(409).json({ error: "This move was already completed — probably a double-click. No action taken." });
+      }
+      if (String(e.message).includes("MOVE_NOT_FOUND")) {
+        return res.status(404).json({ error: "Move order not found" });
+      }
       logger.error("Move completion failed", { error: e });
       res.status(500).json({ error: "Transaction failure" });
     }

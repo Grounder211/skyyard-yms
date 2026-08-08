@@ -84,18 +84,32 @@ export default function DispatchBoard() {
     setBusy(false);
   };
 
+  const [completingId, setCompletingId] = useState<number | null>(null);
+
   const completeMove = async (moveId: number) => {
-    const res = await fetch("/api/complete-move", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ moveId }),
-    });
-    if (res.ok) {
-      toast("Move completed", "success");
-      load();
-    } else {
-      toast("Failed to complete move", "error");
+    // No guard here before meant a double-click (easy to do on a gate
+    // tablet, or while waiting on a slow network) could fire this twice —
+    // the backend now rejects the retry cleanly, but locking the button
+    // per-move-id stops the duplicate request from firing at all.
+    if (completingId === moveId) return;
+    setCompletingId(moveId);
+    try {
+      const res = await fetch("/api/complete-move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ moveId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast("Move completed", "success");
+        load();
+      } else {
+        toast(data.error || "Failed to complete move", res.status === 409 ? "info" : "error");
+      }
+    } catch {
+      toast("Network error completing move", "error");
     }
+    setCompletingId(null);
   };
 
   if (loading) {
@@ -153,8 +167,8 @@ export default function DispatchBoard() {
                 <p className="text-xs text-slate-500 flex items-center gap-1 mt-1">
                   {m.from_name} <ArrowRight size={10} /> {m.to_name}
                 </p>
-                <button onClick={() => completeMove(m.id)} className="mt-3 w-full bg-slate-900 text-white text-xs font-bold py-2 rounded-lg hover:bg-indigo-600 transition-all flex items-center justify-center gap-1.5">
-                  <CheckCircle2 size={12} /> Mark complete
+                <button onClick={() => completeMove(m.id)} disabled={completingId === m.id} className="mt-3 w-full bg-slate-900 text-white text-xs font-bold py-2 rounded-lg hover:bg-indigo-600 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50">
+                  {completingId === m.id ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />} Mark complete
                 </button>
               </div>
             ))}
