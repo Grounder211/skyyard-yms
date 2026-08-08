@@ -156,7 +156,18 @@ async function startServer() {
 
     const { data: fSettings } = await db.from("facility_settings").select("detention_threshold_hours").eq("facility_id", facilityId).maybeSingle();
 
-    return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24 };
+    // Dashboard's "Avg. Dwell" and "Daily Velocity" were literal hardcoded
+    // constants (42 and 128) — never computed from anything, displayed as
+    // if real on the very first screen a manager sees. Real numbers,
+    // computed from today's actual departures.
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+    const { data: departedToday } = await db.from("trailers").select("checked_in_at, checked_out_at").eq("facility_id", facilityId).not("checked_out_at", "is", null).gte("checked_out_at", todayStart.toISOString());
+    const dwellSamples = (departedToday || []).filter((t: any) => t.checked_in_at).map((t: any) => (new Date(t.checked_out_at).getTime() - new Date(t.checked_in_at).getTime()) / 60000);
+    const avgDwellMinutes = dwellSamples.length ? Math.round(dwellSamples.reduce((a, b) => a + b, 0) / dwellSamples.length) : null;
+    const dailyVelocity = (departedToday || []).length;
+
+    return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24, avgDwellMinutes, dailyVelocity };
   };
 
   const emitUpdate = async (event = "yard_update", payload: any = null) => {
@@ -1169,24 +1180,33 @@ async function startServer() {
     res.json(data || []);
   });
 
-  // Command-center aggregator — the Dashboard's "Recent Alerts" panel was
-  // hardcoded fake demo data (four static JSX rows, no API call at all).
-  // This pulls every real thing already in the system that needs a human
-  // decision — pending gate-pass approvals, active detention, vehicles with
-  // inspections expiring soon, and gate passes stuck too long in one stage —
-  // into a single feed instead of four separate pages nobody checks all of.
+  // Manager Action Center — was a flat, capped-at-8 list covering only 5
+  // item types with no urgency grouping and no explicit action per item.
+  // Now sections everything into CRITICAL / TIME_CRITICAL / OPERATIONS /
+  // UPCOMING (matching how a yard manager actually triages a shift) and
+  // adds three real sources that existed elsewhere in the app but never
+  // fed this feed: open Safety Center incidents, open Exception Center
+  // entries, and unassigned/unclaimed move orders. Every item carries a
+  // real action {label, link} instead of just a generic "view" link.
   app.get("/api/admin/needs-attention", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     const facilityId = req.facilityId;
     try {
       const soon30d = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
       const staleCutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      const now = new Date();
+      const in30 = new Date(now.getTime() + 30 * 60 * 1000).toISOString();
+      const in60 = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
 
-      const [pendingApprovals, activeDetention, expiringVehicles, staleGatePasses, reeferTrailers] = await Promise.all([
+      const [pendingApprovals, activeDetention, expiringVehicles, staleGatePasses, reeferTrailers, safetyIncidents, exceptions, unassignedMoves, upcomingAppts] = await Promise.all([
         db.from("walkin_registrations").select("id, truck_plate, carrier_name, created_at").eq("facility_id", facilityId).eq("status", "pending_approval"),
         db.from("detention_records").select("id, carrier_name, amount_owed, created_at").eq("facility_id", facilityId).eq("status", "ACTIVE"),
         db.from("vehicles").select("id, plate, inspection_expiry, carrier_id, carriers(name)").lte("inspection_expiry", soon30d).eq("active", true),
         db.from("gate_passes").select("id, plate, stage, updated_at").eq("facility_id", facilityId).not("stage", "in", "(OUT_PASS,EXITED)").lt("updated_at", staleCutoff),
         db.from("trailers").select("id, plate, checked_in_at, check_in_time").eq("facility_id", facilityId).eq("equipment_type", "reefer").eq("status", "IN_YARD"),
+        db.from("safety_incidents").select("id, severity, category, plate, created_at").eq("facility_id", facilityId).neq("status", "resolved"),
+        db.from("exceptions").select("id, exception_type, severity, title, description, created_at").eq("facility_id", facilityId).neq("status", "resolved"),
+        db.from("move_orders").select("id, trailer_id, trailers(plate), created_at").eq("facility_id", facilityId).eq("status", "PENDING").is("assigned_to", null),
+        db.from("appointments").select("id, plate, carrier, start_time").eq("facility_id", facilityId).eq("status", "SCHEDULED").is("checked_in_at", null).gte("start_time", now.toISOString()).lte("start_time", in60),
       ]);
 
       const reeferIds = (reeferTrailers.data || []).map((t: any) => t.id);
@@ -1198,36 +1218,58 @@ async function startServer() {
         if (!latestByTrailer.has(r.trailer_id)) latestByTrailer.set(r.trailer_id, r);
       }
 
-      const items: any[] = [];
-      for (const w of pendingApprovals.data || []) {
-        items.push({ type: "approval", severity: "warning", title: "Gate entry awaiting approval", description: `${w.truck_plate} — ${w.carrier_name}`, link: "/gate", timestamp: w.created_at });
+      const critical: any[] = [];
+      const timeCritical: any[] = [];
+      const operations: any[] = [];
+      const upcoming: any[] = [];
+
+      for (const s of safetyIncidents.data || []) {
+        const bucket = (s.severity === "critical" || s.severity === "high") ? critical : timeCritical;
+        bucket.push({ type: "safety_incident", severity: s.severity, title: `Safety: ${String(s.category).replace(/_/g, " ")}`, description: s.plate || "No related asset", timestamp: s.created_at, action: { label: "Review", link: "/safety" } });
       }
-      for (const d of activeDetention.data || []) {
-        items.push({ type: "detention", severity: "error", title: "Detention accruing", description: `${d.carrier_name || "Unknown carrier"} — ${d.amount_owed ? Number(d.amount_owed).toFixed(0) : "?"} owed so far`, link: "/finance", timestamp: d.created_at });
-      }
-      for (const v of expiringVehicles.data || []) {
-        const overdue = v.inspection_expiry < new Date().toISOString().split("T")[0];
-        items.push({ type: "inspection", severity: overdue ? "error" : "warning", title: overdue ? "Inspection overdue" : "Inspection expiring soon", description: `${v.plate} — ${(v as any).carriers?.name || "Unassigned"} — ${v.inspection_expiry}`, link: "/superadmin", timestamp: v.inspection_expiry });
-      }
-      for (const g of staleGatePasses.data || []) {
-        items.push({ type: "stale_pass", severity: "warning", title: `Vehicle stuck at ${g.stage.replace(/_/g, " ")}`, description: `${g.plate} — no movement in over 2 hours`, link: "/pipeline", timestamp: g.updated_at });
+      for (const e of exceptions.data || []) {
+        const bucket = e.severity === "critical" ? critical : timeCritical;
+        bucket.push({ type: "exception", severity: e.severity, title: e.title, description: e.description || String(e.exception_type).replace(/_/g, " "), timestamp: e.created_at, action: { label: "Resolve", link: "/exceptions" } });
       }
       for (const t of reeferTrailers.data || []) {
         const latest = latestByTrailer.get(t.id);
         const checkedInAt = t.checked_in_at || t.check_in_time || new Date().toISOString();
         if (!latest) {
-          if (isReadingStale(checkedInAt)) {
-            items.push({ type: "reefer_unchecked", severity: "warning", title: "Reefer never checked", description: `${t.plate} — no temperature/fuel reading recorded since check-in`, link: "/tracking", timestamp: checkedInAt });
-          }
+          if (isReadingStale(checkedInAt)) timeCritical.push({ type: "reefer_unchecked", severity: "warning", title: "Reefer never checked", description: `${t.plate} — no reading since check-in`, timestamp: checkedInAt, action: { label: "Open trailer", link: "/tracking" } });
         } else if (latest.status === "critical") {
-          items.push({ type: "reefer_critical", severity: "error", title: "Reefer out of range", description: `${t.plate} — ${(latest.reasons || []).join("; ") || "critical reading"}`, link: "/tracking", timestamp: latest.recorded_at });
+          critical.push({ type: "reefer_critical", severity: "critical", title: "Reefer out of range", description: `${t.plate} — ${(latest.reasons || []).join("; ") || "critical reading"}`, timestamp: latest.recorded_at, action: { label: "Open trailer", link: "/tracking" } });
         } else if (isReadingStale(latest.recorded_at)) {
-          items.push({ type: "reefer_stale", severity: "warning", title: "Reefer reading overdue", description: `${t.plate} — last checked over ${STALE_READING_HOURS}h ago`, link: "/tracking", timestamp: latest.recorded_at });
+          timeCritical.push({ type: "reefer_stale", severity: "warning", title: "Reefer reading overdue", description: `${t.plate} — last checked over ${STALE_READING_HOURS}h ago`, timestamp: latest.recorded_at, action: { label: "Open trailer", link: "/tracking" } });
         }
       }
+      for (const d of activeDetention.data || []) {
+        timeCritical.push({ type: "detention", severity: "warning", title: "Detention accruing", description: `${d.carrier_name || "Unknown carrier"} — ${d.amount_owed ? Number(d.amount_owed).toFixed(0) : "?"} owed so far`, timestamp: d.created_at, action: { label: "Open finance", link: "/finance" } });
+      }
+      for (const g of staleGatePasses.data || []) {
+        timeCritical.push({ type: "stale_pass", severity: "warning", title: `Vehicle stuck at ${g.stage.replace(/_/g, " ")}`, description: `${g.plate} — no movement in over 2 hours`, timestamp: g.updated_at, action: { label: "Open pipeline", link: "/pipeline" } });
+      }
+      for (const w of pendingApprovals.data || []) {
+        operations.push({ type: "approval", severity: "warning", title: "Gate entry awaiting approval", description: `${w.truck_plate} — ${w.carrier_name}`, timestamp: w.created_at, action: { label: "Approve", link: "/gate" } });
+      }
+      for (const m of unassignedMoves.data || []) {
+        operations.push({ type: "unassigned_move", severity: "info", title: "Unassigned move", description: (m as any).trailers?.plate || `Move #${m.id}`, timestamp: m.created_at, action: { label: "Assign", link: "/dispatch" } });
+      }
+      for (const v of expiringVehicles.data || []) {
+        const overdue = v.inspection_expiry < new Date().toISOString().split("T")[0];
+        operations.push({ type: "inspection", severity: overdue ? "warning" : "info", title: overdue ? "Inspection overdue" : "Inspection expiring soon", description: `${v.plate} — ${(v as any).carriers?.name || "Unassigned"} — ${v.inspection_expiry}`, timestamp: v.inspection_expiry, action: { label: "Review", link: "/superadmin" } });
+      }
+      for (const a of upcomingAppts.data || []) {
+        const withinMin = a.start_time <= in30 ? "30 min" : "60 min";
+        upcoming.push({ type: "arrival", severity: "info", title: `Arriving within ${withinMin}`, description: `${a.plate} — ${a.carrier} — ${new Date(a.start_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`, timestamp: a.start_time, action: { label: "Open gate", link: "/gate" } });
+      }
 
-      items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-      res.json(items);
+      const byTime = (a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      critical.sort((a, b) => -byTime(a, b));
+      timeCritical.sort((a, b) => -byTime(a, b));
+      operations.sort((a, b) => -byTime(a, b));
+      upcoming.sort(byTime);
+
+      res.json({ critical, timeCritical, operations, upcoming });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

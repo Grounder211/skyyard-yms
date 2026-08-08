@@ -315,7 +315,9 @@ function timeAgo(iso: string): string {
 function Dashboard() {
   const [stats, setStats] = React.useState<any>({});
   const [spots, setSpots] = React.useState<any[]>([]);
-  const [attention, setAttention] = React.useState<any[]>([]);
+  const [attention, setAttention] = React.useState<any>({ critical: [], timeCritical: [], operations: [], upcoming: [] });
+  const [avgDwellMinutes, setAvgDwellMinutes] = React.useState<number | null>(null);
+  const [dailyVelocity, setDailyVelocity] = React.useState(0);
 
   React.useEffect(() => {
     fetch("/api/yard-status")
@@ -323,12 +325,16 @@ function Dashboard() {
       .then(data => {
         setStats(data.stats);
         setSpots(data.spots);
+        setAvgDwellMinutes(data.avgDwellMinutes);
+        setDailyVelocity(data.dailyVelocity ?? 0);
       });
-    const loadAttention = () => fetch("/api/admin/needs-attention").then(r => r.ok ? r.json() : []).then(setAttention).catch(() => {});
+    const loadAttention = () => fetch("/api/admin/needs-attention").then(r => r.ok ? r.json() : { critical: [], timeCritical: [], operations: [], upcoming: [] }).then(setAttention).catch(() => {});
     loadAttention();
     const t = setInterval(loadAttention, 60000);
     return () => clearInterval(t);
   }, []);
+
+  const actionCenterTotal = (attention.critical?.length || 0) + (attention.timeCritical?.length || 0) + (attention.operations?.length || 0) + (attention.upcoming?.length || 0);
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto">
@@ -347,16 +353,16 @@ function Dashboard() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <Reveal preset="fade-up" delay={100}>
-          <StatItem icon={<Truck />} label="In-Yard" value={stats.totalTrailers ?? stats.active_trailers ?? 0} sub="+2 from last hour" color="indigo" />
+          <StatItem icon={<Truck />} label="In-Yard" value={stats.totalTrailers ?? stats.active_trailers ?? 0} sub="Currently on site" color="indigo" />
         </Reveal>
         <Reveal preset="fade-up" delay={150}>
           <StatItem icon={<DoorOpen />} label="Available Docks" value={spots.filter((s:any) => s.type === 'DOCK' && s.status === 'EMPTY').length} sub="Ready for arrivals" color="teal" />
         </Reveal>
         <Reveal preset="fade-up" delay={200}>
-          <StatItem icon={<Clock />} label="Avg. Dwell" value={42} suffix="m" sub="On target" color="amber" />
+          <StatItem icon={<Clock />} label="Avg. Dwell" value={avgDwellMinutes ?? "—"} suffix={avgDwellMinutes != null ? "m" : ""} sub={avgDwellMinutes != null ? "Today's departures" : "No departures yet today"} color="amber" />
         </Reveal>
         <Reveal preset="fade-up" delay={250}>
-          <StatItem icon={<Activity />} label="Daily Velocity" value={128} sub="Units processed" color="indigo" />
+          <StatItem icon={<Activity />} label="Daily Velocity" value={dailyVelocity} sub="Departed today" color="indigo" />
         </Reveal>
       </div>
 
@@ -388,18 +394,34 @@ function Dashboard() {
         </Reveal>
 
         <Reveal preset="fade-up" delay={350}>
-          <div className="bg-white border border-slate-200 rounded-[2rem] p-8 divide-y divide-slate-100 shadow-spatial">
+          <div className="bg-white border border-slate-200 rounded-[2rem] p-8 shadow-spatial">
             <h3 className="font-bold text-slate-900 text-lg pb-6 flex items-center justify-between">
-              Needs Attention
-              {attention.length > 0 && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">{attention.length}</span>}
+              Action Center
+              {actionCenterTotal > 0 && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">{actionCenterTotal}</span>}
             </h3>
-            <div className="py-4 space-y-5 max-h-72 overflow-y-auto">
-              {attention.length === 0 && <p className="text-sm text-slate-400 text-center py-4">Nothing needs attention right now.</p>}
-              {attention.slice(0, 8).map((a, i) => (
-                <Link key={i} to={a.link} className="block">
-                  <AlertItem severity={a.severity} msg={`${a.title} — ${a.description}`} time={timeAgo(a.timestamp)} />
-                </Link>
-              ))}
+            <div className="space-y-6 max-h-[420px] overflow-y-auto pr-1">
+              {actionCenterTotal === 0 && <p className="text-sm text-slate-400 text-center py-8">Nothing needs attention right now.</p>}
+              {([
+                { key: "critical", label: "Critical" },
+                { key: "timeCritical", label: "Time critical" },
+                { key: "operations", label: "Operations" },
+                { key: "upcoming", label: "Upcoming" },
+              ] as const).map(({ key, label }) => {
+                const list = attention[key] || [];
+                if (list.length === 0) return null;
+                return (
+                  <div key={key} className="space-y-3">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{label} · {list.length}</p>
+                    <div className="space-y-4 divide-y divide-slate-50">
+                      {list.slice(0, 6).map((a: any, i: number) => (
+                        <Link key={i} to={a.action?.link || "/"} className="block pt-4 first:pt-0">
+                          <AlertItem severity={a.severity} msg={`${a.title} — ${a.description}`} time={timeAgo(a.timestamp)} actionLabel={a.action?.label} />
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </Reveal>
@@ -428,7 +450,7 @@ function StatItem({ icon, label, value, suffix = "", sub, color }: any) {
       </div>
       <div style={{ transform: "translateZ(10px)" }}>
         <h4 className="text-4xl font-bold text-slate-900 tracking-tight">
-          <CountUp value={value} />{suffix}
+          {typeof value === "number" ? <><CountUp value={value} />{suffix}</> : value}
         </h4>
         <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mt-2">{label}</p>
       </div>
@@ -437,17 +459,20 @@ function StatItem({ icon, label, value, suffix = "", sub, color }: any) {
   );
 }
 
-function AlertItem({ severity, msg, time }: any) {
+function AlertItem({ severity, msg, time, actionLabel }: any) {
   return (
-    <div className="flex gap-4 group cursor-pointer">
+    <div className="flex gap-4 group cursor-pointer items-start">
       <div className={`w-2.5 h-2.5 rounded-full mt-1.5 shrink-0 ${
-        severity === 'error' ? 'bg-red-500' :
-        severity === 'warning' ? 'bg-amber-500' : 'bg-indigo-500'
+        severity === 'critical' || severity === 'error' ? 'bg-red-500' :
+        severity === 'warning' ? 'bg-amber-500' : 'bg-indigo-400'
       }`} />
-      <div className="space-y-0.5">
+      <div className="space-y-0.5 flex-1 min-w-0">
         <p className="text-sm font-bold text-slate-800 leading-tight group-hover:text-indigo-600 transition-colors">{msg}</p>
         <p className="text-[11px] font-medium text-slate-400">{time}</p>
       </div>
+      {actionLabel && (
+        <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-indigo-600 group-hover:text-indigo-700 border border-indigo-100 group-hover:border-indigo-300 rounded-lg px-2 py-1 transition-colors">{actionLabel}</span>
+      )}
     </div>
   );
 }
