@@ -197,6 +197,19 @@ export default function GateConsole() {
     }
   };
 
+  const lookupDriverByPlate = async (plate: string) => {
+    if (!plate.trim() || checkinForm.carrierName.trim()) return; // don't clobber a value staff already typed
+    try {
+      const res = await fetch(`/api/driver/lookup?plate=${encodeURIComponent(plate)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.carrier) {
+        setCheckinForm((f) => (f.carrierName.trim() ? f : { ...f, carrierName: data.carrier }));
+        toast(`Prefilled from last visit: ${data.carrier}`, "info");
+      }
+    } catch {}
+  };
+
   const submitCheckin = async (overrideDiscrepancy = false) => {
     if (!checkinTarget) return;
     setBusy(true);
@@ -570,7 +583,13 @@ export default function GateConsole() {
               </div>
             ) : (
               <div className="space-y-4">
-                <Field label="Plate" required value={checkinForm.plate} onChange={(v) => setCheckinForm({ ...checkinForm, plate: v })} />
+                <Field
+                  label="Plate"
+                  required
+                  value={checkinForm.plate}
+                  onChange={(v) => setCheckinForm({ ...checkinForm, plate: v })}
+                  onBlur={() => lookupDriverByPlate(checkinForm.plate)}
+                />
                 <Field label="Carrier" required value={checkinForm.carrierName} onChange={(v) => setCheckinForm({ ...checkinForm, carrierName: v })} />
                 <Field label="Seal number (optional)" value={checkinForm.sealNumber} onChange={(v) => setCheckinForm({ ...checkinForm, sealNumber: v })} />
                 <Field label="PO number (optional)" value={checkinForm.poNumber} onChange={(v) => setCheckinForm({ ...checkinForm, poNumber: v })} />
@@ -597,12 +616,14 @@ function Field({
   label,
   value,
   onChange,
+  onBlur,
   required,
   placeholder,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
+  onBlur?: () => void;
   required?: boolean;
   placeholder?: string;
 }) {
@@ -614,6 +635,7 @@ function Field({
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
       />
     </div>

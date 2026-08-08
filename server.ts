@@ -254,15 +254,7 @@ async function startServer() {
   // In-app + queued (SMS/email) notifications
   const notify = async ({ type, recipientType, recipientId, data }: any) => {
     try {
-      await db.from("in_app_notifications").insert({
-        user_id: recipientId,
-        user_type: recipientType,
-        title: data.title,
-        body: data.body,
-        link: data.link,
-      });
-
-      let prefs: any = { channel_sms: 1, channel_email: 0 };
+      let prefs: any = { channel_sms: 1, channel_email: 0, channel_inapp: true };
       if (recipientId) {
         const { data: p } = await db
           .from("notification_preferences")
@@ -272,6 +264,18 @@ async function startServer() {
           .eq("event_type", type)
           .maybeSingle();
         if (p) prefs = p;
+      }
+
+      // channel_inapp defaults true, but was never actually checked — the
+      // insert fired unconditionally regardless of this preference.
+      if (prefs.channel_inapp !== false) {
+        await db.from("in_app_notifications").insert({
+          user_id: recipientId,
+          user_type: recipientType,
+          title: data.title,
+          body: data.body,
+          link: data.link,
+        });
       }
 
       if (prefs.channel_sms && data.phone) {
@@ -1401,7 +1405,10 @@ async function startServer() {
   });
 
   // Smart Autofill for returning drivers
-  app.get("/api/driver/lookup", async (req, res) => {
+  // Was defined but never called from anywhere in the frontend — the manual
+  // check-in form on GateConsole made staff retype carrier/license info for
+  // every returning plate instead of prefilling it from history.
+  app.get("/api/driver/lookup", requireRole("superadmin", "ADMIN", "GUARD"), async (req, res) => {
     const { plate } = req.query;
     try {
       const { data } = await db.from("trailers").select("driver_license, carrier").eq("plate", plate).order("check_in_time", { ascending: false }).limit(1).maybeSingle();
@@ -2063,18 +2070,6 @@ async function startServer() {
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
-  });
-
-  // SVG Map Data Feed
-  app.get("/api/admin/yard-map", async (req: any, res) => {
-    const { data: spots } = await db.from("spots").select("*, trailers!trailers_spot_id_fkey(plate, carrier, check_in_time, status)").eq("facility_id", req.facilityId);
-    const rows = (spots || []).map((s: any) => {
-      const trailer = Array.isArray(s.trailers) ? s.trailers.find((t: any) => t.status !== "DISPATCHED") : null;
-      const dwellMins = trailer ? Math.round((Date.now() - new Date(trailer.check_in_time).getTime()) / 60000) : null;
-      const { trailers, ...rest } = s;
-      return { ...rest, plate: trailer?.plate, carrier: trailer?.carrier, dwell_mins: dwellMins };
-    });
-    res.json(rows);
   });
 
   // SLA Tracking Worker

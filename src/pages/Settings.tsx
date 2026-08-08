@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Globe2, Coins, Clock, Bell, Warehouse, FileLock2, CheckCircle2, Loader2, DoorOpen, ShieldCheck, KeyRound, Copy, Code2, Ban, AlertCircle } from "lucide-react";
+import { Globe2, Coins, Clock, Bell, Warehouse, FileLock2, CheckCircle2, Loader2, DoorOpen, ShieldCheck, KeyRound, Copy, Code2, Ban, AlertCircle, MapPin } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { Link } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
@@ -20,6 +20,9 @@ export default function Settings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [requests, setRequests] = useState<any[]>([]);
+
+  const [coords, setCoords] = useState({ latitude: "", longitude: "" });
+  const [coordsSaving, setCoordsSaving] = useState(false);
 
   const [totpEnabled, setTotpEnabled] = useState(false);
   const [totpSetup, setTotpSetup] = useState<{ secret: string; otpauth_url: string } | null>(null);
@@ -83,6 +86,10 @@ export default function Settings() {
       .then((data) => {
         setFacility(data.facility);
         setSettings(data.settings);
+        setCoords({
+          latitude: data.facility?.latitude != null ? String(data.facility.latitude) : "",
+          longitude: data.facility?.longitude != null ? String(data.facility.longitude) : "",
+        });
       })
       .finally(() => setLoading(false));
     fetch("/api/admin/data-requests")
@@ -161,6 +168,24 @@ export default function Settings() {
     else toast("Failed to save settings", "error");
   };
 
+  const saveCoords = async () => {
+    const latitude = Number(coords.latitude);
+    const longitude = Number(coords.longitude);
+    if (!coords.latitude || !coords.longitude || isNaN(latitude) || isNaN(longitude)) {
+      toast("Enter both a valid latitude and longitude", "error");
+      return;
+    }
+    setCoordsSaving(true);
+    const res = await fetch("/api/admin/facility/coords", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ latitude, longitude }),
+    });
+    setCoordsSaving(false);
+    if (res.ok) toast("Facility location saved — weather will resolve to the nearest station", "success");
+    else toast("Failed to save location", "error");
+  };
+
   const updateRequest = async (id: string, status: string) => {
     await fetch(`/api/admin/data-requests/${id}`, {
       method: "PATCH",
@@ -221,6 +246,26 @@ export default function Settings() {
           <div className="space-y-1.5">
             <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Detention rate / hour</label>
             <input type="number" value={settings.detention_rate_per_hour ?? 75} onChange={(e) => setSettings({ ...settings, detention_rate_per_hour: Number(e.target.value) })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+          </div>
+        </div>
+
+        <div className="pt-4 border-t border-slate-100 space-y-3">
+          <div>
+            <p className="text-sm font-bold text-slate-900 flex items-center gap-1.5"><MapPin size={14} className="text-indigo-600" /> Facility location</p>
+            <p className="text-xs text-slate-500">Used to resolve live weather to the nearest real station instead of the Stockholm-Bromma fallback.</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Latitude</label>
+              <input type="number" step="0.0001" placeholder="59.3293" value={coords.latitude} onChange={(e) => setCoords({ ...coords, latitude: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Longitude</label>
+              <input type="number" step="0.0001" placeholder="18.0686" value={coords.longitude} onChange={(e) => setCoords({ ...coords, longitude: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+            </div>
+            <button onClick={saveCoords} disabled={coordsSaving} className="bg-slate-900 text-white px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-800 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+              {coordsSaving && <Loader2 size={14} className="animate-spin" />} Save location
+            </button>
           </div>
         </div>
 
