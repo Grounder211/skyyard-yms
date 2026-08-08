@@ -14,6 +14,7 @@ import twilio from "twilio";
 import { scoreSlot } from "./server/services/slotEngine.js";
 import { estimateDurationMinutes, estimateEndTime, intervalsOverlap } from "./server/services/appointmentDuration.js";
 import { evaluateReading, isReadingStale, STALE_READING_HOURS } from "./server/services/reeferMonitor.js";
+import { evaluateSla, isNoShow } from "./server/services/complianceMonitor.js";
 import crypto from "crypto";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import PDFDocument from "pdfkit";
@@ -2085,18 +2086,24 @@ async function startServer() {
       if (!sla) continue;
 
       const elapsedMin = (Date.now() - new Date(appt.checked_in_at).getTime()) / 60000;
-      const pct = (elapsedMin / sla.threshold_minutes) * 100;
+      // Per-facility/load-type thresholds (facility_sla_rules.warning_pct/escalation_pct/
+      // critical_pct) previously sat unused — every facility got the same hardcoded
+      // 100%/120% cutoffs regardless of what was configured for it, and the warning_pct
+      // tier was never checked at all.
+      const level = evaluateSla(elapsedMin, sla.threshold_minutes, sla.warning_pct ?? 80, sla.escalation_pct ?? 100, sla.critical_pct ?? 120);
 
-      const checkNotified = async (level: string) => {
-        const { count } = await db.from("audit_logs").select("*", { count: "exact", head: true }).eq("entityId", String(appt.id)).eq("action", `sla_${level}`).gt("timestamp", appt.checked_in_at);
+      const checkNotified = async (action: string) => {
+        const { count } = await db.from("audit_logs").select("*", { count: "exact", head: true }).eq("entityId", String(appt.id)).eq("action", action).gt("timestamp", appt.checked_in_at);
         return count || 0;
       };
 
-      if (pct >= 120 && (await checkNotified("critical")) === 0) {
+      if (level === "critical" && (await checkNotified("sla_critical")) === 0) {
         await db.from("audit_logs").insert({ facility_id: appt.facility_id, action: "sla_critical", entityType: "appointment", entityId: String(appt.id), details: { elapsed: Math.round(elapsedMin), threshold: sla.threshold_minutes }, severity: "critical" });
-        notify({ type: "SLA_CRITICAL", recipientType: "ADMIN", recipientId: null, data: { title: "CRITICAL SLA BREACH", body: `${appt.carrier} has exceeded SLA by 20%+ at facility ${appt.facility_id}` } });
-      } else if (pct >= 100 && (await checkNotified("breach")) === 0) {
+        notify({ type: "SLA_CRITICAL", recipientType: "ADMIN", recipientId: null, data: { title: "CRITICAL SLA BREACH", body: `${appt.carrier} has exceeded SLA at facility ${appt.facility_id}` } });
+      } else if (level === "breach" && (await checkNotified("sla_breach")) === 0) {
         await db.from("audit_logs").insert({ facility_id: appt.facility_id, action: "sla_breach", entityType: "appointment", entityId: String(appt.id), details: { elapsed: Math.round(elapsedMin), threshold: sla.threshold_minutes }, severity: "warning" });
+      } else if (level === "warning" && (await checkNotified("sla_warning")) === 0) {
+        await db.from("audit_logs").insert({ facility_id: appt.facility_id, action: "sla_warning", entityType: "appointment", entityId: String(appt.id), details: { elapsed: Math.round(elapsedMin), threshold: sla.threshold_minutes }, severity: "info" });
       }
     }
   });
@@ -2408,12 +2415,17 @@ async function startServer() {
     }
   });
 
-  // No-Show Detection Worker
+  // No-Show Detection Worker — grace_period_minutes sat on every appointment
+  // row unused; every appointment got the same flat 60-minute cutoff instead
+  // of its own configured grace period. Query a wide-enough window (24h is
+  // more than any grace period should ever be) and apply each row's own
+  // grace period in JS.
   cron.schedule("*/30 * * * *", async () => {
     logger.info("[Worker] Running No-Show Detection...");
-    const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const { data: noShows } = await db.from("appointments").select("id, carrier_id, carrier").eq("status", "SCHEDULED").lt("start_time", cutoff).is("checked_in_at", null);
-    for (const appt of noShows || []) {
+    const lookback = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: candidates } = await db.from("appointments").select("id, carrier_id, carrier, start_time, grace_period_minutes").eq("status", "SCHEDULED").gt("start_time", lookback).lt("start_time", new Date().toISOString()).is("checked_in_at", null);
+    const noShows = (candidates || []).filter((appt: any) => isNoShow(appt.start_time, appt.grace_period_minutes));
+    for (const appt of noShows) {
       await db.from("appointments").update({ status: "no_show", no_show_flag: true }).eq("id", appt.id);
       if (!appt.carrier_id) continue;
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
