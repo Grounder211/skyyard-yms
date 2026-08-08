@@ -189,6 +189,7 @@ export default function BookingPage() {
                   </div>
                 )}
                 {topPick && <p className="text-xs text-slate-400 flex items-center gap-1.5"><Sparkles size={11} className="text-amber-500" /> {topPick.start_time} at {topPick.dock_name} is the best match — {topPick.reason}.</p>}
+                {slots[0]?.estimatedMinutes && <p className="text-xs text-slate-400">Estimated dock time for a {form.load_type} load: ~{slots[0].estimatedMinutes} min.</p>}
               </div>
 
               <button type="submit" disabled={busy} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">

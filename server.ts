@@ -12,6 +12,7 @@ import cron from "node-cron";
 import bcrypt from "bcryptjs";
 import twilio from "twilio";
 import { scoreSlot } from "./server/services/slotEngine.js";
+import { estimateDurationMinutes, estimateEndTime, intervalsOverlap } from "./server/services/appointmentDuration.js";
 import crypto from "crypto";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import PDFDocument from "pdfkit";
@@ -617,6 +618,7 @@ async function startServer() {
       const { data: newAppt, error } = await db.from("appointments").insert({
         plate, carrier, start_time,
         actual_duration_minutes: duration_minutes || 60,
+        end_time: new Date(new Date(start_time).getTime() + (duration_minutes || estimateDurationMinutes(load_type)) * 60_000).toISOString(),
         dock_id: dock_id || null,
         load_type: load_type || "LOAD",
         priority_level: priority_level || 2,
@@ -1657,19 +1659,44 @@ async function startServer() {
     }
   });
 
+  // Duration-aware availability — previously matched appointments by exact
+  // start_time equality, so a 90-minute reefer load booked at 08:00 still
+  // showed the dock as "available" at 09:00 even though the truck was still
+  // there. Now estimates how long the requested load actually occupies the
+  // dock (see appointmentDuration.ts) and checks real interval overlap
+  // against every appointment that day, using each one's own estimated
+  // duration too (end_time if a real one was recorded, otherwise its own
+  // load-type estimate).
   app.get("/api/slots", async (req: any, res) => {
-    const { date } = req.query;
+    const { date, load_type } = req.query;
     const facilityId = req.facilityId;
+    const requestedMinutes = estimateDurationMinutes(load_type as string);
     const { data: docks } = await db.from("spots").select("id, name").eq("type", "DOCK").eq("facility_id", facilityId);
-    const times = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00"];
+    const { data: dayAppointments } = await db
+      .from("appointments")
+      .select("dock_id, start_time, end_time, load_type")
+      .eq("facility_id", facilityId)
+      .neq("status", "CANCELLED")
+      .gte("start_time", `${date}T00:00:00`)
+      .lte("start_time", `${date}T23:59:59`);
 
-    const slots = await Promise.all(times.map(async (time) => {
-      const startTime = `${date}T${time}:00`;
-      const { data: occupied } = await db.from("appointments").select("dock_id").eq("facility_id", facilityId).neq("status", "CANCELLED").eq("start_time", startTime);
-      const occupiedIds = (occupied || []).map((d: any) => d.dock_id);
-      const availableDocks = (docks || []).filter((d: any) => !occupiedIds.includes(d.id));
-      return { time, dateTime: startTime, availableCount: availableDocks.length, docks: availableDocks };
-    }));
+    const times = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00"];
+    const slots = times.map((time) => {
+      // Date-time strings without an offset are parsed as *local* time by
+      // JS Date (unlike date-only strings, which default to UTC) — the
+      // appointment timestamps coming back from Postgres are always UTC, so
+      // without an explicit Z here the overlap math below would be skewed
+      // by the server process's local timezone.
+      const startTime = `${date}T${time}:00Z`;
+      const endTime = estimateEndTime(startTime, load_type as string);
+      const occupiedIds = new Set(
+        (dayAppointments || [])
+          .filter((a: any) => intervalsOverlap(startTime, endTime, a.start_time, a.end_time || estimateEndTime(a.start_time, a.load_type)))
+          .map((a: any) => a.dock_id)
+      );
+      const availableDocks = (docks || []).filter((d: any) => !occupiedIds.has(d.id));
+      return { time, dateTime: startTime, estimatedMinutes: requestedMinutes, availableCount: availableDocks.length, docks: availableDocks };
+    });
 
     res.json(slots);
   });
@@ -1683,12 +1710,28 @@ async function startServer() {
     const facilityId = req.facilityId;
     const times = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00"];
     const { data: docks } = await db.from("spots").select("id, name").eq("type", "DOCK").eq("facility_id", facilityId);
+    const { data: dayAppointments } = await db
+      .from("appointments")
+      .select("dock_id, start_time, end_time, load_type")
+      .eq("facility_id", facilityId)
+      .neq("status", "CANCELLED")
+      .gte("start_time", `${date}T00:00:00`)
+      .lte("start_time", `${date}T23:59:59`);
 
     const availableSlots: { dock_id: number; dock_name: string; start_time: string }[] = [];
     for (const time of times) {
-      const startTime = `${date}T${time}:00`;
-      const { data: occupied } = await db.from("appointments").select("dock_id").eq("facility_id", facilityId).neq("status", "CANCELLED").eq("start_time", startTime);
-      const occupiedIds = new Set((occupied || []).map((d: any) => d.dock_id));
+      // Date-time strings without an offset are parsed as *local* time by
+      // JS Date (unlike date-only strings, which default to UTC) — the
+      // appointment timestamps coming back from Postgres are always UTC, so
+      // without an explicit Z here the overlap math below would be skewed
+      // by the server process's local timezone.
+      const startTime = `${date}T${time}:00Z`;
+      const endTime = estimateEndTime(startTime, equipment_type as string);
+      const occupiedIds = new Set(
+        (dayAppointments || [])
+          .filter((a: any) => intervalsOverlap(startTime, endTime, a.start_time, a.end_time || estimateEndTime(a.start_time, a.load_type)))
+          .map((a: any) => a.dock_id)
+      );
       for (const dock of docks || []) {
         if (!occupiedIds.has(dock.id)) availableSlots.push({ dock_id: dock.id, dock_name: dock.name, start_time: time });
       }
@@ -1835,6 +1878,7 @@ async function startServer() {
 
       const { data: newAppt, error } = await db.from("appointments").insert({
         plate, carrier: carrier.name, dock_id: dock_id || null, start_time, load_type: load_type || "standard",
+        end_time: estimateEndTime(start_time, load_type),
         status: "SCHEDULED", source: "self_book", driver_id: driverId, carrier_id: carrier.id, facility_id: 1,
       }).select().single();
       if (error) throw error;
