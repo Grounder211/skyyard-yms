@@ -137,6 +137,10 @@ export default function SafetyCenter() {
     critical: allItems.filter((i) => (i.severity === "critical" || i.severity === "high") && i.status !== "resolved").length,
   };
 
+  const categoryCounts: Record<string, number> = {};
+  for (const i of allItems) categoryCounts[i.category] = (categoryCounts[i.category] || 0) + 1;
+  const topCategories = Object.entries(categoryCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
   return (
     <div className="space-y-8 max-w-5xl mx-auto pb-20">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -158,6 +162,17 @@ export default function SafetyCenter() {
           </button>
         </div>
       </div>
+
+      {topCategories.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-2xl p-4 flex items-center gap-3 flex-wrap">
+          <span className="text-xs font-bold uppercase tracking-widest text-slate-400">Top categories</span>
+          {topCategories.map(([cat, n]) => (
+            <span key={cat} className="text-xs font-bold px-3 py-1.5 rounded-full bg-slate-50 border border-slate-100 text-slate-600">
+              {CATEGORY_LABELS[cat] || cat} <span className="text-slate-400">· {n}</span>
+            </span>
+          ))}
+        </div>
+      )}
 
       <div className="flex gap-3">
         {["open", "investigating", "resolved", "all"].map((s) => (
