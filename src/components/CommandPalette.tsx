@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Search, Command, History, ArrowRight, Zap, Target, Loader2 } from "lucide-react";
+import { Search, Command, History, ArrowRight, Zap, Target, Loader2, ShieldAlert, HardHat, FileText } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 export default function CommandPalette() {
@@ -16,6 +16,9 @@ export default function CommandPalette() {
     { id: "act-6", label: "Gate & Check-in", shortcut: "G G", action: () => navigate("/gate"), icon: <Target size={16}/> },
     { id: "act-9", label: "Live Tracking", shortcut: "G T", action: () => navigate("/tracking"), icon: <Target size={16}/> },
     { id: "act-7", label: "Dispatch Board", shortcut: "G B", action: () => navigate("/dispatch"), icon: <Command size={16}/> },
+    { id: "act-10", label: "Exceptions", shortcut: "G E", action: () => navigate("/exceptions"), icon: <ShieldAlert size={16}/> },
+    { id: "act-11", label: "Safety Center", shortcut: "G Y", action: () => navigate("/safety"), icon: <HardHat size={16}/> },
+    { id: "act-12", label: "Documents", shortcut: "G O", action: () => navigate("/documents"), icon: <FileText size={16}/> },
     { id: "act-3", label: "Network Topology", shortcut: "G N", action: () => navigate("/network"), icon: <Target size={16}/> },
     { id: "act-4", label: "Financial Records", shortcut: "G F", action: () => navigate("/finance"), icon: <History size={16}/> },
     { id: "act-8", label: "Settings", shortcut: "G ,", action: () => navigate("/settings"), icon: <History size={16}/> },
@@ -33,6 +36,37 @@ export default function CommandPalette() {
     document.addEventListener("keydown", down);
     return () => document.removeEventListener("keydown", down);
   }, []);
+
+  // "G then <letter>" chords, matching the shortcut hints already shown next
+  // to each quick action below — those hints did nothing until now.
+  const pendingGRef = useRef(false);
+  const pendingGTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const isTypingTarget = (el: EventTarget | null) => {
+      const tag = (el as HTMLElement)?.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || (el as HTMLElement)?.isContentEditable;
+    };
+    const down = (e: KeyboardEvent) => {
+      if (open || e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(e.target)) return;
+      if (pendingGRef.current) {
+        pendingGRef.current = false;
+        if (pendingGTimer.current) clearTimeout(pendingGTimer.current);
+        const match = actions.find((a) => a.shortcut.toLowerCase() === `g ${e.key.toLowerCase()}`);
+        if (match) {
+          e.preventDefault();
+          match.action();
+        }
+      } else if (e.key.toLowerCase() === "g") {
+        pendingGRef.current = true;
+        pendingGTimer.current = setTimeout(() => { pendingGRef.current = false; }, 1000);
+      }
+    };
+    document.addEventListener("keydown", down);
+    return () => {
+      document.removeEventListener("keydown", down);
+      if (pendingGTimer.current) clearTimeout(pendingGTimer.current);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (query.length < 2) {
