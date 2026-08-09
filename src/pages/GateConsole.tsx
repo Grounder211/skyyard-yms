@@ -281,6 +281,9 @@ export default function GateConsole() {
         } else {
           toast(`Registered — assigned to ${data.spotName}`, "success");
         }
+        if (data.driverCaution) {
+          toast(`Caution: this driver's average rating is ${data.driverCaution.average}/5 over their last ${data.driverCaution.count} visits`, "warning");
+        }
         setWalkinForm({ driver_name: "", carrier_name: "", phone: "", truck_plate: "", trailer_number: "", load_type: "standard", direction: "INBOUND", po_number: "", sku_summary: "", reefer_setpoint: "" });
         loadYard();
       }
