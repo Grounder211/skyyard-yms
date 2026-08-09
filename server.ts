@@ -646,7 +646,7 @@ async function startServer() {
   // one facility), matching how /api/driver/lookup already treats them
   // elsewhere in this file — so unlike the other four queries here, the
   // driver query intentionally has no facility_id filter.
-  app.get("/api/search", async (req: any, res) => {
+  app.get("/api/search", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     const q = String(req.query.q || "");
     if (q.length < 2) return res.json([]);
     try {
@@ -712,7 +712,7 @@ async function startServer() {
   });
 
   // General facility settings
-  app.get("/api/settings/general", async (req: any, res) => {
+  app.get("/api/settings/general", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const facilityId = req.session?.facility_id || req.facilityId || 1;
     try {
       const [{ data: facility }, { data: settings }] = await Promise.all([
@@ -786,14 +786,14 @@ async function startServer() {
   });
 
   // Notification Preferences API
-  app.get("/api/settings/notifications", async (req: any, res) => {
+  app.get("/api/settings/notifications", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const facilityId = req.facilityId;
     const userId = req.session?.user?.id || 1;
     const { data } = await db.from("notification_preferences").select("*").eq("user_id", userId);
     res.json(data || []);
   });
 
-  app.post("/api/settings/notifications", async (req: any, res) => {
+  app.post("/api/settings/notifications", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const { preferences } = req.body;
     const userId = req.session?.user?.id || 1;
     try {
@@ -810,7 +810,7 @@ async function startServer() {
   });
 
   // Enhanced Appointments API
-  app.get("/api/appointments", async (req: any, res) => {
+  app.get("/api/appointments", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     const { start, end } = req.query;
     const facilityId = req.facilityId || 1;
     try {
@@ -931,7 +931,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/yard-status", async (req: any, res) => {
+  app.get("/api/yard-status", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     const facilityId = req.facilityId || 1;
     try {
       const yardData = await getYardStatus(facilityId);
@@ -1679,7 +1679,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/visitors/active", async (req: any, res) => {
+  app.get("/api/visitors/active", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
     const { data } = await db.from("visitors").select("*").eq("facility_id", req.facilityId).is("checked_out_at", null);
     res.json(data || []);
   });
@@ -2767,7 +2767,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/period-stats", async (req: any, res) => {
+  app.get("/api/period-stats", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const facilityId = req.facilityId;
     const days = Number(req.query.days) || 7;
     const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
@@ -3039,7 +3039,7 @@ async function startServer() {
   });
 
   // In-app notification bell
-  app.get("/api/notifications/inapp", async (req: any, res) => {
+  app.get("/api/notifications/inapp", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     const userType = (req.query.userType as string) || "ADMIN";
     try {
       const { data } = await db.from("in_app_notifications").select("*").eq("user_type", userType).is("read_at", null).order("created_at", { ascending: false }).limit(25);
@@ -3049,7 +3049,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/notifications/inapp/:id/read", async (req: any, res) => {
+  app.post("/api/notifications/inapp/:id/read", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     try {
       await db.from("in_app_notifications").update({ read_at: new Date().toISOString() }).eq("id", req.params.id);
       res.json({ success: true });
@@ -3058,7 +3058,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/notifications/inapp/read-all", async (req: any, res) => {
+  app.post("/api/notifications/inapp/read-all", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     const userType = req.body?.userType || "ADMIN";
     try {
       await db.from("in_app_notifications").update({ read_at: new Date().toISOString() }).eq("user_type", userType).is("read_at", null);
