@@ -175,6 +175,9 @@ export default function GateConsole() {
       } else {
         toast(`${data.driver.name} (${data.driver.plate}) — welcome back, spot ${data.spotName}`, "success");
       }
+      if (data.driverCaution) {
+        toast(`Caution: ${data.driver.name}'s average rating is ${data.driverCaution.average}/5 over their last ${data.driverCaution.count} visits`, "warning");
+      }
       loadYard();
       loadPendingApprovals();
     } catch {
