@@ -2528,6 +2528,21 @@ async function startServer() {
     res.json({ booking_url: `/book/${token}` });
   });
 
+  // Flagging (auto, on 3+ no-shows in 30 days) had no way back — a carrier
+  // that improved its record stayed locked out of self-service booking
+  // forever with no admin action to reverse it.
+  app.post("/api/admin/carriers/:id/unflag", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const { id } = req.params;
+    try {
+      const { data, error } = await db.from("carriers").update({ flagged: false }).eq("id", id).select("id, name").single();
+      if (error) throw error;
+      logAudit({ action: "CARRIER_UNFLAGGED", entityType: "CARRIER", entityId: String(id), details: { name: data.name }, ip: req.ip, facility_id: req.facilityId });
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // --- Fleet registry: registered vehicles per carrier (Phase D) ---
   // Distinct from `trailers`, which is a per-visit occupancy record created
   // fresh at every gate checkin/walk-in. This is the persistent asset —
@@ -2603,6 +2618,16 @@ async function startServer() {
       const { data: carrier } = await db.from("carriers").select("*").eq("booking_token", token).gt("booking_token_expires", new Date().toISOString()).maybeSingle();
       if (!carrier) return res.status(404).json({ error: "Invalid or expired booking link" });
       if (!plate || !start_time) return res.status(400).json({ error: "Plate and arrival time are required" });
+
+      // The no-show worker has flagged carriers as "bookings now require
+      // approval" for 30+ real days (3+ no-shows in 30 days) but nothing
+      // ever actually enforced it — self-service booking stayed wide open
+      // regardless. Block here with a clear message rather than silently
+      // auto-creating a "pending approval" appointment with no admin UI to
+      // ever approve it.
+      if (carrier.flagged) {
+        return res.status(403).json({ error: "CARRIER_FLAGGED", reason: "This account has excessive no-shows and self-service booking is paused. Contact the terminal directly to schedule." });
+      }
 
       const blacklistHit = await checkBlacklist(1, plate, carrier.name);
       if (blacklistHit && blacklistHit.severity === "block") {

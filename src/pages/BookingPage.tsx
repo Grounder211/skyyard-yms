@@ -76,7 +76,7 @@ export default function BookingPage() {
       });
       const data = await res.json();
       if (res.ok) setConfirmed(data.appointment);
-      else setError(data.error || "Booking failed");
+      else setError(data.reason || data.error || "Booking failed");
     } catch {
       setError("Network error while booking");
     }

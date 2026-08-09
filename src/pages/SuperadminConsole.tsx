@@ -164,6 +164,18 @@ function CarriersTab() {
     }
   };
 
+  const unflag = async (id: number) => {
+    setLinkBusy(id);
+    const res = await fetch(`/api/admin/carriers/${id}/unflag`, { method: "POST" });
+    setLinkBusy(null);
+    if (res.ok) {
+      toast("Carrier unflagged — self-service booking restored", "success");
+      load();
+    } else {
+      toast("Failed to unflag carrier", "error");
+    }
+  };
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
       <form onSubmit={submit} className="bg-white border border-slate-200 rounded-3xl p-6 space-y-4 h-fit">
@@ -210,6 +222,7 @@ function CarriersTab() {
                 <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Email</th>
                 <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Booking link</th>
                 <th className="px-5 py-3" />
+                <th className="px-5 py-3" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
@@ -217,7 +230,12 @@ function CarriersTab() {
                 const active = r.booking_token && r.booking_token_expires && new Date(r.booking_token_expires) > new Date();
                 return (
                   <tr key={r.id}>
-                    <td className="px-5 py-3 text-sm font-bold text-slate-800">{r.name}</td>
+                    <td className="px-5 py-3 text-sm font-bold text-slate-800 flex items-center gap-2">
+                      {r.name}
+                      {r.flagged && (
+                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-red-100 text-red-700">Flagged</span>
+                      )}
+                    </td>
                     <td className="px-5 py-3 text-sm text-slate-500">{r.email || "—"}</td>
                     <td className="px-5 py-3">
                       <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${active ? "bg-teal-100 text-teal-700" : "bg-slate-100 text-slate-500"}`}>
@@ -229,6 +247,13 @@ function CarriersTab() {
                         {linkBusy === r.id ? <Loader2 size={12} className="animate-spin" /> : active ? <Copy size={12} /> : <Link2 size={12} />}
                         {active ? "Copy link" : "Generate link"}
                       </button>
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      {r.flagged && (
+                        <button onClick={() => unflag(r.id)} disabled={linkBusy === r.id} className="text-teal-600 hover:text-teal-800 text-xs font-bold disabled:opacity-50">
+                          Unflag
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );
