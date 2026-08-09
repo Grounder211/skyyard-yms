@@ -182,6 +182,55 @@ export default function ExecutiveDashboard() {
           </div>
         </div>
       )}
+
+      <DailyReport />
+    </div>
+  );
+}
+
+function DailyReport() {
+  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+  const [report, setReport] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`/api/admin/reports/daily?date=${date}`).then((r) => r.ok ? r.json() : null).then(setReport).finally(() => setLoading(false));
+  }, [date]);
+
+  return (
+    <div className="bg-white border border-slate-200 p-8 rounded-3xl shadow-sm">
+      <div className="flex items-center justify-between mb-6">
+        <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
+          <Calendar size={18} className="text-indigo-600" /> Daily Yard Report
+        </h3>
+        <div className="flex items-center gap-3">
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="text-sm font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 focus:outline-none" />
+          <button onClick={() => window.print()} className="text-xs font-bold text-indigo-600 hover:text-indigo-800">Print</button>
+        </div>
+      </div>
+      {loading ? (
+        <p className="text-sm text-slate-400 py-8 text-center">Loading...</p>
+      ) : !report ? (
+        <p className="text-sm text-slate-400 py-8 text-center">No data for this date.</p>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          {[
+            { label: "Trucks processed", value: report.totalTrucks },
+            { label: "Avg dwell", value: report.avgDwellMinutes != null ? `${report.avgDwellMinutes}m` : "—" },
+            { label: "On-time rate", value: report.onTimeRate != null ? `${report.onTimeRate}%` : "—" },
+            { label: "Detention events", value: report.detentionEvents },
+            { label: "Detention total", value: report.detentionTotal },
+            { label: "Safety incidents", value: report.safetyIncidents },
+            { label: "Exceptions raised", value: report.exceptions },
+          ].map((s) => (
+            <div key={s.label} className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
+              <p className="text-2xl font-bold text-slate-900">{s.value}</p>
+              <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400 mt-1">{s.label}</p>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -2080,6 +2080,39 @@ async function startServer() {
     return { totalTrucks: countRes.count || 0, avgTat, onTimeRate, detentionEvents: detentionEvents || 0 };
   };
 
+  // Phase 41: Daily Yard Report — the manager-facing report every yard
+  // still runs by hand (Excel, shift notes). Reuses getMetrics() for the
+  // truck/dwell/on-time numbers instead of a second calculation, then
+  // adds the categories getMetrics doesn't cover (safety, exceptions,
+  // detention $ total) from tables that already exist.
+  app.get("/api/admin/reports/daily", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const facilityId = req.facilityId;
+    const date = (req.query.date as string) || new Date().toISOString().split("T")[0];
+    const dayStart = `${date}T00:00:00.000Z`;
+    const dayEnd = new Date(new Date(dayStart).getTime() + 24 * 60 * 60 * 1000).toISOString();
+    try {
+      const metrics = await getMetrics(dayStart, dayEnd, facilityId);
+      const [{ count: safetyIncidents }, { count: exceptions }, { data: detentionRows }] = await Promise.all([
+        db.from("safety_incidents").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).gte("created_at", dayStart).lt("created_at", dayEnd),
+        db.from("exceptions").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).gte("created_at", dayStart).lt("created_at", dayEnd),
+        db.from("detention_records").select("amount_owed").eq("facility_id", facilityId).gte("created_at", dayStart).lt("created_at", dayEnd),
+      ]);
+      const detentionTotal = (detentionRows || []).reduce((sum, r: any) => sum + Number(r.amount_owed || 0), 0);
+      res.json({
+        date,
+        totalTrucks: metrics.totalTrucks,
+        avgDwellMinutes: metrics.avgTat,
+        onTimeRate: metrics.onTimeRate,
+        detentionEvents: metrics.detentionEvents,
+        detentionTotal,
+        safetyIncidents: safetyIncidents || 0,
+        exceptions: exceptions || 0,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/admin/analytics", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const facilityId = req.facilityId;
     const start = (req.query.start as string) || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
