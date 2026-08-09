@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { Link as RouterLink } from "react-router-dom";
 import { Globe2, ShieldBan, UploadCloud, Building2, Trash2, Loader2, CheckCircle2, AlertTriangle, Truck, Link2, Copy, Package, Pencil, X, Users } from "lucide-react";
 import { useToast } from "../contexts/ToastContext";
 import PhoneInput, { toE164 } from "../components/PhoneInput";
@@ -320,7 +321,7 @@ function CarriersTab() {
                 return (
                   <tr key={r.id}>
                     <td className="px-5 py-3 text-sm font-bold text-slate-800 flex items-center gap-2">
-                      {r.name}
+                      <RouterLink to={`/carriers/${r.id}`} className="hover:text-indigo-600 hover:underline">{r.name}</RouterLink>
                       {r.flagged && (
                         <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-red-100 text-red-700">Flagged</span>
                       )}

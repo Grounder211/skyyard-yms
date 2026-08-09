@@ -2876,6 +2876,32 @@ async function startServer() {
     }
   });
 
+  app.get("/api/admin/carriers/:id/scorecard", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const { id } = req.params;
+    try {
+      const { data: carrier } = await db.from("carriers").select("id, name, email, contact_phone, flagged, created_at").eq("id", id).maybeSingle();
+      if (!carrier) return res.status(404).json({ error: "Carrier not found" });
+      const [{ data: appts }, { data: detentions }, { count: vehicleCount }, { count: driverCount }] = await Promise.all([
+        db.from("appointments").select("id, plate, start_time, status, no_show_flag, actual_duration_minutes").eq("facility_id", req.facilityId).eq("carrier_id", id).order("start_time", { ascending: false }).limit(50),
+        db.from("detention_records").select("id, amount_owed, status, created_at").eq("facility_id", req.facilityId).eq("carrier_id", id).order("created_at", { ascending: false }).limit(20),
+        db.from("vehicles").select("*", { count: "exact", head: true }).eq("carrier_id", id),
+        db.from("drivers").select("*", { count: "exact", head: true }).eq("default_carrier_id", id),
+      ]);
+      const totalAppts = (appts || []).length;
+      const noShows = (appts || []).filter((a: any) => a.no_show_flag).length;
+      const durations = (appts || []).map((a: any) => a.actual_duration_minutes).filter((d: any) => d != null);
+      const avgDwellMinutes = durations.length ? Math.round(durations.reduce((s: number, d: number) => s + d, 0) / durations.length) : null;
+      const detentionTotal = (detentions || []).filter((d: any) => d.status === "ACTIVE").reduce((s: number, d: any) => s + Number(d.amount_owed || 0), 0);
+      res.json({
+        carrier, appointments: appts || [], detentions: detentions || [],
+        vehicleCount: vehicleCount || 0, driverCount: driverCount || 0,
+        totalAppts, noShows, avgDwellMinutes, detentionTotal,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // --- Phase L: Equipment & Maintenance — yard tractors, forklifts, dock/
   // gate equipment. New system, not a rename of anything: `vehicles` below
   // is carrier-owned rolling stock (trailers/trucks); this is the

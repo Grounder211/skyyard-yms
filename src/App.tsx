@@ -62,6 +62,7 @@ const CarrierPortal = React.lazy(() => import("./pages/CarrierPortal"));
 const BookingPage = React.lazy(() => import("./pages/BookingPage"));
 const CustomerPortal = React.lazy(() => import("./pages/CustomerPortal"));
 const DriverDetail = React.lazy(() => import("./pages/DriverDetail"));
+const CarrierDetail = React.lazy(() => import("./pages/CarrierDetail"));
 const PrivacyRequest = React.lazy(() => import("./pages/PrivacyRequest"));
 const GateCheckinPage = React.lazy(() => import("./pages/GateCheckinPage"));
 const GateCheckinStatusPage = React.lazy(() => import("./pages/GateCheckinStatusPage"));
@@ -136,6 +137,7 @@ function StaffArea() {
             <Route path="/settings/dock-rules" element={guard("/settings/dock-rules", <DockRules />)} />
             <Route path="/gate" element={guard("/gate", <GateConsole />)} />
             <Route path="/drivers/:id" element={guard("/gate", <Suspense fallback={<PageLoader />}><DriverDetail /></Suspense>)} />
+            <Route path="/carriers/:id" element={guard("/network", <Suspense fallback={<PageLoader />}><CarrierDetail /></Suspense>)} />
             <Route path="/tracking" element={guard("/tracking", <LiveTracking />)} />
             <Route path="/dispatch" element={guard("/dispatch", <DispatchBoard />)} />
             <Route path="/pipeline" element={guard("/pipeline", <PipelineBoard />)} />
