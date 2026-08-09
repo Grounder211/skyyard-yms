@@ -154,6 +154,11 @@ export default function DispatchBoard() {
   };
 
   const visibleMoves = myTasksOnly ? moves.filter((m: any) => m.assigned_to === user?.id) : moves;
+  // moves already arrives priority-then-age sorted from the server
+  // (Phase UU) — the top unclaimed one IS the recommendation. Surfaced
+  // as a highlight, never auto-assigned, per the "don't silently assign"
+  // rule — a hostler still has to claim it themselves.
+  const recommendedMoveId = moves.find((m: any) => !m.assigned_to)?.id ?? null;
 
   if (loading) {
     return (
@@ -214,8 +219,14 @@ export default function DispatchBoard() {
             {visibleMoves.map((m: any) => {
               const isMine = m.assigned_to === user?.id;
               const isClaimed = !!m.assigned_to;
+              const isRecommended = m.id === recommendedMoveId;
               return (
-                <div key={m.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                <div key={m.id} className={`p-4 rounded-2xl border ${isRecommended ? "bg-indigo-50 border-indigo-300 ring-2 ring-indigo-200" : "bg-slate-50 border-slate-100"}`}>
+                  {isRecommended && (
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-600 mb-2 flex items-center gap-1">
+                      <Hand size={10} /> Recommended next
+                    </p>
+                  )}
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <p className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
