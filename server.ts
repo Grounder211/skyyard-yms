@@ -2610,6 +2610,13 @@ async function startServer() {
       const { data, error } = await db.from("detention_records").update(patch).eq("id", req.params.id).select().single();
       if (error) throw error;
       logAudit({ action: "DETENTION_DISPUTE_RESOLVED", entityType: "DETENTION_RECORD", entityId: req.params.id, details: { resolution, notes }, ip: req.ip, facility_id: req.facilityId });
+      if (record.carrier_id) {
+        const { data: carrier } = await db.from("carriers").select("email, contact_phone").eq("id", record.carrier_id).maybeSingle();
+        const body = resolution === "waived"
+          ? `Your detention dispute for ${record.carrier_name || "your fleet"} was upheld — the charge has been waived.${notes ? ` Note: ${notes}` : ""}`
+          : `Your detention dispute was reviewed and the charge stands.${notes ? ` Note: ${notes}` : ""}`;
+        notify({ type: "DETENTION_DISPUTE_RESOLVED", recipientType: "CARRIER", recipientId: record.carrier_id, data: { phone: carrier?.contact_phone, email: carrier?.email, title: "Detention dispute resolved", body, link: "/carrier" } });
+      }
       res.json(data);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
