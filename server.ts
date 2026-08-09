@@ -1622,6 +1622,23 @@ async function startServer() {
         if (!isLoadReady(trailer?.cargo_status)) {
           return res.status(400).json({ error: `Cargo status "${trailer?.cargo_status}" is not ready for exit — finish the load operation first` });
         }
+
+        // Document Completeness Engine, reused rather than re-implemented:
+        // the same missingDocumentTypes() check GateConsole shows a guard
+        // at check-in was never enforced at the other end of the visit — a
+        // trailer with a facility policy of "block" could still exit
+        // missing required paperwork. Only blocks when the facility
+        // actually configured block; warn-only facilities are unaffected.
+        const [{ data: settings }, { data: docs }] = await Promise.all([
+          db.from("facility_settings").select("required_document_types, document_policy").eq("facility_id", req.facilityId).maybeSingle(),
+          db.from("documents").select("doc_type").eq("facility_id", req.facilityId).eq("related_entity_type", "trailer").eq("related_entity_id", pass.plate).not("verification_status", "in", "(rejected,expired)"),
+        ]);
+        if (settings?.document_policy === "block") {
+          const missing = missingDocumentTypes(settings.required_document_types || [], (docs || []).map((d: any) => d.doc_type));
+          if (missing.length > 0) {
+            return res.status(400).json({ error: `Missing required documents: ${missing.join(", ")}` });
+          }
+        }
       }
 
       const { data, error } = await db.from("gate_passes").update({ stage, updated_at: new Date().toISOString() }).eq("id", req.params.id).select().single();
