@@ -465,6 +465,31 @@ function Dashboard() {
           </div>
         </Reveal>
       </div>
+
+      {spots.some((s: any) => s.type === "DOCK") && (
+        <Reveal preset="fade-up" delay={375}>
+          <div className="bg-white border border-slate-200 rounded-[2rem] p-8 shadow-spatial">
+            <h3 className="font-bold text-slate-900 text-lg pb-6">Dock Board</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {spots.filter((s: any) => s.type === "DOCK").map((dock: any) => (
+                <div key={dock.id} className={`rounded-2xl border p-4 ${dock.plate ? "bg-indigo-50 border-indigo-200" : "bg-slate-50 border-slate-100"}`}>
+                  <p className="text-xs font-bold uppercase tracking-widest text-slate-400">{dock.name}</p>
+                  {dock.plate ? (
+                    <>
+                      <p className="font-bold text-slate-900 mt-1">{dock.plate}</p>
+                      <span className="inline-block mt-2 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-white text-indigo-700 border border-indigo-200">
+                        {dock.cargo_status || "expected"}
+                      </span>
+                    </>
+                  ) : (
+                    <p className="text-sm text-slate-400 mt-1">Empty</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </Reveal>
+      )}
     </div>
   );
 }
