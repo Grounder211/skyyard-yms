@@ -1291,17 +1291,20 @@ async function startServer() {
       if (!shift) return res.status(404).json({ error: "Shift not found" });
       if (shift.ended_at) return res.status(409).json({ error: "Shift already ended" });
 
-      const [{ count: pending }, { count: exceptions }, { count: safety }, { count: unassigned }] = await Promise.all([
+      const in4h = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
+      const [{ count: pending }, { count: exceptions }, { count: safety }, { count: unassigned }, { count: upcoming }] = await Promise.all([
         db.from("walkin_registrations").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("status", "pending_approval"),
         db.from("exceptions").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).neq("status", "resolved"),
         db.from("safety_incidents").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).neq("status", "resolved"),
         db.from("move_orders").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("status", "PENDING").is("assigned_to", null),
+        db.from("appointments").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("status", "SCHEDULED").is("checked_in_at", null).gte("start_time", new Date().toISOString()).lte("start_time", in4h),
       ]);
       const parts = [
         `${pending || 0} gate entry approval(s) pending`,
         `${exceptions || 0} open exception(s)`,
         `${safety || 0} unresolved safety incident(s)`,
         `${unassigned || 0} unclaimed move order(s)`,
+        `${upcoming || 0} appointment(s) expected in the next 4h`,
       ];
       const handoverNotes = parts.join(" · ");
 
