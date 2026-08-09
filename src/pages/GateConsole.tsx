@@ -18,6 +18,7 @@ import {
 import { io } from "socket.io-client";
 import { QRCodeSVG } from "qrcode.react";
 import { useToast } from "../contexts/ToastContext";
+import { useAuth } from "../contexts/AuthContext";
 import QRScanner from "../components/QRScanner";
 
 const LOAD_TYPES = ["standard", "reefer", "flatbed", "tanker", "hazmat", "oversized"];
@@ -25,6 +26,8 @@ const DIRECTIONS = ["INBOUND", "OUTBOUND"];
 
 export default function GateConsole() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const [showGateQr, setShowGateQr] = useState(false);
   const [yard, setYard] = useState<any>({ stats: {}, spots: [], appointments: [] });
   const [visitors, setVisitors] = useState<any[]>([]);
   const [query, setQuery] = useState("");
@@ -353,6 +356,9 @@ export default function GateConsole() {
           <p className="text-slate-500 font-medium">Verify scheduled arrivals, register walk-ins, and manage visitors on-site.</p>
         </div>
         <div className="flex gap-3">
+          <button onClick={() => setShowGateQr(true)} className="bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-700 hover:border-indigo-300 transition-all">
+            Gate QR
+          </button>
           <div className="bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-700 flex items-center gap-2">
             <DoorOpen size={16} className="text-teal-600" /> {availableDocks} docks free
           </div>
@@ -361,6 +367,20 @@ export default function GateConsole() {
           </div>
         </div>
       </div>
+
+      {showGateQr && (
+        <div className="fixed inset-0 z-[9998] bg-black/50 flex items-center justify-center p-6" onClick={() => setShowGateQr(false)}>
+          <div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl text-center" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-bold text-slate-900 text-lg mb-1">Gate check-in QR</h3>
+            <p className="text-xs text-slate-500 mb-5">Drivers scan this to self-register — phone OTP, photo, then it lands in your approval queue below.</p>
+            <div className="flex justify-center mb-4">
+              <QRCodeSVG value={`${window.location.origin}/kiosk/${user?.facility_id || 1}`} size={220} level="M" />
+            </div>
+            <code className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 block break-all mb-4">{window.location.origin}/kiosk/{user?.facility_id || 1}</code>
+            <button onClick={() => setShowGateQr(false)} className="text-sm font-bold text-slate-500 hover:text-slate-900">Close</button>
+          </div>
+        </div>
+      )}
 
       {weather?.icyRisk && (
         <div className="flex items-center gap-3 bg-red-50 border border-red-300 text-red-700 rounded-2xl px-5 py-3 font-bold text-sm" role="alert">
