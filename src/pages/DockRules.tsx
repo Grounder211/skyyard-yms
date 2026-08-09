@@ -102,7 +102,7 @@ export default function DockRules() {
       <div className="bg-indigo-50 border border-indigo-100 p-6 rounded-2xl flex items-center gap-4">
         <ShieldCheck className="text-indigo-600 shrink-0" />
         <p className="text-sm font-medium text-indigo-900">
-          Governance active. Changes made here will instantly restrict movement protocols for the selected terminal doors.
+          Enforced when dispatch moves a trailer onto a dock — incompatible equipment types are rejected at that step.
         </p>
       </div>
     </div>

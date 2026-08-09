@@ -116,16 +116,20 @@ async function startServer() {
   const getYardStatus = async (facilityId: number) => {
     const { data: statsData } = await db.rpc("get_yard_stats", { f_id: facilityId });
 
-    const { data: spots } = await db
-      .from("spots")
-      .select("*, trailers!trailers_spot_id_fkey(id, plate, carrier, status, check_in_time, checked_in_at, equipment_type, seal_number, driver_license, po_number, sku_summary, reefer_temp_setpoint, hazmat_class, tare_weight_kg, damage_photos, cargo_status)")
-      .eq("facility_id", facilityId);
+    const [{ data: spots }, { data: dockRules }] = await Promise.all([
+      db.from("spots")
+        .select("*, trailers!trailers_spot_id_fkey(id, plate, carrier, status, check_in_time, checked_in_at, equipment_type, seal_number, driver_license, po_number, sku_summary, reefer_temp_setpoint, hazmat_class, tare_weight_kg, damage_photos, cargo_status)")
+        .eq("facility_id", facilityId),
+      db.from("dock_rules").select("dock_door_id, allowed_equipment_types").eq("facility_id", facilityId),
+    ]);
+    const dockRuleMap = new Map((dockRules || []).map((r: any) => [r.dock_door_id, r.allowed_equipment_types]));
 
     const flatSpots = (spots || []).map((s: any) => {
       const trailer = Array.isArray(s.trailers) ? s.trailers.find((t: any) => t.status !== "DISPATCHED") : null;
       const { trailers, ...rest } = s;
       return {
         ...rest,
+        allowed_equipment_types: dockRuleMap.get(s.id),
         trailer_id: trailer?.id,
         plate: trailer?.plate,
         carrier: trailer?.carrier,
@@ -1991,6 +1995,24 @@ async function startServer() {
     const facilityId = req.facilityId;
     if (priority !== undefined && !MOVE_PRIORITIES.includes(priority)) return res.status(400).json({ error: "Invalid priority" });
     try {
+      // Dock Rules (Equipment Compatibility) wrote allowed_equipment_types
+      // and told staff "governance active... will instantly restrict
+      // movement" — but nothing ever read the column. This is the one
+      // place a trailer gets moved onto a specific dock door.
+      if (toSpotId) {
+        const { data: toSpot } = await db.from("spots").select("type").eq("id", toSpotId).eq("facility_id", facilityId).maybeSingle();
+        if (toSpot?.type === "DOCK") {
+          const [{ data: rule }, { data: trailer }] = await Promise.all([
+            db.from("dock_rules").select("allowed_equipment_types").eq("dock_door_id", toSpotId).eq("facility_id", facilityId).maybeSingle(),
+            db.from("trailers").select("equipment_type").eq("id", trailerId).maybeSingle(),
+          ]);
+          const allowed: string[] = rule?.allowed_equipment_types || ["standard"];
+          const eType = trailer?.equipment_type || "standard";
+          if (!allowed.includes(eType)) {
+            return res.status(400).json({ error: `This dock does not accept ${eType} equipment` });
+          }
+        }
+      }
       const { data: move, error } = await db.from("move_orders").insert({
         trailer_id: trailerId, from_spot_id: fromSpotId, to_spot_id: toSpotId, facility_id: facilityId,
         assigned_to: assignedTo || null, status: assignedTo ? "IN_PROGRESS" : "PENDING",
@@ -3314,11 +3336,11 @@ async function startServer() {
   app.post("/api/admin/dock-rules", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const { dockId, eType, isAdding } = req.body;
     try {
-      const { data: existing } = await db.from("dock_rules").select("*").eq("dock_door_id", dockId).maybeSingle();
+      const { data: existing } = await db.from("dock_rules").select("*").eq("dock_door_id", dockId).eq("facility_id", req.facilityId).maybeSingle();
       const current: string[] = existing?.allowed_equipment_types || ["standard"];
       const updated = isAdding ? Array.from(new Set([...current, eType])) : current.filter((t) => t !== eType);
       if (existing) {
-        await db.from("dock_rules").update({ allowed_equipment_types: updated }).eq("dock_door_id", dockId);
+        await db.from("dock_rules").update({ allowed_equipment_types: updated }).eq("dock_door_id", dockId).eq("facility_id", req.facilityId);
       } else {
         await db.from("dock_rules").insert({ facility_id: req.facilityId, dock_door_id: dockId, allowed_equipment_types: updated });
       }
