@@ -327,6 +327,7 @@ function Dashboard() {
   const [today, setToday] = React.useState<{ expectedArrivals: number; noShows: number; activeMoves: number; hostlersAvailable: number; hostlersBusy: number }>({ expectedArrivals: 0, noShows: 0, activeMoves: 0, hostlersAvailable: 0, hostlersBusy: 0 });
   const [zones, setZones] = React.useState<{ zone: string; total: number; occupied: number }[]>([]);
   const [unresolvedSafetySpotIds, setUnresolvedSafetySpotIds] = React.useState<number[]>([]);
+  const [equipment, setEquipment] = React.useState({ down: 0, total: 0 });
 
   React.useEffect(() => {
     fetch("/api/yard-status")
@@ -339,6 +340,7 @@ function Dashboard() {
         setToday(data.today || { expectedArrivals: 0, noShows: 0, activeMoves: 0, hostlersAvailable: 0, hostlersBusy: 0 });
         setZones(data.zones || []);
         setUnresolvedSafetySpotIds(data.unresolvedSafetySpotIds || []);
+        setEquipment({ down: data.equipmentDown || 0, total: data.equipmentTotal || 0 });
       });
     const loadAttention = () => fetch("/api/admin/needs-attention").then(r => r.ok ? r.json() : { critical: [], timeCritical: [], operations: [], upcoming: [] }).then(setAttention).catch(() => {});
     loadAttention();
@@ -469,7 +471,14 @@ function Dashboard() {
       {spots.some((s: any) => s.type === "DOCK") && (
         <Reveal preset="fade-up" delay={375}>
           <div className="bg-white border border-slate-200 rounded-[2rem] p-8 shadow-spatial">
-            <h3 className="font-bold text-slate-900 text-lg pb-6">Dock Board</h3>
+            <div className="flex items-center justify-between pb-6">
+              <h3 className="font-bold text-slate-900 text-lg">Dock Board</h3>
+              {equipment.total > 0 && (
+                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${equipment.down > 0 ? "bg-amber-100 text-amber-700" : "bg-teal-100 text-teal-700"}`}>
+                  Equipment: {equipment.total - equipment.down}/{equipment.total} available
+                </span>
+              )}
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {spots.filter((s: any) => s.type === "DOCK").map((dock: any) => (
                 <div key={dock.id} className={`rounded-2xl border p-4 ${dock.plate ? "bg-indigo-50 border-indigo-200" : "bg-slate-50 border-slate-100"}`}>

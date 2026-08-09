@@ -206,7 +206,10 @@ async function startServer() {
     const { data: unresolvedIncidents } = await db.from("safety_incidents").select("spot_id").eq("facility_id", facilityId).neq("status", "resolved").not("spot_id", "is", null);
     const unresolvedSafetySpotIds = [...new Set((unresolvedIncidents || []).map((i: any) => i.spot_id))];
 
-    return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24, avgDwellMinutes, dailyVelocity, today, zones, unresolvedSafetySpotIds };
+    const { data: equipmentRows } = await db.from("equipment").select("status").eq("facility_id", facilityId);
+    const equipmentDown = (equipmentRows || []).filter((e: any) => e.status === "maintenance" || e.status === "broken").length;
+
+    return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24, avgDwellMinutes, dailyVelocity, today, zones, unresolvedSafetySpotIds, equipmentDown, equipmentTotal: (equipmentRows || []).length };
   };
 
   const emitUpdate = async (event = "yard_update", payload: any = null) => {
@@ -2592,6 +2595,62 @@ async function startServer() {
       const { data, error } = await db.from("carriers").update({ flagged: false }).eq("id", id).select("id, name").single();
       if (error) throw error;
       logAudit({ action: "CARRIER_UNFLAGGED", entityType: "CARRIER", entityId: String(id), details: { name: data.name }, ip: req.ip, facility_id: req.facilityId });
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- Phase L: Equipment & Maintenance — yard tractors, forklifts, dock/
+  // gate equipment. New system, not a rename of anything: `vehicles` below
+  // is carrier-owned rolling stock (trailers/trucks); this is the
+  // facility's own operating equipment.
+  const EQUIPMENT_TYPES = ["yard_tractor", "forklift", "dock_equipment", "gate_equipment", "other"];
+  const EQUIPMENT_STATUSES = ["available", "in_use", "maintenance", "broken"];
+
+  app.get("/api/admin/equipment", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    try {
+      const { data } = await db.from("equipment").select("*").eq("facility_id", req.facilityId).order("name", { ascending: true });
+      res.json(data || []);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/equipment", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const { name, type } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: "Name is required" });
+    if (!EQUIPMENT_TYPES.includes(type)) return res.status(400).json({ error: "Invalid type" });
+    try {
+      const { data, error } = await db.from("equipment").insert({ facility_id: req.facilityId, name: name.trim(), type }).select().single();
+      if (error) throw error;
+      logAudit({ action: "EQUIPMENT_ADDED", entityType: "EQUIPMENT", entityId: String(data.id), details: { name, type }, ip: req.ip, facility_id: req.facilityId });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/admin/equipment/:id", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { status, notes } = req.body;
+    if (status !== undefined && !EQUIPMENT_STATUSES.includes(status)) return res.status(400).json({ error: "Invalid status" });
+    try {
+      const patch: any = { updated_at: new Date().toISOString() };
+      if (status !== undefined) patch.status = status;
+      if (notes !== undefined) patch.notes = notes;
+      const { data, error } = await db.from("equipment").update(patch).eq("id", req.params.id).eq("facility_id", req.facilityId).select().single();
+      if (error) throw error;
+      logAudit({ action: "EQUIPMENT_STATUS_CHANGED", entityType: "EQUIPMENT", entityId: req.params.id, details: { status }, ip: req.ip, facility_id: req.facilityId });
+      emitUpdate("yard_update", { type: "EQUIPMENT" });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/admin/equipment/:id", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    try {
+      await db.from("equipment").delete().eq("id", req.params.id).eq("facility_id", req.facilityId);
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });

@@ -767,6 +767,102 @@ export default function Settings() {
           </div>
         )}
       </div>
+
+      <EquipmentPanel />
+    </div>
+  );
+}
+
+const EQUIPMENT_TYPES = [
+  { value: "yard_tractor", label: "Yard tractor" },
+  { value: "forklift", label: "Forklift" },
+  { value: "dock_equipment", label: "Dock equipment" },
+  { value: "gate_equipment", label: "Gate equipment" },
+  { value: "other", label: "Other" },
+];
+const EQUIPMENT_STATUSES = ["available", "in_use", "maintenance", "broken"];
+
+function EquipmentPanel() {
+  const { toast } = useToast();
+  const [rows, setRows] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState({ name: "", type: "yard_tractor" });
+  const [busy, setBusy] = useState(false);
+
+  const load = () => {
+    fetch("/api/admin/equipment").then((r) => r.json()).then(setRows).finally(() => setLoading(false));
+  };
+  useEffect(load, []);
+
+  const addEquipment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    const res = await fetch("/api/admin/equipment", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) });
+    setBusy(false);
+    if (res.ok) {
+      toast("Equipment added", "success");
+      setForm({ name: "", type: "yard_tractor" });
+      load();
+    } else {
+      toast("Failed to add equipment", "error");
+    }
+  };
+
+  const setStatus = async (id: number, status: string) => {
+    const res = await fetch(`/api/admin/equipment/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
+    if (res.ok) load();
+    else toast("Failed to update status", "error");
+  };
+
+  const remove = async (id: number) => {
+    await fetch(`/api/admin/equipment/${id}`, { method: "DELETE" });
+    load();
+  };
+
+  const statusColor: Record<string, string> = {
+    available: "bg-teal-100 text-teal-700",
+    in_use: "bg-indigo-100 text-indigo-700",
+    maintenance: "bg-amber-100 text-amber-700",
+    broken: "bg-red-100 text-red-700",
+  };
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-[2rem] p-8 space-y-5">
+      <div>
+        <h3 className="font-bold text-slate-900 text-lg">Equipment &amp; Maintenance</h3>
+        <p className="text-xs text-slate-500 mt-1">Yard tractors, forklifts, dock and gate equipment — operational status, not a service ticket system.</p>
+      </div>
+
+      <form onSubmit={addEquipment} className="flex flex-wrap gap-2 items-end">
+        <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Tractor 3" className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm flex-1 min-w-[160px]" />
+        <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm">
+          {EQUIPMENT_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+        </select>
+        <button type="submit" disabled={busy} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50">Add</button>
+      </form>
+
+      {loading ? (
+        <p className="text-sm text-slate-400">Loading...</p>
+      ) : rows.length === 0 ? (
+        <p className="text-sm text-slate-400">No equipment tracked yet.</p>
+      ) : (
+        <div className="space-y-2">
+          {rows.map((eq) => (
+            <div key={eq.id} className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-100 rounded-xl px-4 py-2.5">
+              <div className="min-w-0">
+                <p className="font-bold text-slate-900 text-sm truncate">{eq.name}</p>
+                <p className="text-xs text-slate-400">{EQUIPMENT_TYPES.find((t) => t.value === eq.type)?.label || eq.type}</p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <select value={eq.status} onChange={(e) => setStatus(eq.id, e.target.value)} className={`text-xs font-bold uppercase tracking-wider px-2 py-1 rounded-full border-0 ${statusColor[eq.status]}`}>
+                  {EQUIPMENT_STATUSES.map((s) => <option key={s} value={s}>{s.replace("_", " ")}</option>)}
+                </select>
+                <button onClick={() => remove(eq.id)} className="text-slate-400 hover:text-red-600"><Trash2 size={14} /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
