@@ -28,6 +28,7 @@ import { getCurrentTemperature } from "./server/services/smhiWeather.js";
 import { generateSecret as generateTotpSecret, verifyToken as verifyTotpToken, otpauthUrl as totpUri } from "./server/services/totp.js";
 import { checkStageTransition, isLoadReady } from "./server/services/gatePassStages.js";
 import { isDockSlaBreached } from "./server/services/dockSla.js";
+import { countTodayNoShows, countExpectedArrivalsToday } from "./server/services/todayOps.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -174,7 +175,24 @@ async function startServer() {
     const avgDwellMinutes = dwellSamples.length ? Math.round(dwellSamples.reduce((a, b) => a + b, 0) / dwellSamples.length) : null;
     const dailyVelocity = (departedToday || []).length;
 
-    return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24, avgDwellMinutes, dailyVelocity };
+    // Command Center gap: the "Today's Operations" answer (expected
+    // arrivals / no-shows / active moves) didn't exist anywhere as a
+    // headline number — reuses this same todayStart boundary rather than
+    // introducing a second definition of "today".
+    const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000).toISOString();
+    const { data: todaysAppointments } = await db
+      .from("appointments")
+      .select("status, start_time, no_show_flag")
+      .eq("facility_id", facilityId)
+      .gte("start_time", todayStart.toISOString())
+      .lt("start_time", todayEnd);
+    const today = {
+      expectedArrivals: countExpectedArrivalsToday(todaysAppointments || [], todayStart.toISOString(), todayEnd),
+      noShows: countTodayNoShows(todaysAppointments || [], todayStart.toISOString()),
+      activeMoves: moves.length,
+    };
+
+    return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24, avgDwellMinutes, dailyVelocity, today };
   };
 
   const emitUpdate = async (event = "yard_update", payload: any = null) => {
