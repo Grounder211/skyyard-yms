@@ -397,7 +397,6 @@ export default function Settings() {
           <select value={settings.document_policy || "warn"} onChange={(e) => setSettings({ ...settings, document_policy: e.target.value })} className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm">
             <option value="warn">Warn only</option>
             <option value="block">Block gate entry</option>
-            <option value="require_approval">Require supervisor approval</option>
           </select>
         </div>
 
