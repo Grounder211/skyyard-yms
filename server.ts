@@ -1922,7 +1922,6 @@ async function startServer() {
 
   // Analytics Helper
   const getMetrics = async (start: string, end: string, facilityId: number) => {
-    const { data: totalTrucks } = await db.from("walkin_registrations").select("id", { count: "exact", head: true }).eq("facility_id", facilityId).gte("created_at", start).lte("created_at", end);
     const { data: completed } = await db.from("walkin_registrations").select("checked_in_at, checked_out_at").eq("facility_id", facilityId).eq("status", "completed").gte("created_at", start).lte("created_at", end);
     let avgTat = 0;
     if (completed && completed.length > 0) {
@@ -1930,7 +1929,19 @@ async function startServer() {
       avgTat = Math.round(total / completed.length);
     }
     const countRes = await db.from("walkin_registrations").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).gte("created_at", start).lte("created_at", end);
-    return { totalTrucks: countRes.count || 0, avgTat };
+
+    // ExecutiveDashboard's KPI row (Total Movements/Avg Dwell/On-Time Rate/
+    // SLA Breaches) was reading fields this endpoint never returned — it
+    // silently rendered 0 for three of four cards. On-time uses the same
+    // isOnTimeArrival logic the carrier-dashboard KPIs and no-show cron
+    // already use, so the numbers agree with what staff see elsewhere.
+    const { data: appts } = await db.from("appointments").select("start_time, checked_in_at, grace_period_minutes").eq("facility_id", facilityId).not("checked_in_at", "is", null).gte("start_time", start).lte("start_time", end);
+    const onTimeCount = (appts || []).filter((a: any) => isOnTimeArrival(a.start_time, a.checked_in_at, a.grace_period_minutes)).length;
+    const onTimeRate = appts && appts.length > 0 ? Math.round((onTimeCount / appts.length) * 1000) / 10 : null;
+
+    const { count: detentionEvents } = await db.from("detention_records").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).gte("created_at", start).lte("created_at", end);
+
+    return { totalTrucks: countRes.count || 0, avgTat, onTimeRate, detentionEvents: detentionEvents || 0 };
   };
 
   app.get("/api/admin/analytics", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
@@ -2765,14 +2776,6 @@ async function startServer() {
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
-  });
-
-  app.get("/api/period-stats", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
-    const facilityId = req.facilityId;
-    const days = Number(req.query.days) || 7;
-    const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-    const { count } = await db.from("walkin_registrations").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).gte("created_at", start);
-    res.json({ days, totalTrucks: count || 0 });
   });
 
   // ReportBuilder's metric library (m1-m5) rendered a fake pulsing-bar
