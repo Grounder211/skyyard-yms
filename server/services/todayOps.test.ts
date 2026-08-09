@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers, summarizeZoneOccupancy } from "./todayOps.js";
+import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers, summarizeZoneOccupancy, matchExceptionPlatesToSpotIds } from "./todayOps.js";
 
 describe("countTodayNoShows", () => {
   const todayStart = "2026-08-09T00:00:00.000Z";
@@ -34,6 +34,21 @@ describe("countExpectedArrivalsToday", () => {
 
   it("returns 0 for an empty list", () => {
     expect(countExpectedArrivalsToday([], todayStart, todayEnd)).toBe(0);
+  });
+});
+
+describe("matchExceptionPlatesToSpotIds", () => {
+  it("matches spots whose plate has an open exception", () => {
+    const spots = [{ id: 1, plate: "ABC123" }, { id: 2, plate: "XYZ999" }, { id: 3, plate: null }];
+    expect(matchExceptionPlatesToSpotIds(["ABC123"], spots)).toEqual([1]);
+  });
+
+  it("returns empty when no plates match", () => {
+    expect(matchExceptionPlatesToSpotIds(["NOPE"], [{ id: 1, plate: "ABC123" }])).toEqual([]);
+  });
+
+  it("ignores spots with no plate", () => {
+    expect(matchExceptionPlatesToSpotIds(["ABC123"], [{ id: 1, plate: null }])).toEqual([]);
   });
 });
 

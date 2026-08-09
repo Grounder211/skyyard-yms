@@ -28,7 +28,7 @@ import { getCurrentTemperature } from "./server/services/smhiWeather.js";
 import { generateSecret as generateTotpSecret, verifyToken as verifyTotpToken, otpauthUrl as totpUri } from "./server/services/totp.js";
 import { checkStageTransition, isLoadReady } from "./server/services/gatePassStages.js";
 import { isDockSlaBreached } from "./server/services/dockSla.js";
-import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers, summarizeZoneOccupancy } from "./server/services/todayOps.js";
+import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers, summarizeZoneOccupancy, matchExceptionPlatesToSpotIds } from "./server/services/todayOps.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -209,7 +209,10 @@ async function startServer() {
     const { data: equipmentRows } = await db.from("equipment").select("status").eq("facility_id", facilityId);
     const equipmentDown = (equipmentRows || []).filter((e: any) => e.status === "maintenance" || e.status === "broken").length;
 
-    return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24, avgDwellMinutes, dailyVelocity, today, zones, unresolvedSafetySpotIds, equipmentDown, equipmentTotal: (equipmentRows || []).length };
+    const { data: openTrailerExceptions } = await db.from("exceptions").select("entity_id").eq("facility_id", facilityId).eq("entity_type", "TRAILER").neq("status", "resolved");
+    const spotsWithOpenExceptions = matchExceptionPlatesToSpotIds((openTrailerExceptions || []).map((e: any) => e.entity_id), flatSpots);
+
+    return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24, avgDwellMinutes, dailyVelocity, today, zones, unresolvedSafetySpotIds, equipmentDown, equipmentTotal: (equipmentRows || []).length, spotsWithOpenExceptions };
   };
 
   const emitUpdate = async (event = "yard_update", payload: any = null) => {

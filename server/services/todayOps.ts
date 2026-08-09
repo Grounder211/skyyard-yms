@@ -25,6 +25,18 @@ export function summarizeZoneOccupancy(
   return Array.from(byZone.values()).sort((a, b) => a.zone.localeCompare(b.zone));
 }
 
+// Digital twin, minimal slice: exceptions already link to a trailer via
+// entity_type="TRAILER" + entity_id=plate (used by blacklist/seal/reefer
+// exceptions alike) — no new schema needed to plot them on the spot the
+// trailer is actually sitting in.
+export function matchExceptionPlatesToSpotIds(
+  openExceptionPlates: string[],
+  spots: { id: number; plate: string | null }[]
+): number[] {
+  const plateSet = new Set(openExceptionPlates);
+  return spots.filter((s) => s.plate && plateSet.has(s.plate)).map((s) => s.id);
+}
+
 export function countBusyHostlers(moves: { status: string; assigned_to: number | null }[]): number {
   const busy = new Set(
     moves.filter((m) => m.status === "IN_PROGRESS" && m.assigned_to != null).map((m) => m.assigned_to)
