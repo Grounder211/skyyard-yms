@@ -981,6 +981,21 @@ async function startServer() {
         return res.status(403).json({ error: "BLACKLIST_BLOCK", reason: blacklistHit.reason });
       }
 
+      // driver_ratings has existed since before this session (punctuality/
+      // cooperation/compliance, written on gate-pass exit) but nothing ever
+      // read it back — a guard re-registering a driver with a history of
+      // problems had no way to know without remembering it themselves.
+      // Non-blocking: surfaced as a caution, not a gate.
+      let driverCaution: { average: number; count: number } | null = null;
+      const { data: matchedDriver } = await db.from("drivers").select("id").eq("phone", phone).maybeSingle();
+      if (matchedDriver) {
+        const { data: ratings } = await db.from("driver_ratings").select("rating").eq("driver_id", matchedDriver.id).order("created_at", { ascending: false }).limit(20);
+        if (ratings && ratings.length > 0) {
+          const avg = ratings.reduce((s, r: any) => s + (r.rating || 0), 0) / ratings.length;
+          if (avg <= 2) driverCaution = { average: Math.round(avg * 10) / 10, count: ratings.length };
+        }
+      }
+
       const { data: walkin, error } = await db.from("walkin_registrations").insert({
         driver_name, carrier_name, phone, truck_plate, trailer_number: trailer_number || null,
         load_type, direction, status: "pending", facility_id: facilityId,
@@ -1009,7 +1024,7 @@ async function startServer() {
         }
         const pass = await issueGatePass({ facilityId, plate: truck_plate, carrierName: carrier_name, spotName: assign.spotName, issuedBy: req.session?.user?.id, entrySource: "guard_walkin" });
         emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
-        return res.json({ success: true, id: `WK-${walkin.id}`, spotName: assign.spotName, passNumber: pass?.pass_number });
+        return res.json({ success: true, id: `WK-${walkin.id}`, spotName: assign.spotName, passNumber: pass?.pass_number, driverCaution });
       }
 
       logAudit({ action: "WALKIN_REGISTERED", entityType: "WALKIN", entityId: String(walkin.id), details: { truck_plate }, ip: req.ip, facility_id: facilityId });
@@ -1017,7 +1032,7 @@ async function startServer() {
       notify({ type: "WALKIN_NEEDS_ATTENTION", recipientType: "ADMIN", recipientId: null, data: { title: "Walk-in waiting for a spot", body: `${driver_name} (${carrier_name}, ${truck_plate}) is queued at the gate — yard is at capacity. Ref: WK-${walkin.id}`, link: "/gate" } });
 
       emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
-      res.json({ success: true, id: `WK-${walkin.id}`, status: "QUEUED" });
+      res.json({ success: true, id: `WK-${walkin.id}`, status: "QUEUED", driverCaution });
     } catch (e: any) {
       logger.error("Walk-in registration failed", { error: e });
       res.status(500).json({ error: "System Neural Failure: " + e.message });
@@ -2336,6 +2351,11 @@ async function startServer() {
           status: "ACTIVE", invoice_status: "pending",
         });
         notify({ type: "DETENTION_WARNING", recipientType: "CARRIER", recipientId: null, data: { title: "Detention Alert", body: `Trailer ${t.plate} has exceeded free dwell time. Detention charges applying.`, plate: t.plate } });
+        // A trailer that just went into detention is the one dispatch most
+        // needs to move next — bump any open move order for it so it
+        // doesn't sit behind routine repositions in the FIFO-by-priority
+        // queue (see Phase UU).
+        await db.from("move_orders").update({ priority: "urgent" }).eq("trailer_id", t.id).neq("status", "COMPLETED").neq("priority", "urgent");
       }
     }
   });
@@ -2349,7 +2369,7 @@ async function startServer() {
     const { data: facilities } = await db.from("facility_settings").select("facility_id, dock_sla_minutes");
     for (const f of facilities || []) {
       const slaMinutes = f.dock_sla_minutes || 60;
-      const { data: stuck } = await db.from("gate_passes").select("id, plate, stage, updated_at").eq("facility_id", f.facility_id).in("stage", ["LOADING", "UNLOADING"]);
+      const { data: stuck } = await db.from("gate_passes").select("id, plate, stage, updated_at, trailer_id").eq("facility_id", f.facility_id).in("stage", ["LOADING", "UNLOADING"]);
       for (const p of stuck || []) {
         if (!isDockSlaBreached(p.stage, p.updated_at, slaMinutes)) continue;
         const { data: existing } = await db.from("exceptions").select("id").eq("entity_type", "GATE_PASS").eq("entity_id", String(p.id)).eq("exception_type", "dock_sla_breach").eq("status", "open").maybeSingle();
@@ -2361,6 +2381,7 @@ async function startServer() {
           description: `Over ${slaMinutes} minutes in ${p.stage} — dock may be blocked or the load needs attention.`,
           source: "dock_sla_check",
         });
+        if (p.trailer_id) await db.from("move_orders").update({ priority: "urgent" }).eq("trailer_id", p.trailer_id).neq("status", "COMPLETED").neq("priority", "urgent");
       }
     }
   });
