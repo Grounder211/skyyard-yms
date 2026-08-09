@@ -732,7 +732,7 @@ async function startServer() {
         ...trailers.map((t: any) => ({ id: `trailer-${t.id}`, title: t.plate, subtitle: `Trailer · ${t.carrier || ""}`, url: `/tracking` })),
         ...(appts || []).map((a: any) => ({ id: `appt-${a.id}`, title: a.plate, subtitle: `Appointment · ${a.carrier || ""}`, url: `/calendar` })),
         ...(carriers || []).map((c: any) => ({ id: `carrier-${c.id}`, title: c.name, subtitle: "Carrier", url: `/network` })),
-        ...drivers.map((d: any) => ({ id: `driver-${d.id}`, title: d.name || d.phone, subtitle: `Driver · ${d.default_plate || d.phone || ""}`, url: `/gate` })),
+        ...drivers.map((d: any) => ({ id: `driver-${d.id}`, title: d.name || d.phone, subtitle: `Driver · ${d.default_plate || d.phone || ""}`, url: `/drivers/${d.id}` })),
         ...(exceptions || []).map((e: any) => ({ id: `exception-${e.id}`, title: e.title, subtitle: `Exception · ${e.status}`, url: `/exceptions` })),
         ...gatePasses.map((g: any) => ({ id: `pass-${g.id}`, title: g.pass_number, subtitle: `Gate pass · ${g.plate} · ${g.carrier_name || ""}`, url: `/pipeline` })),
         ...(safetyIncidents || []).map((s: any) => ({ id: `safety-${s.id}`, title: `${s.category?.replace(/_/g, " ")}`, subtitle: `Safety · ${s.severity} · ${s.plate || ""}`, url: `/safety` })),
@@ -1759,6 +1759,32 @@ async function startServer() {
       const { data } = await db.from("driver_ratings").select("*").eq("driver_id", req.params.id).order("created_at", { ascending: false }).limit(20);
       const avg = (data || []).length ? Math.round((data as any[]).reduce((s, r) => s + (r.rating || 0), 0) / data!.length) : null;
       res.json({ average: avg, count: (data || []).length, ratings: data || [] });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Phase 07: Driver Management — profile, badge, ratings, appointment
+  // history, and safety history all existed as real data with no
+  // consolidated view anywhere for staff (only the driver's own portal
+  // saw fragments of it). Reuses the ratings query above rather than a
+  // second average calculation.
+  app.get("/api/admin/drivers/:id", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    try {
+      const { data: driver } = await db.from("drivers").select("*").eq("id", req.params.id).maybeSingle();
+      if (!driver) return res.status(404).json({ error: "Driver not found" });
+
+      const [{ data: ratings }, { data: appointments }, { data: safetyIncidents }] = await Promise.all([
+        db.from("driver_ratings").select("*").eq("driver_id", req.params.id).order("created_at", { ascending: false }).limit(20),
+        db.from("appointments").select("id, plate, carrier, start_time, status, no_show_flag").eq("driver_id", req.params.id).order("start_time", { ascending: false }).limit(20),
+        db.from("safety_incidents").select("id, category, severity, status, created_at").eq("driver_id", req.params.id).order("created_at", { ascending: false }).limit(20),
+      ]);
+      const avgRating = (ratings || []).length ? Math.round((ratings as any[]).reduce((s, r) => s + (r.rating || 0), 0) / ratings!.length) : null;
+
+      res.json({
+        driver, avgRating, ratingCount: (ratings || []).length, ratings: ratings || [],
+        appointments: appointments || [], safetyIncidents: safetyIncidents || [],
+      });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
