@@ -336,6 +336,7 @@ function Dashboard() {
   const [unresolvedSafetySpotIds, setUnresolvedSafetySpotIds] = React.useState<number[]>([]);
   const [spotsWithOpenExceptions, setSpotsWithOpenExceptions] = React.useState<number[]>([]);
   const [equipment, setEquipment] = React.useState({ down: 0, total: 0 });
+  const [forecast, setForecast] = React.useState<{ threshold: number; windows: { minutes: number; expectedOccupied: number; totalSpots: number; pct: number; atRisk: boolean }[] } | null>(null);
 
   React.useEffect(() => {
     fetch("/api/yard-status")
@@ -351,6 +352,7 @@ function Dashboard() {
         setSpotsWithOpenExceptions(data.spotsWithOpenExceptions || []);
         setEquipment({ down: data.equipmentDown || 0, total: data.equipmentTotal || 0 });
       });
+    fetch("/api/admin/capacity-forecast").then(r => r.ok ? r.json() : null).then(setForecast).catch(() => {});
     const loadAttention = () => fetch("/api/admin/needs-attention").then(r => r.ok ? r.json() : { critical: [], timeCritical: [], operations: [], upcoming: [] }).then(setAttention).catch(() => {});
     loadAttention();
     const t = setInterval(loadAttention, 60000);
@@ -424,6 +426,25 @@ function Dashboard() {
           </Reveal>
         </div>
       </div>
+
+      {forecast && forecast.windows.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-[2rem] p-6">
+          <div className="flex items-baseline justify-between mb-4">
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Capacity Forecast</p>
+            <p className="text-[11px] font-semibold text-slate-400">Risk threshold {forecast.threshold}% · from real scheduled arrivals/departures</p>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            {forecast.windows.map((w) => (
+              <div key={w.minutes} className={`rounded-2xl border p-4 ${w.atRisk ? "bg-amber-50 border-amber-200" : "bg-slate-50 border-slate-100"}`}>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">In {w.minutes < 60 ? `${w.minutes}m` : `${w.minutes / 60}h`}</p>
+                <p className={`text-2xl font-bold mt-1 ${w.atRisk ? "text-amber-700" : "text-slate-900"}`}>{w.pct}%</p>
+                <p className="text-[11px] font-semibold text-slate-400">{w.expectedOccupied} / {w.totalSpots} spots</p>
+                {w.atRisk && <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700 mt-1">Capacity risk</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <Reveal preset="fade-up" delay={300} className="lg:col-span-2 shadow-spatial">

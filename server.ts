@@ -32,6 +32,7 @@ import { isDockSlaBreached } from "./server/services/dockSla.js";
 import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers, summarizeZoneOccupancy, matchExceptionPlatesToSpotIds } from "./server/services/todayOps.js";
 import { classifyAppointmentHealth } from "./server/services/appointmentHealth.js";
 import { findDockConflict } from "./server/services/dockConflict.js";
+import { forecastOccupancy } from "./server/services/capacityForecast.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3650,6 +3651,30 @@ async function startServer() {
   // Priority 30: Detention Control Center summary — accruing/disputed/
   // invoiced/paid, one query over the same detention_records rows the
   // carrier-balances and dispute endpoints already read.
+  // Priority 25: capacity forecast from real scheduled arrivals/departures.
+  app.get("/api/admin/capacity-forecast", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const facilityId = req.facilityId;
+    const windows = [30, 60, 120, 240];
+    try {
+      const now = Date.now();
+      const horizon = new Date(now + Math.max(...windows) * 60000).toISOString();
+      const [{ data: spots }, { data: upcoming }] = await Promise.all([
+        db.from("spots").select("status").eq("facility_id", facilityId),
+        db.from("appointments").select("start_time, end_time, status").eq("facility_id", facilityId).lte("start_time", horizon).gte("end_time", new Date(now).toISOString()).not("status", "in", "(CANCELLED,COMPLETED)"),
+      ]);
+      const totalSpots = (spots || []).length;
+      const currentOccupied = (spots || []).filter((s: any) => s.status === "OCCUPIED").length;
+      const arrivalsByWindow = windows.map((m) => (upcoming || []).filter((a: any) => a.status === "SCHEDULED" && new Date(a.start_time).getTime() > now && new Date(a.start_time).getTime() <= now + m * 60000).length);
+      const departuresByWindow = windows.map((m) => (upcoming || []).filter((a: any) => a.end_time && new Date(a.end_time).getTime() > now && new Date(a.end_time).getTime() <= now + m * 60000).length);
+      // ponytail: 90% risk threshold is a constant, not a setting — make it
+      // configurable when someone actually asks for a different number.
+      const threshold = 90;
+      res.json({ currentOccupied, totalSpots, threshold, windows: forecastOccupancy(currentOccupied, totalSpots, arrivalsByWindow, departuresByWindow, windows, threshold) });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/admin/detention/summary", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     try {
       const { data: records } = await db.from("detention_records").select("status, dispute_status, invoice_status, amount_owed").eq("facility_id", req.facilityId);
