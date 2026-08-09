@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers } from "./todayOps.js";
+import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers, summarizeZoneOccupancy } from "./todayOps.js";
 
 describe("countTodayNoShows", () => {
   const todayStart = "2026-08-09T00:00:00.000Z";
@@ -57,5 +57,29 @@ describe("countBusyHostlers", () => {
 
   it("returns 0 when nothing is in progress", () => {
     expect(countBusyHostlers([{ status: "PENDING", assigned_to: null }])).toBe(0);
+  });
+});
+
+describe("summarizeZoneOccupancy", () => {
+  it("groups spots by zone and counts occupied vs total", () => {
+    const spots = [
+      { zone_name: "Yard Zone 1", status: "OCCUPIED" },
+      { zone_name: "Yard Zone 1", status: "EMPTY" },
+      { zone_name: "Dock Row A", status: "OCCUPIED" },
+    ];
+    expect(summarizeZoneOccupancy(spots)).toEqual([
+      { zone: "Dock Row A", total: 1, occupied: 1 },
+      { zone: "Yard Zone 1", total: 2, occupied: 1 },
+    ]);
+  });
+
+  it("buckets spots with no zone under Unzoned", () => {
+    expect(summarizeZoneOccupancy([{ zone_name: null, status: "EMPTY" }])).toEqual([
+      { zone: "Unzoned", total: 1, occupied: 0 },
+    ]);
+  });
+
+  it("returns an empty array for no spots", () => {
+    expect(summarizeZoneOccupancy([])).toEqual([]);
   });
 });

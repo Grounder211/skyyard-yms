@@ -11,6 +11,20 @@ export function countTodayNoShows(
   }).length;
 }
 
+export function summarizeZoneOccupancy(
+  spots: { zone_name: string | null; status: string }[]
+): { zone: string; total: number; occupied: number }[] {
+  const byZone = new Map<string, { zone: string; total: number; occupied: number }>();
+  for (const s of spots) {
+    const zone = s.zone_name || "Unzoned";
+    if (!byZone.has(zone)) byZone.set(zone, { zone, total: 0, occupied: 0 });
+    const entry = byZone.get(zone)!;
+    entry.total++;
+    if (s.status === "OCCUPIED") entry.occupied++;
+  }
+  return Array.from(byZone.values()).sort((a, b) => a.zone.localeCompare(b.zone));
+}
+
 export function countBusyHostlers(moves: { status: string; assigned_to: number | null }[]): number {
   const busy = new Set(
     moves.filter((m) => m.status === "IN_PROGRESS" && m.assigned_to != null).map((m) => m.assigned_to)

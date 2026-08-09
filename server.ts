@@ -28,7 +28,7 @@ import { getCurrentTemperature } from "./server/services/smhiWeather.js";
 import { generateSecret as generateTotpSecret, verifyToken as verifyTotpToken, otpauthUrl as totpUri } from "./server/services/totp.js";
 import { checkStageTransition, isLoadReady } from "./server/services/gatePassStages.js";
 import { isDockSlaBreached } from "./server/services/dockSla.js";
-import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers } from "./server/services/todayOps.js";
+import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers, summarizeZoneOccupancy } from "./server/services/todayOps.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -196,7 +196,9 @@ async function startServer() {
       hostlersAvailable: Math.max(0, (totalHostlers || 0) - busyHostlers),
     };
 
-    return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24, avgDwellMinutes, dailyVelocity, today };
+    const zones = summarizeZoneOccupancy(flatSpots);
+
+    return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24, avgDwellMinutes, dailyVelocity, today, zones };
   };
 
   const emitUpdate = async (event = "yard_update", payload: any = null) => {

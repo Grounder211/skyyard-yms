@@ -325,6 +325,7 @@ function Dashboard() {
   const [avgDwellMinutes, setAvgDwellMinutes] = React.useState<number | null>(null);
   const [dailyVelocity, setDailyVelocity] = React.useState(0);
   const [today, setToday] = React.useState<{ expectedArrivals: number; noShows: number; activeMoves: number; hostlersAvailable: number; hostlersBusy: number }>({ expectedArrivals: 0, noShows: 0, activeMoves: 0, hostlersAvailable: 0, hostlersBusy: 0 });
+  const [zones, setZones] = React.useState<{ zone: string; total: number; occupied: number }[]>([]);
 
   React.useEffect(() => {
     fetch("/api/yard-status")
@@ -335,6 +336,7 @@ function Dashboard() {
         setAvgDwellMinutes(data.avgDwellMinutes);
         setDailyVelocity(data.dailyVelocity ?? 0);
         setToday(data.today || { expectedArrivals: 0, noShows: 0, activeMoves: 0, hostlersAvailable: 0, hostlersBusy: 0 });
+        setZones(data.zones || []);
       });
     const loadAttention = () => fetch("/api/admin/needs-attention").then(r => r.ok ? r.json() : { critical: [], timeCritical: [], operations: [], upcoming: [] }).then(setAttention).catch(() => {});
     loadAttention();
@@ -399,6 +401,15 @@ function Dashboard() {
                 <Legend label="Available" color="bg-slate-200" />
               </div>
             </div>
+            {zones.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-6">
+                {zones.map((z) => (
+                  <span key={z.zone} className="text-xs font-bold bg-slate-50 border border-slate-200 text-slate-600 rounded-lg px-3 py-1.5">
+                    {z.zone}: {z.occupied}/{z.total}
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="flex flex-wrap gap-3">
               {spots.map((spot: any) => (
                 <div
