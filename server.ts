@@ -1078,7 +1078,7 @@ async function startServer() {
 
       if (assign?.assigned) {
         logAudit({ action: "WALKIN_AUTO_CHECKIN", entityType: "WALKIN", entityId: String(walkin.id), details: { truck_plate, spot: assign.spotName }, ip: req.ip, facility_id: facilityId });
-        notify({ type: "WALKIN_CONFIRMED", recipientType: "driver", recipientId: walkin.id, data: { phone, title: "Registration Sync", body: `SkyYard: Walk-in confirmed for ${truck_plate}. Proceeds to parking spot: ${assign.spotName}. Reference: WK-${walkin.id}` } });
+        notify({ type: "WALKIN_CONFIRMED", recipientType: "driver", recipientId: matchedDriver?.id || null, data: { phone, title: "Registration Sync", body: `SkyYard: Walk-in confirmed for ${truck_plate}. Proceeds to parking spot: ${assign.spotName}. Reference: WK-${walkin.id}` } });
         if (po_number || sku_summary) {
           await db.from("trailers").update({ po_number: po_number || null, sku_summary: sku_summary || null }).eq("plate", truck_plate).eq("facility_id", facilityId);
         }
@@ -1098,7 +1098,7 @@ async function startServer() {
       }
 
       logAudit({ action: "WALKIN_REGISTERED", entityType: "WALKIN", entityId: String(walkin.id), details: { truck_plate }, ip: req.ip, facility_id: facilityId });
-      notify({ type: "WALKIN_QUEUED", recipientType: "driver", recipientId: walkin.id, data: { phone, title: "Registration Queued", body: `SkyYard: You are in queue. Reference: WK-${walkin.id}. Please wait for spot assignment.` } });
+      notify({ type: "WALKIN_QUEUED", recipientType: "driver", recipientId: matchedDriver?.id || null, data: { phone, title: "Registration Queued", body: `SkyYard: You are in queue. Reference: WK-${walkin.id}. Please wait for spot assignment.` } });
       notify({ type: "WALKIN_NEEDS_ATTENTION", recipientType: "ADMIN", recipientId: null, data: { title: "Walk-in waiting for a spot", body: `${driver_name} (${carrier_name}, ${truck_plate}) is queued at the gate — yard is at capacity. Ref: WK-${walkin.id}`, link: "/gate" } });
 
       emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
