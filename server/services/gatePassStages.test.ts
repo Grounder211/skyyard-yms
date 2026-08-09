@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkStageTransition, isLateralDockSwap, STAGE_ORDER } from "./gatePassStages.js";
+import { checkStageTransition, isLateralDockSwap, isLoadReady, STAGE_ORDER } from "./gatePassStages.js";
 
 const verified = { license_verified: true, vehicle_matched: true };
 const unverified = { license_verified: false, vehicle_matched: false };
@@ -61,5 +61,28 @@ describe("gatePassStages", () => {
     const result = checkStageTransition("IN_PASS", "TELEPORTED", verified);
     expect(result.ok).toBe(false);
     expect(result.error).toBe("Invalid stage");
+  });
+
+  it("isLoadReady rejects mid-operation cargo statuses", () => {
+    expect(isLoadReady("expected")).toBe(false);
+    expect(isLoadReady("arrived")).toBe(false);
+    expect(isLoadReady("checked")).toBe(false);
+    expect(isLoadReady("loading")).toBe(false);
+    expect(isLoadReady("unloading")).toBe(false);
+  });
+
+  it("isLoadReady accepts terminal cargo statuses", () => {
+    expect(isLoadReady("loaded")).toBe(true);
+    expect(isLoadReady("unloaded")).toBe(true);
+    expect(isLoadReady("short")).toBe(true);
+    expect(isLoadReady("over")).toBe(true);
+    expect(isLoadReady("damaged")).toBe(true);
+    expect(isLoadReady("rejected")).toBe(true);
+    expect(isLoadReady("completed")).toBe(true);
+  });
+
+  it("isLoadReady treats no cargo status (untracked trailer) as ready", () => {
+    expect(isLoadReady(null)).toBe(true);
+    expect(isLoadReady(undefined)).toBe(true);
   });
 });

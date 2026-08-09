@@ -26,7 +26,7 @@ import { db, unwrap } from "./server/supabaseClient.js";
 import { logger } from "./server/logger.js";
 import { getCurrentTemperature } from "./server/services/smhiWeather.js";
 import { generateSecret as generateTotpSecret, verifyToken as verifyTotpToken, otpauthUrl as totpUri } from "./server/services/totp.js";
-import { checkStageTransition } from "./server/services/gatePassStages.js";
+import { checkStageTransition, isLoadReady } from "./server/services/gatePassStages.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1479,6 +1479,13 @@ async function startServer() {
 
       const transition = checkStageTransition(pass.stage, stage, { license_verified: pass.license_verified, vehicle_matched: pass.vehicle_matched });
       if (!transition.ok) return res.status(400).json({ error: transition.error });
+
+      if (stage === "READY_FOR_EXIT" && pass.trailer_id) {
+        const { data: trailer } = await db.from("trailers").select("cargo_status").eq("id", pass.trailer_id).maybeSingle();
+        if (!isLoadReady(trailer?.cargo_status)) {
+          return res.status(400).json({ error: `Cargo status "${trailer?.cargo_status}" is not ready for exit — finish the load operation first` });
+        }
+      }
 
       const { data, error } = await db.from("gate_passes").update({ stage, updated_at: new Date().toISOString() }).eq("id", req.params.id).select().single();
       if (error) throw error;

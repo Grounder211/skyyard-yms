@@ -18,6 +18,14 @@ export function isLateralDockSwap(from: string, to: string): boolean {
   return (from === "LOADING" && to === "UNLOADING") || (from === "UNLOADING" && to === "LOADING");
 }
 
+// A trailer mid-operation (loading/unloading/still just arrived) has no
+// business getting READY_FOR_EXIT — that stage means "cargo is settled,
+// truck can leave." Terminal cargo states only.
+const LOAD_READY_STATUSES = ["loaded", "unloaded", "short", "over", "damaged", "rejected", "completed"];
+export function isLoadReady(cargoStatus: string | null | undefined): boolean {
+  return !cargoStatus || LOAD_READY_STATUSES.includes(cargoStatus);
+}
+
 export function checkStageTransition(
   from: string,
   to: string,
