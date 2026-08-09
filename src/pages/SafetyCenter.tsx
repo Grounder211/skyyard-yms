@@ -141,6 +141,21 @@ export default function SafetyCenter() {
   for (const i of allItems) categoryCounts[i.category] = (categoryCounts[i.category] || 0) + 1;
   const topCategories = Object.entries(categoryCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
+  // Priority 28 (Safety Command Center): trend + risk zones, derived from
+  // the same 200-most-recent rows already fetched — no new endpoint.
+  const now = Date.now();
+  const DAY = 24 * 60 * 60 * 1000;
+  const last7 = allItems.filter((i) => now - new Date(i.created_at).getTime() < 7 * DAY).length;
+  const prior7 = allItems.filter((i) => { const age = now - new Date(i.created_at).getTime(); return age >= 7 * DAY && age < 14 * DAY; }).length;
+  const trendPct = prior7 > 0 ? Math.round(((last7 - prior7) / prior7) * 100) : null;
+
+  const zoneCounts: Record<string, number> = {};
+  for (const i of allItems) {
+    const zone = i.location || (i.spot_id ? `Spot #${i.spot_id}` : null);
+    if (zone) zoneCounts[zone] = (zoneCounts[zone] || 0) + 1;
+  }
+  const riskZones = Object.entries(zoneCounts).sort((a, b) => b[1] - a[1]).slice(0, 3);
+
   return (
     <div className="space-y-8 max-w-5xl mx-auto pb-20">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -171,6 +186,27 @@ export default function SafetyCenter() {
               {CATEGORY_LABELS[cat] || cat} <span className="text-slate-400">· {n}</span>
             </span>
           ))}
+        </div>
+      )}
+
+      {(trendPct !== null || riskZones.length > 0) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="bg-white border border-slate-200 rounded-2xl p-4">
+            <span className="text-xs font-bold uppercase tracking-widest text-slate-400">7-day trend</span>
+            <p className={`text-lg font-bold mt-1 ${trendPct == null ? "text-slate-400" : trendPct > 0 ? "text-red-600" : "text-teal-600"}`}>
+              {trendPct == null ? `${last7} this week (no prior-week baseline)` : `${trendPct > 0 ? "+" : ""}${trendPct}% vs prior week (${last7} vs ${prior7})`}
+            </p>
+          </div>
+          {riskZones.length > 0 && (
+            <div className="bg-white border border-slate-200 rounded-2xl p-4">
+              <span className="text-xs font-bold uppercase tracking-widest text-slate-400">Highest-risk zones</span>
+              <div className="flex gap-2 flex-wrap mt-1.5">
+                {riskZones.map(([zone, n]) => (
+                  <span key={zone} className="text-xs font-bold px-2.5 py-1 rounded-full bg-red-50 text-red-700 border border-red-100">{zone} · {n}</span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
