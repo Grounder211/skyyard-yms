@@ -952,16 +952,6 @@ async function startServer() {
     }
   });
 
-  // Phase 5 Status Page Endpoint
-  app.get("/api/status/:id", async (req, res) => {
-    const { id } = req.params;
-    const { data: trailer } = await db.from("trailers").select("*").eq("id", id).maybeSingle();
-    if (trailer) return res.json({ type: "TRAILER", data: trailer });
-    const { data: appt } = await db.from("appointments").select("*").eq("id", id).maybeSingle();
-    if (appt) return res.json({ type: "APPOINTMENT", data: appt });
-    res.status(404).json({ error: "Node not found" });
-  });
-
   app.post("/api/walkin/register", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
     const { driver_name, carrier_name, phone, truck_plate, trailer_number, load_type, direction, po_number, sku_summary, reefer_setpoint } = req.body;
     const facilityId = req.facilityId || 1;
@@ -1640,6 +1630,17 @@ async function startServer() {
       }).select().single();
       if (error) throw error;
 
+      // Same rating-caution surfacing as guard-operated walk-in (Phase XX) —
+      // a badge-scan re-entry is still the same driver with the same
+      // history, and staff deserve the same heads-up regardless of which
+      // entry path they came through.
+      let driverCaution: { average: number; count: number } | null = null;
+      const { data: ratings } = await db.from("driver_ratings").select("rating").eq("driver_id", driver.id).order("created_at", { ascending: false }).limit(20);
+      if (ratings && ratings.length > 0) {
+        const avg = ratings.reduce((s, r: any) => s + (r.rating || 0), 0) / ratings.length;
+        if (avg <= 2) driverCaution = { average: Math.round(avg * 10) / 10, count: ratings.length };
+      }
+
       const { data: assign } = await db.rpc("walkin_autoassign_tx", {
         p_walkin_id: walkin.id, p_truck_plate: driver.default_plate, p_carrier_name: driver.carrier_name, p_facility_id: facilityId,
       });
@@ -1654,11 +1655,11 @@ async function startServer() {
         // aren't asked to re-verify what the badge itself already vouches for.
         if (pass) await db.from("gate_passes").update({ license_verified: true, vehicle_matched: true, verified_by: req.session?.user?.id, verified_at: new Date().toISOString() }).eq("id", pass.id);
         emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
-        return res.json({ success: true, driver: { name: driver.name, plate: driver.default_plate, carrier_name: driver.carrier_name }, spotName: assign.spotName, passNumber: pass?.pass_number });
+        return res.json({ success: true, driver: { name: driver.name, plate: driver.default_plate, carrier_name: driver.carrier_name }, spotName: assign.spotName, passNumber: pass?.pass_number, driverCaution });
       }
 
       emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
-      res.json({ success: true, driver: { name: driver.name, plate: driver.default_plate, carrier_name: driver.carrier_name }, queued: true });
+      res.json({ success: true, driver: { name: driver.name, plate: driver.default_plate, carrier_name: driver.carrier_name }, queued: true, driverCaution });
     } catch (e: any) {
       logger.error("Badge scan failed", { error: e.message });
       res.status(500).json({ error: e.message });
@@ -2935,11 +2936,33 @@ async function startServer() {
     }
   });
 
+  const PAYMENT_METHODS = ["bank_transfer", "card", "check", "other"];
   app.post("/api/admin/payments", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const { carrier_id, amount, payment_method, invoice_numbers, detention_record_ids } = req.body;
     const facilityId = req.facilityId;
+    const amountNum = Number(amount);
+    if (!carrier_id) return res.status(400).json({ error: "carrier_id is required" });
+    if (!Number.isFinite(amountNum) || amountNum <= 0) return res.status(400).json({ error: "amount must be a positive number" });
+    if (!PAYMENT_METHODS.includes(payment_method)) return res.status(400).json({ error: "Invalid payment_method" });
     try {
-      await db.from("payments").insert({ facility_id: facilityId, carrier_id, amount, payment_method, invoice_numbers: invoice_numbers || [] });
+      const { data: carrier } = await db.from("carriers").select("id").eq("id", carrier_id).maybeSingle();
+      if (!carrier) return res.status(404).json({ error: "Carrier not found" });
+
+      // The amount recorded and what actually gets marked "paid" used to be
+      // two unrelated things — nothing checked that the money received
+      // covered the detention records being closed out, so a $1 payment
+      // could zero out a $5,000 balance. Now the records only clear if the
+      // amount at least covers what they owe (a small rounding tolerance
+      // for currency math).
+      if (detention_record_ids && detention_record_ids.length > 0) {
+        const { data: records } = await db.from("detention_records").select("id, amount_owed").in("id", detention_record_ids).eq("facility_id", facilityId).eq("carrier_id", carrier_id);
+        const owed = (records || []).reduce((sum, r: any) => sum + Number(r.amount_owed || 0), 0);
+        if (amountNum < owed - 0.01) {
+          return res.status(400).json({ error: `Payment amount (${amountNum}) is less than the total owed on selected records (${owed})` });
+        }
+      }
+
+      await db.from("payments").insert({ facility_id: facilityId, carrier_id, amount: amountNum, payment_method, invoice_numbers: invoice_numbers || [] });
       if (invoice_numbers && invoice_numbers.length > 0) {
         await db.from("detention_records").update({ invoice_status: "paid" }).in("notes", invoice_numbers);
       }
@@ -2952,6 +2975,7 @@ async function startServer() {
       if (detention_record_ids && detention_record_ids.length > 0) {
         await db.from("detention_records").update({ invoice_status: "paid" }).in("id", detention_record_ids).eq("facility_id", facilityId);
       }
+      logAudit({ action: "PAYMENT_RECORDED", entityType: "CARRIER", entityId: String(carrier_id), details: { amount: amountNum, payment_method }, ip: req.ip, facility_id: facilityId });
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
