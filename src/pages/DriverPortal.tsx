@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Warehouse, Truck, KeyRound, LogOut, Loader2, Clock, CheckCircle2, ShieldCheck, IdCard } from "lucide-react";
+import { Warehouse, Truck, KeyRound, LogOut, Loader2, Clock, CheckCircle2, ShieldCheck, IdCard, Star } from "lucide-react";
 import { motion } from "motion/react";
 import { QRCodeSVG } from "qrcode.react";
 import { Link } from "react-router-dom";
@@ -18,6 +18,7 @@ export default function DriverPortal() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState<{ appointments: any[]; walkins: any[] }>({ appointments: [], walkins: [] });
+  const [rating, setRating] = useState<{ avgRating: number | null; ratingCount: number }>({ avgRating: null, ratingCount: 0 });
 
   const [profileForm, setProfileForm] = useState({ name: "", truck_plate: "", carrier_name: "", license_number: "", vehicle_type: VEHICLE_TYPES[0] });
   const [profileBusy, setProfileBusy] = useState(false);
@@ -30,6 +31,7 @@ export default function DriverPortal() {
     }
     const me = await meRes.json();
     setDriver(me.driver);
+    setRating({ avgRating: me.avgRating, ratingCount: me.ratingCount || 0 });
     if (me.driver && !me.driver.badge_issued_at) {
       setProfileForm((f) => ({ ...f, name: me.driver.name || "", truck_plate: me.driver.default_plate || "" }));
     }
@@ -164,6 +166,11 @@ export default function DriverPortal() {
               <div>
                 <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Signed in as</p>
                 <p className="text-lg font-bold text-slate-900">{driver.name || driver.phone}</p>
+                {rating.ratingCount > 0 && (
+                  <p className="text-sm text-slate-500 flex items-center gap-1 mt-1">
+                    <Star size={14} className="text-amber-500 fill-amber-500" /> {rating.avgRating}/5 · {rating.ratingCount} rating{rating.ratingCount === 1 ? "" : "s"}
+                  </p>
+                )}
               </div>
               <NotificationBell scope="driver" />
             </div>

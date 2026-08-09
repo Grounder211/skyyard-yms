@@ -2300,8 +2300,12 @@ async function startServer() {
 
   app.get("/api/driver/me", async (req: any, res) => {
     if (!req.session?.driver_id) return res.status(401).json({ error: "Not authenticated" });
-    const { data: driver } = await db.from("drivers").select("id, phone, name, default_carrier_id, default_plate, default_load_type, license_number, vehicle_type, carrier_name, badge_token, badge_issued_at").eq("id", req.session.driver_id).maybeSingle();
-    res.json({ driver });
+    const [{ data: driver }, { data: ratings }] = await Promise.all([
+      db.from("drivers").select("id, phone, name, default_carrier_id, default_plate, default_load_type, license_number, vehicle_type, carrier_name, badge_token, badge_issued_at").eq("id", req.session.driver_id).maybeSingle(),
+      db.from("driver_ratings").select("rating").eq("driver_id", req.session.driver_id).order("created_at", { ascending: false }).limit(20),
+    ]);
+    const avgRating = (ratings || []).length ? Math.round((ratings!.reduce((s, r: any) => s + (r.rating || 0), 0) / ratings!.length) * 10) / 10 : null;
+    res.json({ driver, avgRating, ratingCount: (ratings || []).length });
   });
 
   // Self-service driver profile — completing this is what turns a bare OTP
