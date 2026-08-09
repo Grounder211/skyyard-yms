@@ -6,10 +6,10 @@ import {
   isToday, isSameMonth
 } from "date-fns";
 import { 
-  ChevronLeft, ChevronRight, Clock, Calendar as CalendarIcon, 
-  Filter, Plus, MoreHorizontal, Maximize2, Trash2, 
+  ChevronLeft, ChevronRight, Clock, Calendar as CalendarIcon,
+  Filter, Plus, MoreHorizontal, Maximize2, Trash2,
   CheckCircle2, AlertCircle, Search, LayoutGrid, List,
-  ArrowRight
+  ArrowRight, MessageSquareText
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { io } from "socket.io-client";
@@ -496,7 +496,12 @@ function ListView({ appointments, onEdit, onDelete }: any) {
                   <p className="text-[10px] font-bold text-slate-400 mt-1 uppercase">{format(parseISO(appt.start_time), "MMM d")}</p>
                </div>
                <div className="col-span-3">
-                  <p className="font-black text-slate-900 text-lg uppercase tracking-tight">{appt.plate}</p>
+                  <p className="font-black text-slate-900 text-lg uppercase tracking-tight flex items-center gap-1.5">
+                    {appt.plate}
+                    {appt.special_instructions && (
+                      <MessageSquareText size={13} className="text-amber-500 shrink-0" title={appt.special_instructions} />
+                    )}
+                  </p>
                </div>
                <div className="col-span-3">
                   <p className="text-sm font-bold text-slate-600 uppercase tracking-widest">{appt.carrier}</p>
@@ -529,7 +534,8 @@ function CreateAppointmentModal({ onClose, onSuccess, initialDate, editingAppoin
     priority_level: editingAppointment?.priority_level || 2,
     status: editingAppointment?.status || "SCHEDULED",
     load_weight_kg: editingAppointment?.load_weight_kg || "",
-    temperature_requirement: editingAppointment?.temperature_requirement || "ambient",
+    temperature_requirement: editingAppointment?.temperature_requirement || "",
+    special_instructions: editingAppointment?.special_instructions || ""
   });
   const [submitting, setSubmitting] = useState(false);
   const { toast } = useToast();
@@ -653,17 +659,27 @@ function CreateAppointmentModal({ onClose, onSuccess, initialDate, editingAppoin
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Temperature requirement</label>
-                <select
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Required temperature (°C, reefer only)</label>
+                <input
+                  type="number"
+                  placeholder="-18"
                   value={formData.temperature_requirement}
                   onChange={e => setFormData({ ...formData, temperature_requirement: e.target.value })}
-                  className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-900 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all focus:border-indigo-600 focus:bg-white appearance-none cursor-pointer"
-                >
-                  <option value="ambient">Ambient</option>
-                  <option value="chilled">Chilled</option>
-                  <option value="frozen">Frozen</option>
-                </select>
+                  className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-900 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all focus:border-indigo-600 focus:bg-white"
+                />
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Special Instructions</label>
+              <textarea
+                value={formData.special_instructions}
+                onChange={e => setFormData({...formData, special_instructions: e.target.value.slice(0, 500)})}
+                placeholder="e.g. fragile cargo, forklift required"
+                rows={2}
+                maxLength={500}
+                className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-900 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all focus:border-indigo-600 focus:bg-white resize-none text-sm"
+              />
             </div>
 
             {editingAppointment && (

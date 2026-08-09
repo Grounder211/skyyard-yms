@@ -1,11 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { Warehouse, CalendarDays, Loader2, CheckCircle2, AlertCircle, DoorOpen, AlertTriangle } from "lucide-react";
+import { Warehouse, CalendarDays, Loader2, CheckCircle2, AlertCircle, DoorOpen, Sparkles } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
-import PhoneInput, { toE164 } from "../components/PhoneInput";
 
 const LOAD_TYPES = ["standard", "reefer", "flatbed", "tanker", "hazmat", "oversized"];
-const TEMP_REQUIREMENTS = ["ambient", "chilled", "frozen"];
 
 function tomorrowISO() {
   const d = new Date();
@@ -24,14 +22,12 @@ export default function BookingPage() {
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedTime, setSelectedTime] = useState<any>(null);
   const [selectedDock, setSelectedDock] = useState<number | null>(null);
+  const [recommended, setRecommended] = useState<any[]>([]);
 
-  const [form, setForm] = useState({ plate: "", driver_name: "", load_type: "standard", load_weight_kg: "", temperature_requirement: "ambient" });
-  const [phoneCountry, setPhoneCountry] = useState("+46");
-  const [phoneNumber, setPhoneNumber] = useState("");
+  const [form, setForm] = useState({ plate: "", driver_name: "", driver_phone: "", load_type: "standard", temperature_requirement: "", load_weight_kg: "", special_instructions: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [confirmed, setConfirmed] = useState<any>(null);
-  const [capacityWarnings, setCapacityWarnings] = useState<string[]>([]);
 
   useEffect(() => {
     fetch(`/api/book/${token}`)
@@ -49,11 +45,20 @@ export default function BookingPage() {
     setSlotsLoading(true);
     setSelectedTime(null);
     setSelectedDock(null);
-    fetch(`/api/slots?date=${date}&load_type=${form.load_type}`)
+    const weightParam = form.load_weight_kg ? `&load_weight_kg=${form.load_weight_kg}` : "";
+    fetch(`/api/slots?date=${date}&load_type=${form.load_type}${weightParam}`)
       .then((r) => r.json())
       .then((data) => setSlots(Array.isArray(data) ? data : []))
       .finally(() => setSlotsLoading(false));
-  }, [carrier, date, form.load_type]);
+    fetch(`/api/slots/recommend?date=${date}&equipment_type=${form.load_type}&carrier_id=${carrier?.id || ""}${weightParam}`)
+      .then((r) => r.json())
+      .then((data) => setRecommended(Array.isArray(data) ? data : []))
+      .catch(() => setRecommended([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [carrier, date, form.load_type, form.load_weight_kg]);
+
+  const bestDockForTime = (time: string) => recommended.filter((r) => r.start_time === time).sort((a, b) => b.score - a.score)[0];
+  const topPick = recommended.find((r) => r.recommended);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,19 +74,14 @@ export default function BookingPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...form,
-          driver_phone: phoneNumber ? toE164(phoneCountry, phoneNumber) : "",
           load_weight_kg: form.load_weight_kg ? Number(form.load_weight_kg) : null,
           start_time: selectedTime.dateTime,
           dock_id: selectedDock,
         }),
       });
       const data = await res.json();
-      if (res.ok) {
-        setConfirmed(data.appointment);
-        setCapacityWarnings(data.capacityWarning || []);
-      } else {
-        setError(data.error || "Booking failed");
-      }
+      if (res.ok) setConfirmed(data.appointment);
+      else setError(data.reason || data.error || "Booking failed");
     } catch {
       setError("Network error while booking");
     }
@@ -123,15 +123,6 @@ export default function BookingPage() {
             <p className="text-slate-500 mb-6">
               {confirmed.plate} — {new Date(confirmed.start_time).toLocaleString()}
             </p>
-            {capacityWarnings.length > 0 && (
-              <div className="text-left bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-6 space-y-1.5">
-                {capacityWarnings.map((w, i) => (
-                  <p key={i} className="text-xs text-amber-700 font-semibold flex items-start gap-1.5">
-                    <AlertTriangle size={13} className="shrink-0 mt-0.5" /> {w}
-                  </p>
-                ))}
-              </div>
-            )}
             <div className="flex justify-center mb-6">
               <QRCodeSVG value={`APT-${confirmed.id}`} size={140} level="M" />
             </div>
@@ -158,19 +149,23 @@ export default function BookingPage() {
                   </select>
                 </div>
                 <TextField label="Driver name" value={form.driver_name} onChange={(v) => setForm({ ...form, driver_name: v })} />
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Driver phone</label>
-                  <PhoneInput countryCode={phoneCountry} number={phoneNumber} onChange={(cc, n) => { setPhoneCountry(cc); setPhoneNumber(n); }} />
-                </div>
-                <TextField label="Load weight (kg, optional)" value={form.load_weight_kg} onChange={(v) => setForm({ ...form, load_weight_kg: v.replace(/\D/g, "") })} placeholder="e.g. 18000" />
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Temperature requirement</label>
-                  <select value={form.temperature_requirement} onChange={(e) => setForm({ ...form, temperature_requirement: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
-                    {TEMP_REQUIREMENTS.map((t) => (
-                      <option key={t} value={t}>{t}</option>
-                    ))}
-                  </select>
-                </div>
+                <TextField label="Driver phone" value={form.driver_phone} onChange={(v) => setForm({ ...form, driver_phone: v })} placeholder="+46 70 123 4567" />
+                <TextField label="Load weight (kg, optional)" value={form.load_weight_kg} onChange={(v) => setForm({ ...form, load_weight_kg: v.replace(/[^0-9]/g, "") })} placeholder="e.g. 24000" />
+                {form.load_type === "reefer" && (
+                  <TextField label="Required temperature (°C)" value={form.temperature_requirement} onChange={(v) => setForm({ ...form, temperature_requirement: v })} placeholder="-18" />
+                )}
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Special instructions (optional)</label>
+                <textarea
+                  value={form.special_instructions}
+                  onChange={(e) => setForm({ ...form, special_instructions: e.target.value.slice(0, 500) })}
+                  placeholder="e.g. fragile cargo, forklift required, driver needs translator"
+                  rows={2}
+                  maxLength={500}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 resize-none"
+                />
               </div>
 
               <div className="space-y-1.5">
@@ -197,9 +192,10 @@ export default function BookingPage() {
                         disabled={s.availableCount === 0}
                         onClick={() => {
                           setSelectedTime(s);
-                          setSelectedDock(s.docks[0]?.id || null);
+                          const best = bestDockForTime(s.time);
+                          setSelectedDock(best?.dock_id || s.docks[0]?.id || null);
                         }}
-                        className={`px-3 py-2.5 rounded-xl text-sm font-bold border transition-all ${
+                        className={`relative px-3 py-2.5 rounded-xl text-sm font-bold border transition-all ${
                           selectedTime?.time === s.time
                             ? "bg-indigo-600 border-indigo-600 text-white"
                             : s.availableCount === 0
@@ -207,11 +203,16 @@ export default function BookingPage() {
                             : "bg-white border-slate-200 text-slate-700 hover:border-indigo-300"
                         }`}
                       >
+                        {topPick?.start_time === s.time && (
+                          <Sparkles size={11} className="absolute -top-1.5 -right-1.5 text-amber-500 bg-white rounded-full p-0.5" strokeWidth={2.5} />
+                        )}
                         {s.time}
                       </button>
                     ))}
                   </div>
                 )}
+                {topPick && <p className="text-xs text-slate-400 flex items-center gap-1.5"><Sparkles size={11} className="text-amber-500" /> {topPick.start_time} at {topPick.dock_name} is the best match — {topPick.reason}.</p>}
+                {slots[0]?.estimatedMinutes && <p className="text-xs text-slate-400">Estimated dock time for a {form.load_type} load: ~{slots[0].estimatedMinutes} min.</p>}
               </div>
 
               <button type="submit" disabled={busy} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">

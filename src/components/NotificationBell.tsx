@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Bell } from "lucide-react";
 import { io } from "socket.io-client";
+import { useNavigate } from "react-router-dom";
 
 interface Notif {
   id: number;
@@ -14,6 +15,7 @@ export default function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<Notif[]>([]);
   const socketRef = useRef<any>(null);
+  const navigate = useNavigate();
 
   const load = async () => {
     try {
@@ -36,6 +38,15 @@ export default function NotificationBell() {
       body: JSON.stringify({ userType: "ADMIN" }),
     });
     setItems([]);
+  };
+
+  const openNotification = async (n: Notif) => {
+    setItems((prev) => prev.filter((i) => i.id !== n.id));
+    fetch(`/api/notifications/inapp/${n.id}/read`, { method: "POST" }).catch(() => {});
+    if (n.link) {
+      setOpen(false);
+      navigate(n.link);
+    }
   };
 
   return (
@@ -61,10 +72,10 @@ export default function NotificationBell() {
             <div className="max-h-80 overflow-y-auto divide-y divide-slate-50">
               {items.length === 0 && <p className="p-6 text-center text-xs text-slate-400">You're all caught up.</p>}
               {items.map((n) => (
-                <div key={n.id} className="px-4 py-3 hover:bg-slate-50">
+                <button key={n.id} onClick={() => openNotification(n)} className="w-full text-left px-4 py-3 hover:bg-slate-50">
                   <p className="text-sm font-semibold text-slate-800">{n.title}</p>
                   <p className="text-xs text-slate-500 mt-0.5">{n.body}</p>
-                </div>
+                </button>
               ))}
             </div>
           </div>

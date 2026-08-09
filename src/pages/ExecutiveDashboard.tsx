@@ -39,15 +39,19 @@ export default function ExecutiveDashboard() {
   useEffect(() => {
     setLoading(true);
     const params = new URLSearchParams({ start: range.start, end: range.end });
-    Promise.all([
-      fetch(`/api/period-stats?${params}`).then(r => r.json()),
-      fetch(`/api/admin/analytics?${params}`).then(r => r.json())
-    ]).then(([m, a]) => {
-      setMetrics(m);
+    fetch(`/api/admin/analytics?${params}`).then(r => r.json()).then(a => {
+      setMetrics(a);
       setCarrierStats(a.carrierStats || []);
       setLoading(false);
     });
   }, [range]);
+
+  // null when there's no prior-period baseline (e.g. div-by-zero) — the
+  // trend badge hides itself rather than show a fake/garbage percentage.
+  const pctChange = (curr: number | null | undefined, prev: number | null | undefined): number | null => {
+    if (curr == null || prev == null || prev === 0) return null;
+    return Math.round(((curr - prev) / prev) * 1000) / 10;
+  };
 
   useEffect(() => {
     fetch("/api/admin/analytics/heatmap").then(r => r.json()).then(d => setHeatmap(d.grid)).catch(() => {});
@@ -98,10 +102,10 @@ export default function ExecutiveDashboard() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <KPIItem label="Total Movements" value={metrics?.total_movements} trend={12} icon={<Activity />} />
-        <KPIItem label="Avg Dwell Time" value={`${Math.round(metrics?.avg_tat || 0)}m`} trend={-8} icon={<Clock />} />
-        <KPIItem label="On-Time Rate" value={`${Math.round(metrics?.on_time_rate || 0)}%`} trend={4} icon={<Target />} />
-        <KPIItem label="SLA Breaches" value={metrics?.detention_events} trend={-2} icon={<AlertCircle />} />
+        <KPIItem label="Total Movements" value={metrics?.current?.totalTrucks} trend={pctChange(metrics?.current?.totalTrucks, metrics?.previous?.totalTrucks)} icon={<Activity />} />
+        <KPIItem label="Avg Dwell Time" value={`${Math.round(metrics?.current?.avgTat || 0)}m`} trend={pctChange(metrics?.current?.avgTat, metrics?.previous?.avgTat)} invert icon={<Clock />} />
+        <KPIItem label="On-Time Rate" value={metrics?.current?.onTimeRate != null ? `${Math.round(metrics.current.onTimeRate)}%` : "—"} trend={pctChange(metrics?.current?.onTimeRate, metrics?.previous?.onTimeRate)} icon={<Target />} />
+        <KPIItem label="SLA Breaches" value={metrics?.current?.detentionEvents} trend={pctChange(metrics?.current?.detentionEvents, metrics?.previous?.detentionEvents)} invert icon={<AlertCircle />} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -182,20 +186,23 @@ export default function ExecutiveDashboard() {
   );
 }
 
-function KPIItem({ label, value, trend, icon }: any) {
+function KPIItem({ label, value, trend, icon, invert }: any) {
   const isPos = trend > 0;
+  const isGood = invert ? !isPos : isPos;
   return (
     <div className="bg-white border border-slate-200 p-8 rounded-3xl shadow-sm">
        <div className="flex justify-between items-start mb-6">
           <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center border border-indigo-100 shadow-sm">
             {React.cloneElement(icon, { size: 22 })}
           </div>
-          <div className={`flex items-center gap-1 text-[11px] font-bold ${isPos ? 'text-teal-600' : 'text-red-600'}`}>
-             {isPos ? <TrendingUp size={14}/> : <TrendingDown size={14}/>}
-             {Math.abs(trend)}%
-          </div>
+          {trend != null && (
+            <div className={`flex items-center gap-1 text-[11px] font-bold ${isGood ? 'text-teal-600' : 'text-red-600'}`}>
+               {isPos ? <TrendingUp size={14}/> : <TrendingDown size={14}/>}
+               {Math.abs(trend)}%
+            </div>
+          )}
        </div>
-       <h4 className="text-3xl font-bold text-slate-900">{value || 0}</h4>
+       <h4 className="text-3xl font-bold text-slate-900">{value ?? 0}</h4>
        <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mt-2">{label}</p>
     </div>
   );

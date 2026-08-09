@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { DollarSign, FileText, CheckCircle2, Clock, ShieldCheck, Wallet, ChevronRight, ArrowUpDown } from "lucide-react";
+import { DollarSign, FileText, CheckCircle2, Clock, ShieldCheck, Wallet, ChevronRight, ArrowUpDown, Loader2, X } from "lucide-react";
+import { useToast } from "../contexts/ToastContext";
+
+const PAYMENT_METHODS = ["bank_transfer", "card", "check", "other"];
 
 export default function AccountsReceivable() {
+  const { toast } = useToast();
   const [balances, setBalances] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -15,6 +19,55 @@ export default function AccountsReceivable() {
   useEffect(() => {
     fetchBalances();
   }, []);
+
+  const [payTarget, setPayTarget] = useState<any>(null);
+  const [payAmount, setPayAmount] = useState("");
+  const [payMethod, setPayMethod] = useState("bank_transfer");
+  const [selectedInvoices, setSelectedInvoices] = useState<string[]>([]);
+  const [payBusy, setPayBusy] = useState(false);
+
+  const openPayment = (b: any) => {
+    setPayTarget(b);
+    setPayAmount(b.balance.toFixed(2));
+    setPayMethod("bank_transfer");
+    setSelectedInvoices([]);
+  };
+
+  const toggleInvoice = (num: string) => {
+    setSelectedInvoices((prev) => (prev.includes(num) ? prev.filter((n) => n !== num) : [...prev, num]));
+  };
+
+  const submitPayment = async () => {
+    if (!payTarget || !payAmount || Number(payAmount) <= 0) {
+      toast("Enter a valid payment amount", "error");
+      return;
+    }
+    setPayBusy(true);
+    // A full payment against the outstanding balance clears every detention
+    // record behind it (invoiced or not) — a partial payment only settles
+    // the specific invoices staff checked, since partial-allocating across
+    // unspecified pending records would be ambiguous.
+    const isFullPayment = Math.abs(Number(payAmount) - payTarget.balance) < 0.01;
+    const res = await fetch("/api/admin/payments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        carrier_id: payTarget.id,
+        amount: Number(payAmount),
+        payment_method: payMethod,
+        invoice_numbers: isFullPayment ? payTarget.invoice_numbers : selectedInvoices,
+        detention_record_ids: isFullPayment ? payTarget.detention_record_ids : [],
+      }),
+    });
+    setPayBusy(false);
+    if (res.ok) {
+      toast(`Payment of $${Number(payAmount).toLocaleString()} recorded for ${payTarget.name}`, "success");
+      setPayTarget(null);
+      fetchBalances();
+    } else {
+      toast("Failed to record payment", "error");
+    }
+  };
 
   const handleGenerateInvoice = async (carrierId: number) => {
     const periodStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -83,7 +136,7 @@ export default function AccountsReceivable() {
                     </div>
                     <div>
                       <p className="font-bold text-slate-900 leading-tight">{b.name}</p>
-                      <p className="text-[11px] font-medium text-slate-400 mt-0.5">Carrier Site ID: {b.id.substring(0,8)}</p>
+                      <p className="text-[11px] font-medium text-slate-400 mt-0.5">Carrier Site ID: {b.id}</p>
                     </div>
                   </div>
                 </td>
@@ -105,19 +158,80 @@ export default function AccountsReceivable() {
                   ) }
                 </td>
                 <td className="px-8 py-5 text-right">
-                   <button 
-                    onClick={() => handleGenerateInvoice(b.id)}
-                    className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-600 rounded-lg text-xs font-bold hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
-                   >
-                     <FileText size={16} /> 
-                     Invoice
-                   </button>
+                   <div className="flex justify-end gap-2">
+                     <button
+                      onClick={() => openPayment(b)}
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-teal-50 text-teal-700 rounded-lg text-xs font-bold hover:bg-teal-600 hover:text-white transition-all shadow-sm"
+                     >
+                       <DollarSign size={16} />
+                       Record payment
+                     </button>
+                     <button
+                      onClick={() => handleGenerateInvoice(b.id)}
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-600 rounded-lg text-xs font-bold hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
+                     >
+                       <FileText size={16} />
+                       Invoice
+                     </button>
+                   </div>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {payTarget && (
+        <div className="fixed inset-0 z-[9998] bg-black/50 flex items-center justify-center p-6" onClick={() => setPayTarget(null)}>
+          <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h3 className="font-bold text-lg text-slate-900">Record payment</h3>
+                <p className="text-sm text-slate-500">{payTarget.name}</p>
+              </div>
+              <button onClick={() => setPayTarget(null)} className="text-slate-400 hover:text-slate-900">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Amount</label>
+                <input type="number" step="0.01" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+                <p className="text-[11px] text-slate-400">Outstanding balance: ${payTarget.balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Payment method</label>
+                <select value={payMethod} onChange={(e) => setPayMethod(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                  {PAYMENT_METHODS.map((m) => (
+                    <option key={m} value={m}>{m.replace("_", " ")}</option>
+                  ))}
+                </select>
+              </div>
+
+              {payTarget.invoice_numbers?.length > 0 && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Settling invoice(s)</label>
+                  <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                    {payTarget.invoice_numbers.map((num: string) => (
+                      <label key={num} className="flex items-center gap-2 text-sm text-slate-700 bg-slate-50 rounded-lg px-3 py-2">
+                        <input type="checkbox" checked={selectedInvoices.includes(num)} onChange={() => toggleInvoice(num)} />
+                        <span className="font-mono">{num}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-slate-400">Checked invoices will be marked paid.</p>
+                </div>
+              )}
+
+              <button onClick={submitPayment} disabled={payBusy} className="w-full bg-teal-600 text-white py-2.5 rounded-xl text-sm font-bold hover:bg-teal-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                {payBusy && <Loader2 size={14} className="animate-spin" />} Confirm payment
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

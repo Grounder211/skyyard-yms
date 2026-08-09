@@ -13,6 +13,7 @@ import {
   LogOut,
   Loader2,
   AlertTriangle,
+  MessageSquareText,
 } from "lucide-react";
 import { io } from "socket.io-client";
 import { QRCodeSVG } from "qrcode.react";
@@ -39,7 +40,7 @@ export default function GateConsole() {
   }, []);
 
   const [checkinTarget, setCheckinTarget] = useState<any>(null);
-  const [checkinForm, setCheckinForm] = useState({ plate: "", carrierName: "", sealNumber: "" });
+  const [checkinForm, setCheckinForm] = useState({ plate: "", carrierName: "", sealNumber: "", poNumber: "", skuSummary: "" });
   const [discrepancy, setDiscrepancy] = useState<any>(null);
   const [busy, setBusy] = useState(false);
 
@@ -51,6 +52,9 @@ export default function GateConsole() {
     trailer_number: "",
     load_type: "standard",
     direction: "INBOUND",
+    po_number: "",
+    sku_summary: "",
+    reefer_setpoint: "",
   });
   const [walkinResult, setWalkinResult] = useState<any>(null);
 
@@ -137,10 +141,17 @@ export default function GateConsole() {
     return list.filter((a) => (a.plate || "").toLowerCase().includes(q) || (a.carrier || "").toLowerCase().includes(q) || String(a.id).includes(q));
   }, [yard.appointments, query]);
 
+  const [docCompleteness, setDocCompleteness] = useState<{ ready: boolean; missing: string[]; policy: string } | null>(null);
+
   const openCheckin = (appt: any) => {
     setCheckinTarget(appt);
-    setCheckinForm({ plate: appt.plate || "", carrierName: appt.carrier || "", sealNumber: "" });
+    setCheckinForm({ plate: appt.plate || "", carrierName: appt.carrier || "", sealNumber: "", poNumber: "", skuSummary: "" });
     setDiscrepancy(null);
+    setDocCompleteness(null);
+    if (appt.plate) {
+      fetch(`/api/documents/completeness?related_entity_type=trailer&related_entity_id=${encodeURIComponent(appt.plate)}`)
+        .then((r) => (r.ok ? r.json() : null)).then((d) => d && !d.ready && setDocCompleteness(d)).catch(() => {});
+    }
   };
 
   const [badgeScanBusy, setBadgeScanBusy] = useState(false);
@@ -165,6 +176,9 @@ export default function GateConsole() {
         toast(`${data.driver.name} (${data.driver.plate}) checked in — queued, yard is full`, "warning");
       } else {
         toast(`${data.driver.name} (${data.driver.plate}) — welcome back, spot ${data.spotName}`, "success");
+      }
+      if (data.driverCaution) {
+        toast(`Caution: ${data.driver.name}'s average rating is ${data.driverCaution.average}/5 over their last ${data.driverCaution.count} visits`, "warning");
       }
       loadYard();
       loadPendingApprovals();
@@ -197,6 +211,19 @@ export default function GateConsole() {
     }
   };
 
+  const lookupDriverByPlate = async (plate: string) => {
+    if (!plate.trim() || checkinForm.carrierName.trim()) return; // don't clobber a value staff already typed
+    try {
+      const res = await fetch(`/api/driver/lookup?plate=${encodeURIComponent(plate)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.carrier) {
+        setCheckinForm((f) => (f.carrierName.trim() ? f : { ...f, carrierName: data.carrier }));
+        toast(`Prefilled from last visit: ${data.carrier}`, "info");
+      }
+    } catch {}
+  };
+
   const submitCheckin = async (overrideDiscrepancy = false) => {
     if (!checkinTarget) return;
     setBusy(true);
@@ -209,6 +236,8 @@ export default function GateConsole() {
           plate: checkinForm.plate,
           carrierName: checkinForm.carrierName,
           sealNumber: checkinForm.sealNumber || undefined,
+          poNumber: checkinForm.poNumber || undefined,
+          skuSummary: checkinForm.skuSummary || undefined,
           overrideDiscrepancy,
         }),
       });
@@ -257,7 +286,10 @@ export default function GateConsole() {
         } else {
           toast(`Registered — assigned to ${data.spotName}`, "success");
         }
-        setWalkinForm({ driver_name: "", carrier_name: "", phone: "", truck_plate: "", trailer_number: "", load_type: "standard", direction: "INBOUND" });
+        if (data.driverCaution) {
+          toast(`Caution: this driver's average rating is ${data.driverCaution.average}/5 over their last ${data.driverCaution.count} visits`, "warning");
+        }
+        setWalkinForm({ driver_name: "", carrier_name: "", phone: "", truck_plate: "", trailer_number: "", load_type: "standard", direction: "INBOUND", po_number: "", sku_summary: "", reefer_setpoint: "" });
         loadYard();
       }
     } catch {
@@ -488,6 +520,8 @@ export default function GateConsole() {
           <Field label="Phone" required value={walkinForm.phone} onChange={(v) => setWalkinForm({ ...walkinForm, phone: v })} placeholder="+46 70 123 4567" />
           <Field label="Truck plate" required value={walkinForm.truck_plate} onChange={(v) => setWalkinForm({ ...walkinForm, truck_plate: v })} />
           <Field label="Trailer number" value={walkinForm.trailer_number} onChange={(v) => setWalkinForm({ ...walkinForm, trailer_number: v })} />
+          <Field label="PO number (optional)" value={walkinForm.po_number} onChange={(v) => setWalkinForm({ ...walkinForm, po_number: v })} />
+          <Field label="Cargo / SKU summary (optional)" value={walkinForm.sku_summary} onChange={(v) => setWalkinForm({ ...walkinForm, sku_summary: v })} />
           <div className="space-y-1.5">
             <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Load type</label>
             <select value={walkinForm.load_type} onChange={(e) => setWalkinForm({ ...walkinForm, load_type: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
@@ -504,6 +538,9 @@ export default function GateConsole() {
               ))}
             </select>
           </div>
+          {walkinForm.load_type === "reefer" && (
+            <Field label="Reefer setpoint (°C)" value={walkinForm.reefer_setpoint} onChange={(v) => setWalkinForm({ ...walkinForm, reefer_setpoint: v })} placeholder="-18" />
+          )}
           <div className="md:col-span-2 flex items-end">
             <button type="submit" disabled={busy} className="w-full bg-indigo-600 text-white py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 disabled:opacity-50 flex items-center justify-center gap-2">
               {busy && <Loader2 size={14} className="animate-spin" />} Register walk-in
@@ -566,15 +603,41 @@ export default function GateConsole() {
               </div>
             ) : (
               <div className="space-y-4">
-                <Field label="Plate" required value={checkinForm.plate} onChange={(v) => setCheckinForm({ ...checkinForm, plate: v })} />
+                {checkinTarget?.special_instructions && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800 flex items-start gap-2.5">
+                    <MessageSquareText size={16} className="shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold uppercase tracking-widest text-[10px] mb-1">Special instructions</p>
+                      <p>{checkinTarget.special_instructions}</p>
+                    </div>
+                  </div>
+                )}
+                {docCompleteness && (
+                  <div className={`border rounded-xl p-4 text-sm flex items-start gap-2.5 ${docCompleteness.policy === "block" ? "bg-red-50 border-red-200 text-red-800" : "bg-amber-50 border-amber-200 text-amber-800"}`}>
+                    <ShieldAlert size={16} className="shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold uppercase tracking-widest text-[10px] mb-1">Documentation incomplete{docCompleteness.policy === "block" ? " — entry blocked" : ""}</p>
+                      <p>Missing: {docCompleteness.missing.join(", ")}</p>
+                    </div>
+                  </div>
+                )}
+                <Field
+                  label="Plate"
+                  required
+                  value={checkinForm.plate}
+                  onChange={(v) => setCheckinForm({ ...checkinForm, plate: v })}
+                  onBlur={() => lookupDriverByPlate(checkinForm.plate)}
+                />
                 <Field label="Carrier" required value={checkinForm.carrierName} onChange={(v) => setCheckinForm({ ...checkinForm, carrierName: v })} />
                 <Field label="Seal number (optional)" value={checkinForm.sealNumber} onChange={(v) => setCheckinForm({ ...checkinForm, sealNumber: v })} />
+                <Field label="PO number (optional)" value={checkinForm.poNumber} onChange={(v) => setCheckinForm({ ...checkinForm, poNumber: v })} />
+                <Field label="Cargo / SKU summary (optional)" value={checkinForm.skuSummary} onChange={(v) => setCheckinForm({ ...checkinForm, skuSummary: v })} />
                 <button
                   onClick={() => submitCheckin(false)}
-                  disabled={busy}
+                  disabled={busy || (docCompleteness?.policy === "block")}
                   className="w-full bg-indigo-600 text-white py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
                 >
-                  {busy && <Loader2 size={14} className="animate-spin" />} Confirm & assign spot
+                  {busy && <Loader2 size={14} className="animate-spin" />} {docCompleteness?.policy === "block" ? "Blocked — missing documents" : "Confirm & assign spot"}
                 </button>
               </div>
             )}
@@ -591,12 +654,14 @@ function Field({
   label,
   value,
   onChange,
+  onBlur,
   required,
   placeholder,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
+  onBlur?: () => void;
   required?: boolean;
   placeholder?: string;
 }) {
@@ -608,6 +673,7 @@ function Field({
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
       />
     </div>

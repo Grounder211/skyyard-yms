@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Radar, Truck, Clock, AlertTriangle, Activity, DoorOpen, LogIn, LogOut, ArrowRightLeft, X, History } from "lucide-react";
+import { Radar, Truck, Clock, AlertTriangle, Activity, DoorOpen, LogIn, LogOut, ArrowRightLeft, X, History, Search, Thermometer, Fuel, Loader2, Building2, ShieldAlert, Weight, Camera } from "lucide-react";
 import { io } from "socket.io-client";
 import { motion, AnimatePresence } from "motion/react";
+import { useToast } from "../contexts/ToastContext";
+import { useAuth } from "../contexts/AuthContext";
 
 function elapsed(since: string) {
   const ms = Date.now() - new Date(since).getTime();
@@ -24,11 +26,16 @@ const EVENT_ICON: Record<string, any> = {
 };
 
 export default function LiveTracking() {
+  const { toast } = useToast();
+  const { user } = useAuth();
   const [yard, setYard] = useState<any>({ spots: [], moves: [], detentionThresholdHours: 24 });
   const [logs, setLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
   const [, forceTick] = useState(0);
+  const [query, setQuery] = useState("");
+  const [dragOverSpotId, setDragOverSpotId] = useState<number | null>(null);
+  const [moving, setMoving] = useState(false);
 
   // Tracks which spot each plate last occupied, so a move between fetches
   // can be detected and animated (shared layoutId "flies" the trailer card
@@ -110,6 +117,32 @@ export default function LiveTracking() {
 
   const breachCount = useMemo(() => occupied.filter((s: any) => statusOf(s) === "breach").length, [occupied, threshold]);
 
+  const matchesQuery = (spot: any) => {
+    if (!query.trim()) return true;
+    const q = query.trim().toLowerCase();
+    return (spot.plate || "").toLowerCase().includes(q) || (spot.carrier || "").toLowerCase().includes(q) || (spot.po_number || "").toLowerCase().includes(q);
+  };
+
+  const requestMove = async (trailerId: number, fromSpotId: number, toSpotId: number) => {
+    if (fromSpotId === toSpotId) return;
+    setMoving(true);
+    try {
+      const res = await fetch("/api/create-move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trailerId, fromSpotId, toSpotId }),
+      });
+      if (res.ok) toast("Move request sent", "success");
+      else {
+        const data = await res.json().catch(() => ({}));
+        toast(data.error || "Move request failed", "error");
+      }
+    } catch {
+      toast("Move request failed — network error", "error");
+    }
+    setMoving(false);
+  };
+
   const [timeline, setTimeline] = useState<any[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
 
@@ -125,6 +158,129 @@ export default function LiveTracking() {
       .catch(() => setTimeline([]))
       .finally(() => setTimelineLoading(false));
   }, [selected?.plate]);
+
+  const [reeferReadings, setReeferReadings] = useState<any[]>([]);
+  const [reeferForm, setReeferForm] = useState({ temperature_c: "", fuel_level_pct: "" });
+  const [reeferBusy, setReeferBusy] = useState(false);
+
+  const loadReeferReadings = (plate: string) => {
+    fetch(`/api/trailers/${encodeURIComponent(plate)}/reefer-readings`)
+      .then((r) => r.json())
+      .then((d) => setReeferReadings(Array.isArray(d) ? d : []))
+      .catch(() => setReeferReadings([]));
+  };
+
+  useEffect(() => {
+    if (!selected?.plate || selected.equipment_type !== "reefer") {
+      setReeferReadings([]);
+      return;
+    }
+    loadReeferReadings(selected.plate);
+  }, [selected?.plate, selected?.equipment_type]);
+
+  const [facilities, setFacilities] = useState<any[]>([]);
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferForm, setTransferForm] = useState({ destination_facility_id: "", eta: "", notes: "" });
+  const [transferBusy, setTransferBusy] = useState(false);
+
+  useEffect(() => {
+    if (user?.role !== "superadmin") return;
+    fetch("/api/superadmin/facilities")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setFacilities(Array.isArray(d) ? d : []))
+      .catch(() => setFacilities([]));
+  }, [user?.role]);
+
+  useEffect(() => {
+    setTransferOpen(false);
+    setTransferForm({ destination_facility_id: "", eta: "", notes: "" });
+  }, [selected?.plate]);
+
+  const submitTransfer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selected?.trailer_id || !transferForm.destination_facility_id) return;
+    setTransferBusy(true);
+    try {
+      const res = await fetch(`/api/admin/trailers/${selected.trailer_id}/transfer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...transferForm, destination_facility_id: Number(transferForm.destination_facility_id) }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast(`Transfer initiated for ${selected.plate}`, "success");
+        setTransferOpen(false);
+        setSelected(null);
+        setTransferForm({ destination_facility_id: "", eta: "", notes: "" });
+        load();
+      } else {
+        toast(data.error || "Transfer failed", "error");
+      }
+    } catch {
+      toast("Network error initiating transfer", "error");
+    }
+    setTransferBusy(false);
+  };
+
+  const submitReeferReading = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selected?.plate || reeferForm.temperature_c === "") return;
+    setReeferBusy(true);
+    try {
+      const res = await fetch(`/api/trailers/${encodeURIComponent(selected.plate)}/reefer-reading`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ temperature_c: Number(reeferForm.temperature_c), fuel_level_pct: reeferForm.fuel_level_pct === "" ? null : Number(reeferForm.fuel_level_pct) }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast(data.status === "critical" ? `Recorded — ${data.reasons?.[0] || "out of range"}` : "Reading recorded", data.status === "critical" ? "error" : "success");
+        setReeferForm({ temperature_c: "", fuel_level_pct: "" });
+        loadReeferReadings(selected.plate);
+      } else {
+        toast(data.error || "Failed to record reading", "error");
+      }
+    } catch {
+      toast("Network error recording reading", "error");
+    }
+    setReeferBusy(false);
+  };
+
+  const [inspectionForm, setInspectionForm] = useState({ hazmat_class: "", tare_weight_kg: "", damage_note: "" });
+  const [inspectionBusy, setInspectionBusy] = useState(false);
+
+  useEffect(() => {
+    setInspectionForm({ hazmat_class: selected?.hazmat_class || "", tare_weight_kg: selected?.tare_weight_kg != null ? String(selected.tare_weight_kg) : "", damage_note: "" });
+  }, [selected?.plate]);
+
+  const submitInspection = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selected?.plate) return;
+    setInspectionBusy(true);
+    try {
+      const res = await fetch(`/api/trailers/${encodeURIComponent(selected.plate)}/inspection`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          hazmat_class: inspectionForm.hazmat_class || null,
+          tare_weight_kg: inspectionForm.tare_weight_kg,
+          damage_note: inspectionForm.damage_note || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast("Inspection updated", "success");
+        setSelected((s: any) => (s ? { ...s, hazmat_class: data.hazmat_class, tare_weight_kg: data.tare_weight_kg, damage_photos: data.damage_photos } : s));
+        setInspectionForm((f) => ({ ...f, damage_note: "" }));
+        load();
+      } else {
+        toast(data.error || "Failed to update inspection", "error");
+      }
+    } catch {
+      toast("Network error updating inspection", "error");
+    }
+    setInspectionBusy(false);
+  };
 
   if (loading) {
     return (
@@ -153,7 +309,7 @@ export default function LiveTracking() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 bg-white border border-slate-200 rounded-[2rem] p-8 shadow-spatial">
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
             <h3 className="font-bold text-slate-900 text-lg">Yard digital twin</h3>
             <div className="flex gap-4">
               <Legend color="bg-slate-200" label="Empty" />
@@ -161,6 +317,15 @@ export default function LiveTracking() {
               <Legend color="bg-amber-500" label="Approaching limit" />
               <Legend color="bg-red-500" label="Detention" />
             </div>
+          </div>
+          <div className="relative mb-6">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by plate, carrier, or PO — drag an occupied spot onto an empty one to request a move"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+            />
           </div>
           <div className="flex flex-wrap gap-3">
             {(yard.spots || []).map((spot: any) => {
@@ -171,11 +336,33 @@ export default function LiveTracking() {
                 status === "normal" ? "bg-teal-50 border-teal-300 text-teal-700" :
                 "bg-slate-50 border-slate-100 text-slate-400";
               const movedAt = spot.plate ? justMoved[spot.plate] : undefined;
+              const dimmed = query.trim() && !matchesQuery(spot);
+              const isDropTarget = !spot.plate && dragOverSpotId === spot.id;
               return (
                 <button
                   key={spot.id}
                   onClick={() => spot.plate && setSelected(spot)}
-                  className={`w-24 h-20 rounded-xl border flex flex-col items-center justify-center text-[10px] font-bold shadow-sm relative overflow-hidden ${bg} ${spot.plate ? "cursor-pointer hover:scale-105" : "cursor-default"} ${movedAt ? "ring-2 ring-indigo-400" : ""}`}
+                  draggable={!!spot.plate && !moving}
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData("application/json", JSON.stringify({ trailerId: spot.trailer_id, fromSpotId: spot.id }));
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragOver={(e) => {
+                    if (spot.plate) return;
+                    e.preventDefault();
+                    setDragOverSpotId(spot.id);
+                  }}
+                  onDragLeave={() => setDragOverSpotId((id) => (id === spot.id ? null : id))}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOverSpotId(null);
+                    if (spot.plate) return;
+                    try {
+                      const { trailerId, fromSpotId } = JSON.parse(e.dataTransfer.getData("application/json"));
+                      if (trailerId) requestMove(trailerId, fromSpotId, spot.id);
+                    } catch {}
+                  }}
+                  className={`w-24 h-20 rounded-xl border flex flex-col items-center justify-center text-[10px] font-bold shadow-sm relative overflow-hidden transition-all ${bg} ${spot.plate ? "cursor-grab active:cursor-grabbing hover:scale-105" : "cursor-default"} ${movedAt ? "ring-2 ring-indigo-400" : ""} ${dimmed ? "opacity-25" : ""} ${isDropTarget ? "ring-2 ring-indigo-500 scale-105" : ""}`}
                 >
                   {status === "breach" && <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />}
                   <span className="absolute top-1.5 left-1.5 opacity-60">{spot.name}</span>
@@ -245,8 +432,130 @@ export default function LiveTracking() {
               <Row label="Spot" value={selected.name} />
               <Row label="Equipment" value={selected.equipment_type || "standard"} />
               <Row label="Seal" value={selected.seal_number || "—"} />
+              <Row label="PO number" value={selected.po_number || "—"} />
+              <Row label="Cargo / SKU" value={selected.sku_summary || "—"} />
+              <div className="flex items-center justify-between py-1.5">
+                <span className="text-slate-500">Cargo status</span>
+                <select
+                  value={selected.cargo_status || "expected"}
+                  onChange={async (e) => {
+                    const status = e.target.value;
+                    const res = await fetch(`/api/trailers/${encodeURIComponent(selected.plate)}/cargo-status`, {
+                      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }),
+                    });
+                    if (res.ok) setSelected({ ...selected, cargo_status: status });
+                  }}
+                  className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs font-semibold"
+                >
+                  {["expected", "arrived", "checked", "loading", "loaded", "unloading", "unloaded", "short", "over", "damaged", "rejected", "completed"].map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
               <Row label="Time on site" value={elapsed(selected.checked_in_at || selected.check_in_time || new Date().toISOString())} mono />
             </div>
+
+            <div className="mt-6 pt-4 border-t border-slate-100">
+              <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">
+                <ShieldAlert size={13} /> Trailer inspection
+              </h4>
+              {selected.hazmat_class && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mb-2 inline-block font-semibold">Hazmat class {selected.hazmat_class}</p>}
+              {Array.isArray(selected.damage_photos) && selected.damage_photos.length > 0 && (
+                <div className="space-y-1.5 mb-3">
+                  {selected.damage_photos.map((d: any, i: number) => (
+                    <div key={i} className="text-xs bg-red-50 border border-red-100 text-red-700 rounded-lg px-2.5 py-1.5">
+                      <p className="font-semibold flex items-center gap-1"><Camera size={11} /> {d.note}</p>
+                      <p className="opacity-70 mt-0.5">{new Date(d.reported_at).toLocaleString()}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <form onSubmit={submitInspection} className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Hazmat class</label>
+                    <input value={inspectionForm.hazmat_class} onChange={(e) => setInspectionForm({ ...inspectionForm, hazmat_class: e.target.value })} placeholder="e.g. 3" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1"><Weight size={10} /> Tare weight (kg)</label>
+                    <input type="number" value={inspectionForm.tare_weight_kg} onChange={(e) => setInspectionForm({ ...inspectionForm, tare_weight_kg: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                  </div>
+                </div>
+                <div className="flex items-end gap-2">
+                  <div className="flex-1 space-y-1">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Report damage</label>
+                    <input value={inspectionForm.damage_note} onChange={(e) => setInspectionForm({ ...inspectionForm, damage_note: e.target.value })} placeholder="Describe any damage found" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                  </div>
+                  <button type="submit" disabled={inspectionBusy} className="bg-slate-900 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-slate-800 disabled:opacity-50 flex items-center gap-1.5">
+                    {inspectionBusy && <Loader2 size={12} className="animate-spin" />} Save
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {selected.equipment_type === "reefer" && (
+              <div className="mt-6 pt-4 border-t border-slate-100">
+                <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">
+                  <Thermometer size={13} /> Reefer monitoring
+                </h4>
+                {selected.reefer_temp_setpoint != null && <p className="text-xs text-slate-500 mb-2">Setpoint: {selected.reefer_temp_setpoint}°C</p>}
+                {reeferReadings[0] ? (
+                  <div className={`rounded-xl px-3 py-2.5 mb-3 text-xs font-semibold border ${reeferReadings[0].status === "critical" ? "bg-red-50 border-red-200 text-red-700" : reeferReadings[0].status === "warning" ? "bg-amber-50 border-amber-200 text-amber-700" : "bg-teal-50 border-teal-200 text-teal-700"}`}>
+                    <div className="flex items-center gap-3">
+                      <span className="flex items-center gap-1"><Thermometer size={12} /> {reeferReadings[0].temperature_c}°C</span>
+                      {reeferReadings[0].fuel_level_pct != null && <span className="flex items-center gap-1"><Fuel size={12} /> {reeferReadings[0].fuel_level_pct}%</span>}
+                    </div>
+                    <p className="font-normal mt-1 opacity-80">{new Date(reeferReadings[0].recorded_at).toLocaleString()}</p>
+                    {(reeferReadings[0].reasons || []).length > 0 && <p className="font-normal mt-1">{reeferReadings[0].reasons.join("; ")}</p>}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400 mb-3">No readings recorded yet.</p>
+                )}
+                <form onSubmit={submitReeferReading} className="flex items-end gap-2">
+                  <div className="flex-1 space-y-1">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Temp °C</label>
+                    <input required type="number" step="0.1" value={reeferForm.temperature_c} onChange={(e) => setReeferForm({ ...reeferForm, temperature_c: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Fuel %</label>
+                    <input type="number" min="0" max="100" value={reeferForm.fuel_level_pct} onChange={(e) => setReeferForm({ ...reeferForm, fuel_level_pct: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                  </div>
+                  <button type="submit" disabled={reeferBusy} className="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-1.5">
+                    {reeferBusy && <Loader2 size={12} className="animate-spin" />} Log
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {user?.role === "superadmin" && (
+              <div className="mt-6 pt-4 border-t border-slate-100">
+                <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">
+                  <Building2 size={13} /> Facility transfer
+                </h4>
+                {!transferOpen ? (
+                  <button type="button" onClick={() => setTransferOpen(true)} className="w-full text-xs font-bold bg-slate-100 text-slate-600 rounded-lg py-2 hover:bg-slate-200 transition-all">
+                    Transfer to another facility
+                  </button>
+                ) : (
+                  <form onSubmit={submitTransfer} className="space-y-2.5">
+                    <select required value={transferForm.destination_facility_id} onChange={(e) => setTransferForm({ ...transferForm, destination_facility_id: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs">
+                      <option value="">Destination facility...</option>
+                      {facilities.map((f: any) => (
+                        <option key={f.id} value={f.id}>{f.name}</option>
+                      ))}
+                    </select>
+                    <input type="datetime-local" value={transferForm.eta} onChange={(e) => setTransferForm({ ...transferForm, eta: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" placeholder="ETA" />
+                    <input value={transferForm.notes} onChange={(e) => setTransferForm({ ...transferForm, notes: e.target.value })} placeholder="Notes (optional)" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => setTransferOpen(false)} className="flex-1 text-xs font-bold bg-slate-100 text-slate-500 rounded-lg py-1.5 hover:bg-slate-200">Cancel</button>
+                      <button type="submit" disabled={transferBusy} className="flex-1 bg-indigo-600 text-white text-xs font-bold rounded-lg py-1.5 hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-1.5">
+                        {transferBusy && <Loader2 size={12} className="animate-spin" />} Initiate transfer
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            )}
 
             <div className="mt-6 pt-4 border-t border-slate-100">
               <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">

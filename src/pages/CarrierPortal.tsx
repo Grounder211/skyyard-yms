@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Warehouse, Building2, Mail, Lock, LogOut, Loader2, Truck, CalendarClock, AlertCircle } from "lucide-react";
+import { Warehouse, Building2, Mail, Lock, LogOut, Loader2, Truck, CalendarClock, AlertCircle, Gauge, TrendingUp, XCircle } from "lucide-react";
 import { motion } from "motion/react";
 import { Link } from "react-router-dom";
 
@@ -128,6 +128,29 @@ export default function CarrierPortal() {
                 <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mt-1">Appointments today</p>
               </div>
             </div>
+
+            {stats.kpis && stats.kpis.totalAppointments > 0 && (
+              <div>
+                <h2 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-3">Performance (last {stats.kpis.periodDays} days · {stats.kpis.totalAppointments} appointments)</h2>
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="bg-white border border-slate-100 rounded-2xl p-6">
+                    <TrendingUp className="text-emerald-600 mb-3" size={20} />
+                    <p className="text-3xl font-bold text-slate-900">{stats.kpis.onTimeRate != null ? `${stats.kpis.onTimeRate}%` : "—"}</p>
+                    <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mt-1">On-time arrival</p>
+                  </div>
+                  <div className="bg-white border border-slate-100 rounded-2xl p-6">
+                    <XCircle className="text-rose-600 mb-3" size={20} />
+                    <p className="text-3xl font-bold text-slate-900">{stats.kpis.noShowRate}%</p>
+                    <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mt-1">No-show rate</p>
+                  </div>
+                  <div className="bg-white border border-slate-100 rounded-2xl p-6">
+                    <Gauge className="text-indigo-600 mb-3" size={20} />
+                    <p className="text-3xl font-bold text-slate-900">{stats.kpis.complianceRate}%</p>
+                    <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mt-1">Appointment compliance</p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div>
               <h2 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-3">Appointment history</h2>

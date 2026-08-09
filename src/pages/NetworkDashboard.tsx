@@ -4,13 +4,16 @@ import { Activity, Globe, Cpu, Server, MapPin, CheckCircle2, ChevronRight, Layou
 
 export default function NetworkDashboard() {
   const [facilities, setFacilities] = useState<any[]>([]);
+  const [globalLoadPct, setGlobalLoadPct] = useState(0);
   const [loading, setLoading] = useState(true);
 
   const fetchNetworkData = async () => {
     try {
       const res = await fetch("/api/superadmin/network");
       if (!res.ok) throw new Error("Failed to load network data");
-      setFacilities(await res.json());
+      const data = await res.json();
+      setFacilities(data.facilities || []);
+      setGlobalLoadPct(data.globalLoadPct || 0);
     } catch (e) {
       console.error("Fetch facilities error:", e);
     }
@@ -39,7 +42,7 @@ export default function NetworkDashboard() {
         <div className="bg-white border border-slate-200 px-6 py-3 rounded-2xl flex items-center gap-6 shadow-sm">
           <div className="flex flex-col">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Global Load</span>
-            <span className="text-xl font-bold text-indigo-600">42%</span>
+            <span className="text-xl font-bold text-indigo-600">{globalLoadPct}%</span>
           </div>
           <div className="w-[1px] h-8 bg-slate-100" />
           <div className="flex flex-col">

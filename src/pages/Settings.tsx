@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { Globe2, Coins, Clock, Bell, Warehouse, FileLock2, CheckCircle2, Loader2, DoorOpen, ShieldCheck, KeyRound, Copy, Code2, Ban, AlertCircle } from "lucide-react";
+import { Globe2, Coins, Clock, Bell, Warehouse, FileLock2, CheckCircle2, Loader2, DoorOpen, ShieldCheck, KeyRound, Copy, Code2, Ban, AlertCircle, MapPin, Download, CalendarOff, Plus, Trash2, Gauge, Webhook } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { Link } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
+import { DOC_TYPES } from "./DocumentCenter";
 import { useToast } from "../contexts/ToastContext";
 
 const CURRENCIES = ["SEK", "EUR", "USD", "NOK", "DKK"];
@@ -20,6 +21,49 @@ export default function Settings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [requests, setRequests] = useState<any[]>([]);
+
+  const [coords, setCoords] = useState({ latitude: "", longitude: "" });
+  const [coordsSaving, setCoordsSaving] = useState(false);
+
+  const [blackouts, setBlackouts] = useState<any[]>([]);
+  const [blackoutForm, setBlackoutForm] = useState({ start_time: "", end_time: "", reason: "" });
+  const [blackoutBusy, setBlackoutBusy] = useState(false);
+
+  const loadBlackouts = () => {
+    fetch("/api/admin/blackouts")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setBlackouts(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  };
+
+  const addBlackout = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!blackoutForm.start_time || !blackoutForm.end_time || !blackoutForm.reason.trim()) return;
+    setBlackoutBusy(true);
+    const res = await fetch("/api/admin/blackouts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(blackoutForm),
+    });
+    setBlackoutBusy(false);
+    if (res.ok) {
+      toast("Blackout window added", "success");
+      setBlackoutForm({ start_time: "", end_time: "", reason: "" });
+      loadBlackouts();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      toast(data.error || "Failed to add blackout window", "error");
+    }
+  };
+
+  const removeBlackout = async (id: number) => {
+    if (!confirm("Remove this blackout window? Appointments will be bookable in this period again.")) return;
+    const res = await fetch(`/api/admin/blackouts/${id}`, { method: "DELETE" });
+    if (res.ok) {
+      toast("Blackout window removed", "success");
+      loadBlackouts();
+    }
+  };
 
   const [totpEnabled, setTotpEnabled] = useState(false);
   const [totpSetup, setTotpSetup] = useState<{ secret: string; otpauth_url: string } | null>(null);
@@ -77,12 +121,71 @@ export default function Settings() {
     }
   };
 
+  const WEBHOOK_EVENTS = ["APPOINTMENT_CREATED", "APPOINTMENT_CANCELLED", "EXCEPTION_CREATED", "EXCEPTION_RESOLVED", "TRAILER_MOVED", "TRUCK_DEPARTED"];
+  const [webhooks, setWebhooks] = useState<any[]>([]);
+  const [newWebhookUrl, setNewWebhookUrl] = useState("");
+  const [newWebhookEvents, setNewWebhookEvents] = useState<string[]>([]);
+  const [webhookBusy, setWebhookBusy] = useState(false);
+  const [revealedWebhookSecret, setRevealedWebhookSecret] = useState<string | null>(null);
+
+  const loadWebhooks = () => {
+    fetch("/api/admin/webhooks")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setWebhooks(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  };
+
+  const toggleWebhookEvent = (event: string) => {
+    setNewWebhookEvents((prev) => (prev.includes(event) ? prev.filter((e) => e !== event) : [...prev, event]));
+  };
+
+  const createWebhook = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newWebhookUrl.trim() || newWebhookEvents.length === 0) return;
+    setWebhookBusy(true);
+    const res = await fetch("/api/admin/webhooks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: newWebhookUrl, events: newWebhookEvents }),
+    });
+    setWebhookBusy(false);
+    if (res.ok) {
+      const data = await res.json();
+      setRevealedWebhookSecret(data.secret);
+      setNewWebhookUrl("");
+      setNewWebhookEvents([]);
+      loadWebhooks();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      toast(data.error || "Failed to create webhook", "error");
+    }
+  };
+
+  const toggleWebhookActive = async (id: number, active: boolean) => {
+    const res = await fetch(`/api/admin/webhooks/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ active }),
+    });
+    if (res.ok) { toast(active ? "Webhook enabled" : "Webhook paused", "success"); loadWebhooks(); }
+  };
+
+  const deleteWebhook = async (id: number) => {
+    if (!confirm("Delete this webhook subscription? It will stop receiving events immediately.")) return;
+    const res = await fetch(`/api/admin/webhooks/${id}`, { method: "DELETE" });
+    if (res.ok) { toast("Webhook deleted", "success"); loadWebhooks(); }
+  };
+
   const load = () => {
     fetch("/api/settings/general")
       .then((r) => r.json())
       .then((data) => {
         setFacility(data.facility);
         setSettings(data.settings);
+        setCoords({
+          latitude: data.facility?.latitude != null ? String(data.facility.latitude) : "",
+          longitude: data.facility?.longitude != null ? String(data.facility.longitude) : "",
+        });
       })
       .finally(() => setLoading(false));
     fetch("/api/admin/data-requests")
@@ -91,6 +194,8 @@ export default function Settings() {
       .catch(() => {});
     loadTotpStatus();
     loadApiKeys();
+    loadBlackouts();
+    loadWebhooks();
   };
 
   useEffect(load, []);
@@ -154,11 +259,33 @@ export default function Settings() {
         timezone: settings.timezone,
         detention_rate_per_hour: settings.detention_rate_per_hour,
         detention_threshold_hours: settings.detention_threshold_hours,
+        dock_sla_minutes: settings.dock_sla_minutes,
+        max_appointments_per_hour: settings.max_appointments_per_hour,
+        required_document_types: settings.required_document_types,
+        document_policy: settings.document_policy,
       }),
     });
     setSaving(false);
     if (res.ok) toast("Settings saved", "success");
     else toast("Failed to save settings", "error");
+  };
+
+  const saveCoords = async () => {
+    const latitude = Number(coords.latitude);
+    const longitude = Number(coords.longitude);
+    if (!coords.latitude || !coords.longitude || isNaN(latitude) || isNaN(longitude)) {
+      toast("Enter both a valid latitude and longitude", "error");
+      return;
+    }
+    setCoordsSaving(true);
+    const res = await fetch("/api/admin/facility/coords", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ latitude, longitude }),
+    });
+    setCoordsSaving(false);
+    if (res.ok) toast("Facility location saved — weather will resolve to the nearest station", "success");
+    else toast("Failed to save location", "error");
   };
 
   const updateRequest = async (id: string, status: string) => {
@@ -168,6 +295,21 @@ export default function Settings() {
       body: JSON.stringify({ status }),
     });
     load();
+  };
+
+  const downloadExport = async (id: string) => {
+    const res = await fetch(`/api/admin/data-requests/${id}/export`);
+    if (!res.ok) {
+      toast("Failed to generate export", "error");
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `data-export-${id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   if (loading || !settings) {
@@ -221,6 +363,61 @@ export default function Settings() {
           <div className="space-y-1.5">
             <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Detention rate / hour</label>
             <input type="number" value={settings.detention_rate_per_hour ?? 75} onChange={(e) => setSettings({ ...settings, detention_rate_per_hour: Number(e.target.value) })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5">
+              <Clock size={12} /> Dock SLA (minutes)
+            </label>
+            <input type="number" value={settings.dock_sla_minutes ?? 60} onChange={(e) => setSettings({ ...settings, dock_sla_minutes: Number(e.target.value) })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5">
+              <Gauge size={12} /> Max appointments / hour
+            </label>
+            <input type="number" min={1} placeholder="Unlimited" value={settings.max_appointments_per_hour ?? ""} onChange={(e) => setSettings({ ...settings, max_appointments_per_hour: e.target.value === "" ? null : Number(e.target.value) })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+            <p className="text-[11px] text-slate-400">Blocks new bookings once this many appointments start in the same clock hour. Leave blank for no cap.</p>
+          </div>
+        </div>
+
+        <div className="pt-4 border-t border-slate-100 space-y-3">
+          <p className="text-sm font-bold text-slate-900">Required documents at gate check-in</p>
+          <p className="text-xs text-slate-500">Guard sees a warning (or is blocked) if these document types aren't on file for a plate.</p>
+          <div className="flex flex-wrap gap-2">
+            {DOC_TYPES.map((t) => {
+              const list: string[] = settings.required_document_types || [];
+              const on = list.includes(t);
+              return (
+                <button key={t} type="button" onClick={() => setSettings({ ...settings, required_document_types: on ? list.filter((x) => x !== t) : [...list, t] })}
+                  className={`px-3 py-1.5 rounded-lg text-[11px] font-bold border ${on ? "bg-indigo-600 border-indigo-600 text-white" : "bg-white border-slate-200 text-slate-500"}`}>
+                  {t}
+                </button>
+              );
+            })}
+          </div>
+          <select value={settings.document_policy || "warn"} onChange={(e) => setSettings({ ...settings, document_policy: e.target.value })} className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm">
+            <option value="warn">Warn only</option>
+            <option value="block">Block gate entry</option>
+            <option value="require_approval">Require supervisor approval</option>
+          </select>
+        </div>
+
+        <div className="pt-4 border-t border-slate-100 space-y-3">
+          <div>
+            <p className="text-sm font-bold text-slate-900 flex items-center gap-1.5"><MapPin size={14} className="text-indigo-600" /> Facility location</p>
+            <p className="text-xs text-slate-500">Used to resolve live weather to the nearest real station instead of the Stockholm-Bromma fallback.</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Latitude</label>
+              <input type="number" step="0.0001" placeholder="59.3293" value={coords.latitude} onChange={(e) => setCoords({ ...coords, latitude: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Longitude</label>
+              <input type="number" step="0.0001" placeholder="18.0686" value={coords.longitude} onChange={(e) => setCoords({ ...coords, longitude: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+            </div>
+            <button onClick={saveCoords} disabled={coordsSaving} className="bg-slate-900 text-white px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-800 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+              {coordsSaving && <Loader2 size={14} className="animate-spin" />} Save location
+            </button>
           </div>
         </div>
 
@@ -371,6 +568,121 @@ export default function Settings() {
         )}
       </div>
 
+      <div className="bg-white border border-slate-200 rounded-[2rem] p-8 space-y-5">
+        <div>
+          <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
+            <Webhook size={18} className="text-indigo-600" /> Webhooks
+          </h3>
+          <p className="text-sm text-slate-500 mt-1">Send real operational events to your own systems — HMAC-signed (X-SkyYard-Signature), retried with backoff, delivered within ~2 minutes of the event.</p>
+        </div>
+
+        {revealedWebhookSecret && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 space-y-2">
+            <p className="text-xs font-bold uppercase tracking-widest text-amber-700 flex items-center gap-1.5">
+              <AlertCircle size={13} /> Copy this signing secret now — it won't be shown again
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 bg-white border border-amber-200 rounded-lg px-3 py-2 text-xs font-mono break-all">{revealedWebhookSecret}</code>
+              <button type="button" onClick={() => { navigator.clipboard?.writeText(revealedWebhookSecret); toast("Secret copied", "success"); }} className="shrink-0 bg-amber-600 text-white p-2 rounded-lg hover:bg-amber-700 transition-all">
+                <Copy size={14} />
+              </button>
+            </div>
+            <button type="button" onClick={() => setRevealedWebhookSecret(null)} className="text-xs font-bold text-amber-700 hover:text-amber-900">
+              I've saved it, dismiss
+            </button>
+          </div>
+        )}
+
+        <form onSubmit={createWebhook} className="space-y-3">
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Endpoint URL</label>
+            <input required type="url" value={newWebhookUrl} onChange={(e) => setNewWebhookUrl(e.target.value)} placeholder="https://your-system.example.com/webhooks/skyyard" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Events</label>
+            <div className="flex flex-wrap gap-2">
+              {WEBHOOK_EVENTS.map((ev) => (
+                <button key={ev} type="button" onClick={() => toggleWebhookEvent(ev)} className={`px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wider border transition-all ${newWebhookEvents.includes(ev) ? "bg-indigo-600 border-indigo-600 text-white" : "bg-white border-slate-200 text-slate-500 hover:border-indigo-300"}`}>
+                  {ev}
+                </button>
+              ))}
+            </div>
+          </div>
+          <button type="submit" disabled={webhookBusy || !newWebhookUrl.trim() || newWebhookEvents.length === 0} className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-2">
+            {webhookBusy && <Loader2 size={14} className="animate-spin" />} Create webhook
+          </button>
+        </form>
+
+        {webhooks.length > 0 && (
+          <div className="divide-y divide-slate-100 border-t border-slate-100 pt-2">
+            {webhooks.map((w) => (
+              <div key={w.id} className="flex items-center justify-between gap-4 py-3">
+                <div className="min-w-0">
+                  <p className="font-bold text-slate-900 text-sm truncate font-mono">{w.url}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {(w.events || []).join(", ")}
+                    {w.last_triggered_at ? ` · last fired ${new Date(w.last_triggered_at).toLocaleString()}` : " · never fired"}
+                  </p>
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <label className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 cursor-pointer">
+                    <input type="checkbox" checked={w.active} onChange={(e) => toggleWebhookActive(w.id, e.target.checked)} className="accent-indigo-600" /> Active
+                  </label>
+                  <button onClick={() => deleteWebhook(w.id)} className="text-xs font-bold text-red-600 hover:text-red-700 flex items-center gap-1">
+                    <Trash2 size={12} /> Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-[2rem] p-8 space-y-5">
+        <div>
+          <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
+            <CalendarOff size={18} className="text-indigo-600" /> Appointment blackout windows
+          </h3>
+          <p className="text-sm text-slate-500 mt-1">Close the yard to new bookings for a period — maintenance, holidays, storm closures. Blocks both staff scheduling and carrier self-booking.</p>
+        </div>
+
+        <form onSubmit={addBlackout} className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Starts</label>
+            <input type="datetime-local" required value={blackoutForm.start_time} onChange={(e) => setBlackoutForm({ ...blackoutForm, start_time: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Ends</label>
+            <input type="datetime-local" required value={blackoutForm.end_time} onChange={(e) => setBlackoutForm({ ...blackoutForm, end_time: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm" />
+          </div>
+          <div className="space-y-1.5 sm:col-span-1">
+            <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Reason</label>
+            <input required value={blackoutForm.reason} onChange={(e) => setBlackoutForm({ ...blackoutForm, reason: e.target.value })} placeholder="e.g. Midsummer closure" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm" />
+          </div>
+          <button type="submit" disabled={blackoutBusy} className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+            {blackoutBusy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} Add
+          </button>
+        </form>
+
+        {blackouts.length === 0 ? (
+          <p className="text-sm text-slate-400 py-4 text-center border-t border-slate-100 pt-6">No upcoming blackout windows.</p>
+        ) : (
+          <div className="divide-y divide-slate-100 border-t border-slate-100 pt-2">
+            {blackouts.map((b) => (
+              <div key={b.id} className="flex items-center justify-between gap-4 py-3">
+                <div className="min-w-0">
+                  <p className="font-bold text-slate-900 text-sm truncate">{b.reason}</p>
+                  <p className="text-xs text-slate-500">{new Date(b.start_time).toLocaleString()} — {new Date(b.end_time).toLocaleString()}{b.creator?.name ? ` · added by ${b.creator.name}` : ""}</p>
+                </div>
+                <button onClick={() => removeBlackout(b.id)} className="shrink-0 text-xs font-bold text-red-600 hover:text-red-700 flex items-center gap-1">
+                  <Trash2 size={12} /> Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
         <Link to="/settings/notifications" className="bg-white border border-slate-200 rounded-3xl p-6 flex items-center gap-4 hover:border-indigo-300 hover:shadow-md transition-all">
           <div className="w-11 h-11 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
@@ -418,6 +730,11 @@ export default function Settings() {
                 </div>
                 <div className="flex items-center gap-2">
                   <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${r.status === "completed" ? "bg-teal-100 text-teal-700" : "bg-amber-100 text-amber-700"}`}>{r.status}</span>
+                  {r.request_type === "access" && (
+                    <button onClick={() => downloadExport(r.id)} className="text-xs font-bold text-slate-500 hover:text-slate-900 flex items-center gap-1">
+                      <Download size={12} /> Export
+                    </button>
+                  )}
                   {r.status !== "completed" && (
                     <button onClick={() => updateRequest(r.id, "completed")} className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1">
                       <CheckCircle2 size={12} /> Mark done
