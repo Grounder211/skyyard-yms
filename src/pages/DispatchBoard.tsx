@@ -12,6 +12,7 @@ export default function DispatchBoard() {
   const [selected, setSelected] = useState<any>(null);
   const [targetSpot, setTargetSpot] = useState<number | "">("");
   const [assignTo, setAssignTo] = useState<number | "">("");
+  const [movePriority, setMovePriority] = useState("normal");
   const [busy, setBusy] = useState(false);
   const [hostlers, setHostlers] = useState<any[]>([]);
   const [myTasksOnly, setMyTasksOnly] = useState(false);
@@ -57,12 +58,13 @@ export default function DispatchBoard() {
       const res = await fetch("/api/create-move", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ trailerId: selected.trailer_id || selected.id, fromSpotId: selected.id, toSpotId: targetSpot, assignedTo: assignTo || undefined }),
+        body: JSON.stringify({ trailerId: selected.trailer_id || selected.id, fromSpotId: selected.id, toSpotId: targetSpot, assignedTo: assignTo || undefined, priority: movePriority }),
       });
       if (res.ok) {
         toast("Move order created", "success");
         setSelected(null);
         setAssignTo("");
+        setMovePriority("normal");
         load();
       } else {
         toast("Failed to create move", "error");
@@ -216,7 +218,16 @@ export default function DispatchBoard() {
                 <div key={m.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <p className="font-bold text-slate-900 text-sm">{m.plate}</p>
+                      <p className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                        {m.plate}
+                        {m.priority && m.priority !== "normal" && (
+                          <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${
+                            m.priority === "urgent" ? "bg-red-100 text-red-700" : m.priority === "high" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"
+                          }`}>
+                            {m.priority}
+                          </span>
+                        )}
+                      </p>
                       <p className="text-xs text-slate-500 flex items-center gap-1 mt-1">
                         {m.from_name} <ArrowRight size={10} /> {m.to_name}
                       </p>
@@ -270,6 +281,15 @@ export default function DispatchBoard() {
                   {emptySpots.map((s: any) => (
                     <option key={s.id} value={s.id}>{s.name} ({s.type})</option>
                   ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Priority</label>
+                <select value={movePriority} onChange={(e) => setMovePriority(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                  <option value="low">Low</option>
+                  <option value="normal">Normal</option>
+                  <option value="high">High</option>
+                  <option value="urgent">Urgent</option>
                 </select>
               </div>
               {hostlers.length > 0 && (
