@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Globe2, Coins, Clock, Bell, Warehouse, FileLock2, CheckCircle2, Loader2, DoorOpen, ShieldCheck, KeyRound, Copy, Code2, Ban, AlertCircle, MapPin, Download, CalendarOff, Plus, Trash2, Gauge, Webhook } from "lucide-react";
+import { Globe2, Coins, Clock, Bell, Warehouse, FileLock2, CheckCircle2, Loader2, DoorOpen, ShieldCheck, KeyRound, Copy, Code2, Ban, AlertCircle, MapPin, Download, CalendarOff, Plus, Trash2, Gauge, Webhook, Truck, Forklift, Wrench } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { Link } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
@@ -774,11 +774,11 @@ export default function Settings() {
 }
 
 const EQUIPMENT_TYPES = [
-  { value: "yard_tractor", label: "Yard tractor" },
-  { value: "forklift", label: "Forklift" },
-  { value: "dock_equipment", label: "Dock equipment" },
-  { value: "gate_equipment", label: "Gate equipment" },
-  { value: "other", label: "Other" },
+  { value: "yard_tractor", label: "Yard tractor", icon: Truck },
+  { value: "forklift", label: "Forklift", icon: Forklift },
+  { value: "dock_equipment", label: "Dock equipment", icon: Wrench },
+  { value: "gate_equipment", label: "Gate equipment", icon: DoorOpen },
+  { value: "other", label: "Other", icon: Wrench },
 ];
 const EQUIPMENT_STATUSES = ["available", "in_use", "maintenance", "broken"];
 
@@ -844,23 +844,32 @@ function EquipmentPanel() {
       {loading ? (
         <p className="text-sm text-slate-400">Loading...</p>
       ) : rows.length === 0 ? (
-        <p className="text-sm text-slate-400">No equipment tracked yet.</p>
+        <p className="text-sm text-slate-400 text-center py-6">No equipment tracked yet — add one above to start monitoring status.</p>
       ) : (
         <div className="space-y-2">
-          {rows.map((eq) => (
-            <div key={eq.id} className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-100 rounded-xl px-4 py-2.5">
-              <div className="min-w-0">
-                <p className="font-bold text-slate-900 text-sm truncate">{eq.name}</p>
-                <p className="text-xs text-slate-400">{EQUIPMENT_TYPES.find((t) => t.value === eq.type)?.label || eq.type}</p>
+          {rows.map((eq) => {
+            const typeInfo = EQUIPMENT_TYPES.find((t) => t.value === eq.type);
+            const TypeIcon = typeInfo?.icon || Wrench;
+            return (
+            <div key={eq.id} className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-100 rounded-xl px-4 py-2.5 transition-colors hover:bg-slate-100/70">
+              <div className="min-w-0 flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center shrink-0">
+                  <TypeIcon size={14} className="text-slate-500" />
+                </div>
+                <div className="min-w-0">
+                  <p className="font-bold text-slate-900 text-sm truncate">{eq.name}</p>
+                  <p className="text-xs text-slate-400">{typeInfo?.label || eq.type}</p>
+                </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                <select value={eq.status} onChange={(e) => setStatus(eq.id, e.target.value)} className={`text-xs font-bold uppercase tracking-wider px-2 py-1 rounded-full border-0 ${statusColor[eq.status]}`}>
+                <select value={eq.status} onChange={(e) => setStatus(eq.id, e.target.value)} className={`text-xs font-bold uppercase tracking-wider px-2 py-1 rounded-full border-0 cursor-pointer ${statusColor[eq.status]}`}>
                   {EQUIPMENT_STATUSES.map((s) => <option key={s} value={s}>{s.replace("_", " ")}</option>)}
                 </select>
-                <button onClick={() => remove(eq.id)} className="text-slate-400 hover:text-red-600"><Trash2 size={14} /></button>
+                <button onClick={() => remove(eq.id)} className="text-slate-400 hover:text-red-600 transition-colors"><Trash2 size={14} /></button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

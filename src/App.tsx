@@ -494,21 +494,32 @@ function Dashboard() {
               )}
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {spots.filter((s: any) => s.type === "DOCK").map((dock: any) => (
-                <div key={dock.id} className={`rounded-2xl border p-4 ${dock.plate ? "bg-indigo-50 border-indigo-200" : "bg-slate-50 border-slate-100"}`}>
+              {spots.filter((s: any) => s.type === "DOCK").map((dock: any) => {
+                const cargoColor: Record<string, string> = {
+                  loaded: "bg-teal-50 text-teal-700 border-teal-200",
+                  unloaded: "bg-teal-50 text-teal-700 border-teal-200",
+                  completed: "bg-teal-50 text-teal-700 border-teal-200",
+                  short: "bg-red-50 text-red-700 border-red-200",
+                  over: "bg-red-50 text-red-700 border-red-200",
+                  damaged: "bg-red-50 text-red-700 border-red-200",
+                  rejected: "bg-red-50 text-red-700 border-red-200",
+                };
+                return (
+                <div key={dock.id} className={`rounded-2xl border p-4 transition-all ${dock.plate ? "bg-indigo-50 border-indigo-200 hover:border-indigo-300" : "bg-slate-50 border-slate-100"}`}>
                   <p className="text-xs font-bold uppercase tracking-widest text-slate-400">{dock.name}</p>
                   {dock.plate ? (
                     <>
                       <p className="font-bold text-slate-900 mt-1">{dock.plate}</p>
-                      <span className="inline-block mt-2 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-white text-indigo-700 border border-indigo-200">
+                      <span className={`inline-block mt-2 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${cargoColor[dock.cargo_status] || "bg-white text-indigo-700 border-indigo-200"}`}>
                         {dock.cargo_status || "expected"}
                       </span>
                     </>
                   ) : (
-                    <p className="text-sm text-slate-400 mt-1">Empty</p>
+                    <p className="text-sm text-slate-400 mt-1 flex items-center gap-1.5"><DoorOpen size={14} className="text-slate-300" /> Empty</p>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </Reveal>
