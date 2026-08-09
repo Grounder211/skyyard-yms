@@ -4071,6 +4071,36 @@ async function startServer() {
     }
   });
 
+  // Priority 29: a real, right-now compliance summary. "Missing" reuses
+  // missingDocumentTypes() (the same check gate-exit enforcement uses)
+  // against trailers actually in the yard right now — bounded to what's
+  // operationally relevant today, not an all-time scan.
+  app.get("/api/admin/documents/compliance-summary", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    try {
+      const facilityId = req.facilityId;
+      const soon = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+      const [{ count: expired }, { count: rejected }, { count: pendingReview }, { count: expiringSoon }, { data: settings }, { data: inYard }] = await Promise.all([
+        db.from("documents").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("verification_status", "expired"),
+        db.from("documents").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("verification_status", "rejected"),
+        db.from("documents").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).in("verification_status", ["uploaded", "under_review"]),
+        db.from("documents").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).lte("expiry_date", soon).not("expiry_date", "is", null).not("verification_status", "in", "(expired,rejected)"),
+        db.from("facility_settings").select("required_document_types").eq("facility_id", facilityId).maybeSingle(),
+        db.from("trailers").select("plate").eq("facility_id", facilityId).eq("status", "IN_YARD"),
+      ]);
+      const required = settings?.required_document_types || [];
+      let missing = 0;
+      if (required.length && inYard?.length) {
+        const { data: docs } = await db.from("documents").select("doc_type, related_entity_id").eq("facility_id", facilityId).eq("related_entity_type", "trailer").in("related_entity_id", inYard.map((t: any) => t.plate)).not("verification_status", "in", "(rejected,expired)");
+        const byPlate = new Map<string, string[]>();
+        for (const d of docs || []) byPlate.set(d.related_entity_id, [...(byPlate.get(d.related_entity_id) || []), d.doc_type]);
+        missing = inYard.filter((t: any) => missingDocumentTypes(required, byPlate.get(t.plate) || []).length > 0).length;
+      }
+      res.json({ missing, expiringSoon: expiringSoon || 0, expired: expired || 0, rejected: rejected || 0, pendingReview: pendingReview || 0 });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/documents", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     const { related_entity_type, related_entity_id, status } = req.query;
     try {

@@ -48,6 +48,7 @@ export default function DocumentCenter() {
   const [uploadBusy, setUploadBusy] = useState(false);
   const [form, setForm] = useState({ doc_type: "Bill of Lading", doc_number: "", related_entity_type: "trailer", related_entity_id: "", expiry_date: "" });
   const [file, setFile] = useState<File | null>(null);
+  const [compliance, setCompliance] = useState<{ missing: number; expiringSoon: number; expired: number; rejected: number; pendingReview: number } | null>(null);
 
   const load = async () => {
     try {
@@ -59,12 +60,15 @@ export default function DocumentCenter() {
     setLoading(false);
   };
 
+  const loadCompliance = () => fetch("/api/admin/documents/compliance-summary").then((r) => (r.ok ? r.json() : null)).then(setCompliance).catch(() => {});
+
   useEffect(() => {
     setLoading(true);
     load();
+    loadCompliance();
     const socket = io();
-    socket.on("document_uploaded", load);
-    socket.on("document_updated", load);
+    socket.on("document_uploaded", () => { load(); loadCompliance(); });
+    socket.on("document_updated", () => { load(); loadCompliance(); });
     return () => { socket.disconnect(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
@@ -152,6 +156,23 @@ export default function DocumentCenter() {
           </button>
         </div>
       </div>
+
+      {compliance && (
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+          {[
+            { label: "Missing", value: compliance.missing, danger: compliance.missing > 0 },
+            { label: "Expiring soon", value: compliance.expiringSoon, danger: compliance.expiringSoon > 0 },
+            { label: "Expired", value: compliance.expired, danger: compliance.expired > 0 },
+            { label: "Rejected", value: compliance.rejected, danger: compliance.rejected > 0 },
+            { label: "Pending review", value: compliance.pendingReview, danger: false },
+          ].map((c) => (
+            <div key={c.label} className={`rounded-2xl border p-4 ${c.danger ? "bg-amber-50 border-amber-200" : "bg-white border-slate-200"}`}>
+              <p className={`text-2xl font-bold ${c.danger ? "text-amber-700" : "text-slate-900"}`}>{c.value}</p>
+              <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400 mt-1">{c.label}</p>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="flex gap-3 flex-wrap">
         {["all", "uploaded", "under_review", "verified", "rejected", "expired"].map((s) => (
