@@ -535,10 +535,15 @@ function CreateAppointmentModal({ onClose, onSuccess, initialDate, editingAppoin
     status: editingAppointment?.status || "SCHEDULED",
     load_weight_kg: editingAppointment?.load_weight_kg || "",
     temperature_requirement: editingAppointment?.temperature_requirement || "",
-    special_instructions: editingAppointment?.special_instructions || ""
+    special_instructions: editingAppointment?.special_instructions || "",
+    customer_id: editingAppointment?.customer_id || ""
   });
   const [submitting, setSubmitting] = useState(false);
   const { toast } = useToast();
+  const [customers, setCustomers] = useState<any[]>([]);
+  useEffect(() => {
+    fetch("/api/admin/customers").then((r) => r.ok ? r.json() : []).then(setCustomers).catch(() => {});
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -550,7 +555,7 @@ function CreateAppointmentModal({ onClose, onSuccess, initialDate, editingAppoin
       const res = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...formData, load_weight_kg: formData.load_weight_kg ? Number(formData.load_weight_kg) : null })
+        body: JSON.stringify({ ...formData, load_weight_kg: formData.load_weight_kg ? Number(formData.load_weight_kg) : null, customer_id: formData.customer_id ? Number(formData.customer_id) : null })
       });
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -669,6 +674,20 @@ function CreateAppointmentModal({ onClose, onSuccess, initialDate, editingAppoin
                 />
               </div>
             </div>
+
+            {customers.length > 0 && (
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Customer (optional)</label>
+                <select
+                  value={formData.customer_id}
+                  onChange={e => setFormData({ ...formData, customer_id: e.target.value })}
+                  className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-900 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all focus:border-indigo-600 focus:bg-white appearance-none cursor-pointer"
+                >
+                  <option value="">No customer linked</option>
+                  {customers.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+            )}
 
             <div className="space-y-2">
               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Special Instructions</label>

@@ -875,7 +875,7 @@ async function startServer() {
   // every other staff-mutation endpoint in this file. Any unauthenticated
   // caller could create, retime, or delete appointments in the yard.
   app.post("/api/appointments", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
-    const { plate, carrier, start_time, duration_minutes, dock_id, load_type, priority_level, special_instructions } = req.body;
+    const { plate, carrier, start_time, duration_minutes, dock_id, load_type, priority_level, special_instructions, customer_id } = req.body;
     const facilityId = req.facilityId || 1;
     try {
       const endTime = new Date(new Date(start_time).getTime() + (duration_minutes || estimateDurationMinutes(load_type)) * 60_000).toISOString();
@@ -891,6 +891,7 @@ async function startServer() {
         load_type: load_type || "LOAD",
         priority_level: priority_level || 2,
         special_instructions: special_instructions || null,
+        customer_id: customer_id || null,
         facility_id: facilityId,
         status: "SCHEDULED",
       }).select().single();
@@ -910,7 +911,7 @@ async function startServer() {
     const updates = req.body;
     const facilityId = req.facilityId || 1;
     try {
-      const allowedFields = ["plate", "carrier", "start_time", "actual_duration_minutes", "status", "priority_level", "dock_id", "special_instructions"];
+      const allowedFields = ["plate", "carrier", "start_time", "actual_duration_minutes", "status", "priority_level", "dock_id", "special_instructions", "customer_id"];
       const patch: any = {};
       for (const field of allowedFields) if (updates[field] !== undefined) patch[field] = updates[field];
 
@@ -2612,6 +2613,46 @@ async function startServer() {
     const valid = scored.map((s, i) => ({ ...availableSlots[i], ...s })).filter(s => s.score > 0).sort((a, b) => b.score - a.score);
     if (valid.length > 0) (valid[0] as any).recommended = true;
     res.json(valid);
+  });
+
+  // --- Phase W: Customer entity — the external stakeholder waiting on a
+  // shipment, distinct from the carrier moving it. Same token-in-URL
+  // pattern as carrier booking links (no password portal, generated at
+  // creation instead of a separate step — one endpoint, not two).
+  app.get("/api/admin/customers", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    try {
+      const { data } = await db.from("customers").select("*").eq("facility_id", req.facilityId).order("created_at", { ascending: false });
+      res.json(data || []);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/customers", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const { name, email, contact_phone } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: "Name is required" });
+    try {
+      const { data, error } = await db.from("customers").insert({ facility_id: req.facilityId, name: name.trim(), email: email || null, contact_phone: contact_phone || null }).select().single();
+      if (error) throw error;
+      logAudit({ action: "CUSTOMER_ADDED", entityType: "CUSTOMER", entityId: String(data.id), details: { name }, ip: req.ip, facility_id: req.facilityId });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Public, token-based — same trust model as carrier booking links:
+  // the token in the URL is the auth. Read-only, so there's no state to
+  // corrupt even if a link leaks.
+  app.get("/api/customer/:token/shipments", async (req, res) => {
+    try {
+      const { data: customer } = await db.from("customers").select("id, name").eq("access_token", req.params.token).maybeSingle();
+      if (!customer) return res.status(404).json({ error: "Invalid link" });
+      const { data: shipments } = await db.from("appointments").select("id, plate, carrier, start_time, status, load_type, checked_in_at, checked_out_at").eq("customer_id", customer.id).order("start_time", { ascending: false }).limit(50);
+      res.json({ customer_name: customer.name, shipments: shipments || [] });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // Carrier management: there was previously no way to create a carrier at

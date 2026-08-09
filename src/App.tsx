@@ -60,6 +60,7 @@ const SettingsPage = React.lazy(() => import("./pages/Settings"));
 const DriverPortal = React.lazy(() => import("./pages/DriverPortal"));
 const CarrierPortal = React.lazy(() => import("./pages/CarrierPortal"));
 const BookingPage = React.lazy(() => import("./pages/BookingPage"));
+const CustomerPortal = React.lazy(() => import("./pages/CustomerPortal"));
 const PrivacyRequest = React.lazy(() => import("./pages/PrivacyRequest"));
 const GateCheckinPage = React.lazy(() => import("./pages/GateCheckinPage"));
 const GateCheckinStatusPage = React.lazy(() => import("./pages/GateCheckinStatusPage"));
@@ -81,6 +82,7 @@ function RootRoutes() {
       {/* Public routes — no staff login required */}
       <Route path="/display/:token" element={<Suspense fallback={null}><TVDisplay /></Suspense>} />
       <Route path="/book/:token" element={<Suspense fallback={<PageLoader />}><BookingPage /></Suspense>} />
+      <Route path="/customer/:token" element={<Suspense fallback={<PageLoader />}><CustomerPortal /></Suspense>} />
       <Route path="/driver" element={<Suspense fallback={<PageLoader />}><DriverPortal /></Suspense>} />
       <Route path="/carrier" element={<Suspense fallback={<PageLoader />}><CarrierPortal /></Suspense>} />
       <Route path="/privacy" element={<Suspense fallback={<PageLoader />}><PrivacyRequest /></Suspense>} />

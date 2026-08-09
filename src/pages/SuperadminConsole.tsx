@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { Globe2, ShieldBan, UploadCloud, Building2, Trash2, Loader2, CheckCircle2, AlertTriangle, Truck, Link2, Copy, Package, Pencil, X } from "lucide-react";
+import { Globe2, ShieldBan, UploadCloud, Building2, Trash2, Loader2, CheckCircle2, AlertTriangle, Truck, Link2, Copy, Package, Pencil, X, Users } from "lucide-react";
 import { useToast } from "../contexts/ToastContext";
 import PhoneInput, { toE164 } from "../components/PhoneInput";
 
-type Tab = "facilities" | "blacklist" | "import" | "carriers" | "fleet";
+type Tab = "facilities" | "blacklist" | "import" | "carriers" | "fleet" | "customers";
 
 export default function SuperadminConsole() {
   const [tab, setTab] = useState<Tab>("facilities");
@@ -19,6 +19,7 @@ export default function SuperadminConsole() {
         <TabButton active={tab === "facilities"} onClick={() => setTab("facilities")} icon={<Building2 size={14} />} label="Facilities" />
         <TabButton active={tab === "carriers"} onClick={() => setTab("carriers")} icon={<Truck size={14} />} label="Carriers" />
         <TabButton active={tab === "fleet"} onClick={() => setTab("fleet")} icon={<Package size={14} />} label="Fleet" />
+        <TabButton active={tab === "customers"} onClick={() => setTab("customers")} icon={<Users size={14} />} label="Customers" />
         <TabButton active={tab === "blacklist"} onClick={() => setTab("blacklist")} icon={<ShieldBan size={14} />} label="Blacklist" />
         <TabButton active={tab === "import"} onClick={() => setTab("import")} icon={<UploadCloud size={14} />} label="Bulk import" />
       </div>
@@ -26,6 +27,7 @@ export default function SuperadminConsole() {
       {tab === "facilities" && <FacilitiesTab />}
       {tab === "carriers" && <CarriersTab />}
       {tab === "fleet" && <FleetTab />}
+      {tab === "customers" && <CustomersTab />}
       {tab === "blacklist" && <BlacklistTab />}
       {tab === "import" && <BulkImportTab />}
     </div>
@@ -106,6 +108,93 @@ function FacilitiesTab() {
           </button>
         </div>
       ))}
+    </div>
+  );
+}
+
+function CustomersTab() {
+  const { toast } = useToast();
+  const [rows, setRows] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState({ name: "", email: "", contact_phone: "" });
+  const [busy, setBusy] = useState(false);
+
+  const load = () => {
+    fetch("/api/admin/customers").then((r) => r.json()).then((data) => setRows(Array.isArray(data) ? data : [])).finally(() => setLoading(false));
+  };
+  useEffect(load, []);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    const res = await fetch("/api/admin/customers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) });
+    setBusy(false);
+    if (res.ok) {
+      toast("Customer added", "success");
+      setForm({ name: "", email: "", contact_phone: "" });
+      load();
+    } else {
+      toast("Failed to add customer", "error");
+    }
+  };
+
+  const copyLink = (token: string) => {
+    const url = `${window.location.origin}/customer/${token}`;
+    navigator.clipboard?.writeText(url).catch(() => {});
+    toast(`Portal link copied: ${url}`, "success");
+  };
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <form onSubmit={submit} className="bg-white border border-slate-200 rounded-3xl p-6 space-y-4 h-fit">
+        <p className="text-sm font-bold text-slate-900">Add customer</p>
+        <div className="space-y-1.5">
+          <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Name</label>
+          <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Email (optional)</label>
+          <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Contact phone (optional)</label>
+          <input value={form.contact_phone} onChange={(e) => setForm({ ...form, contact_phone: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+        </div>
+        <button type="submit" disabled={busy} className="w-full bg-indigo-600 text-white text-sm font-bold py-2.5 rounded-xl hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+          {busy && <Loader2 size={14} className="animate-spin" />} Add customer
+        </button>
+      </form>
+
+      <div className="lg:col-span-2 bg-white border border-slate-200 rounded-3xl overflow-hidden">
+        {loading ? (
+          <p className="text-sm text-slate-400 p-8 text-center">Loading...</p>
+        ) : rows.length === 0 ? (
+          <p className="text-sm text-slate-400 p-8 text-center">No customers yet — add one to give them a shipment-status portal link.</p>
+        ) : (
+          <table className="w-full text-left">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Name</th>
+                <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Email</th>
+                <th className="px-5 py-3" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50">
+              {rows.map((c) => (
+                <tr key={c.id}>
+                  <td className="px-5 py-3 text-sm font-bold text-slate-800">{c.name}</td>
+                  <td className="px-5 py-3 text-sm text-slate-500">{c.email || "—"}</td>
+                  <td className="px-5 py-3 text-right">
+                    <button onClick={() => copyLink(c.access_token)} className="text-indigo-600 hover:text-indigo-800 flex items-center gap-1 text-xs font-bold ml-auto">
+                      <Copy size={12} /> Copy portal link
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }
