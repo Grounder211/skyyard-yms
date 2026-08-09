@@ -326,6 +326,7 @@ function Dashboard() {
   const [dailyVelocity, setDailyVelocity] = React.useState(0);
   const [today, setToday] = React.useState<{ expectedArrivals: number; noShows: number; activeMoves: number; hostlersAvailable: number; hostlersBusy: number }>({ expectedArrivals: 0, noShows: 0, activeMoves: 0, hostlersAvailable: 0, hostlersBusy: 0 });
   const [zones, setZones] = React.useState<{ zone: string; total: number; occupied: number }[]>([]);
+  const [unresolvedSafetySpotIds, setUnresolvedSafetySpotIds] = React.useState<number[]>([]);
 
   React.useEffect(() => {
     fetch("/api/yard-status")
@@ -337,6 +338,7 @@ function Dashboard() {
         setDailyVelocity(data.dailyVelocity ?? 0);
         setToday(data.today || { expectedArrivals: 0, noShows: 0, activeMoves: 0, hostlersAvailable: 0, hostlersBusy: 0 });
         setZones(data.zones || []);
+        setUnresolvedSafetySpotIds(data.unresolvedSafetySpotIds || []);
       });
     const loadAttention = () => fetch("/api/admin/needs-attention").then(r => r.ok ? r.json() : { critical: [], timeCritical: [], operations: [], upcoming: [] }).then(setAttention).catch(() => {});
     loadAttention();
@@ -414,8 +416,11 @@ function Dashboard() {
               {spots.map((spot: any) => (
                 <div
                   key={spot.id}
-                  className={`w-14 h-12 rounded-xl border flex items-center justify-center text-[10px] font-bold transition-all shadow-sm ${
-                    (spot.status === 'OCCUPIED' || spot.plate)
+                  title={unresolvedSafetySpotIds.includes(spot.id) ? "Unresolved safety incident here" : undefined}
+                  className={`relative w-14 h-12 rounded-xl border flex items-center justify-center text-[10px] font-bold transition-all shadow-sm ${
+                    unresolvedSafetySpotIds.includes(spot.id)
+                      ? 'bg-red-50 border-red-400 text-red-700 ring-2 ring-red-300'
+                      : (spot.status === 'OCCUPIED' || spot.plate)
                       ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
                       : 'bg-slate-50 border-slate-100 text-slate-400'
                   }`}

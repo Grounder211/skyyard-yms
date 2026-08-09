@@ -198,7 +198,15 @@ async function startServer() {
 
     const zones = summarizeZoneOccupancy(flatSpots);
 
-    return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24, avgDwellMinutes, dailyVelocity, today, zones };
+    // Phase K: safety incidents had a free-text `location` with no real
+    // link to the yard map — location: "Dock D12" can't be reliably
+    // matched back to an actual spot. Added a real spot_id column instead
+    // (nullable — not every incident happens at a numbered spot) so the
+    // map can mark exactly where unresolved incidents are.
+    const { data: unresolvedIncidents } = await db.from("safety_incidents").select("spot_id").eq("facility_id", facilityId).neq("status", "resolved").not("spot_id", "is", null);
+    const unresolvedSafetySpotIds = [...new Set((unresolvedIncidents || []).map((i: any) => i.spot_id))];
+
+    return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24, avgDwellMinutes, dailyVelocity, today, zones, unresolvedSafetySpotIds };
   };
 
   const emitUpdate = async (event = "yard_update", payload: any = null) => {
@@ -1353,7 +1361,7 @@ async function startServer() {
   });
 
   app.post("/api/admin/safety-incidents", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
-    const { severity, category, location, plate, driver_id, description, witnesses, immediate_action, photos } = req.body;
+    const { severity, category, location, plate, driver_id, description, witnesses, immediate_action, photos, spot_id } = req.body;
     const userId = req.session?.user?.id || null;
     const facilityId = req.facilityId;
     if (!description || !description.trim()) return res.status(400).json({ error: "Description is required" });
@@ -1364,7 +1372,7 @@ async function startServer() {
         facility_id: facilityId, severity, category, location: location || null, plate: plate || null,
         driver_id: driver_id || null, description: description.trim(), witnesses: witnesses || null,
         immediate_action: immediate_action || null, photos: Array.isArray(photos) ? photos : [],
-        reported_by: userId,
+        reported_by: userId, spot_id: spot_id || null,
       }).select().single();
       if (error) throw error;
       logAudit({ action: "SAFETY_INCIDENT_REPORTED", entityType: "SAFETY_INCIDENT", entityId: String(data.id), details: { severity, category, plate }, ip: req.ip, facility_id: facilityId, severity: severity === "critical" || severity === "high" ? "warning" : "info" });
