@@ -8,6 +8,7 @@ export default function AccountsReceivable() {
   const { toast } = useToast();
   const [balances, setBalances] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [summary, setSummary] = useState<{ accruing: number; disputed: number; invoiced: number; paid: number } | null>(null);
 
   const fetchBalances = async () => {
     const res = await fetch("/api/admin/carrier-balances");
@@ -18,6 +19,7 @@ export default function AccountsReceivable() {
 
   useEffect(() => {
     fetchBalances();
+    fetch("/api/admin/detention/summary").then((r) => (r.ok ? r.json() : null)).then(setSummary).catch(() => {});
   }, []);
 
   const [payTarget, setPayTarget] = useState<any>(null);
@@ -115,6 +117,25 @@ export default function AccountsReceivable() {
            <Wallet className="opacity-80" />
         </div>
       </div>
+
+      {summary && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          {[
+            { label: "Accruing", value: summary.accruing, icon: <Clock size={16} className="text-amber-600" /> },
+            { label: "Disputed", value: summary.disputed, icon: <ShieldCheck size={16} className="text-rose-600" /> },
+            { label: "Invoiced", value: summary.invoiced, icon: <FileText size={16} className="text-indigo-600" /> },
+            { label: "Paid", value: summary.paid, icon: <CheckCircle2 size={16} className="text-teal-600" /> },
+          ].map((c) => (
+            <div key={c.label} className="bg-white border border-slate-200 rounded-2xl p-4 flex items-center gap-3">
+              {c.icon}
+              <div>
+                <p className="text-xl font-bold text-slate-900 leading-none">{c.value}</p>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">{c.label}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <DisputesPanel />
 

@@ -3623,6 +3623,24 @@ async function startServer() {
     }
   });
 
+  // Priority 30: Detention Control Center summary — accruing/disputed/
+  // invoiced/paid, one query over the same detention_records rows the
+  // carrier-balances and dispute endpoints already read.
+  app.get("/api/admin/detention/summary", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    try {
+      const { data: records } = await db.from("detention_records").select("status, dispute_status, invoice_status, amount_owed").eq("facility_id", req.facilityId);
+      const rows = records || [];
+      const accruing = rows.filter((r: any) => r.status === "ACTIVE" && r.dispute_status !== "disputed").length;
+      const disputed = rows.filter((r: any) => r.dispute_status === "disputed").length;
+      const invoiced = rows.filter((r: any) => r.invoice_status === "invoiced").length;
+      const paid = rows.filter((r: any) => r.invoice_status === "paid").length;
+      const totalOutstanding = rows.filter((r: any) => r.invoice_status !== "paid" && r.dispute_status !== "waived").reduce((s: number, r: any) => s + Number(r.amount_owed || 0), 0);
+      res.json({ accruing, disputed, invoiced, paid, totalOutstanding: Math.round(totalOutstanding * 100) / 100 });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/admin/carrier-balances", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const facilityId = req.facilityId;
     try {
