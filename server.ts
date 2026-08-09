@@ -2683,15 +2683,20 @@ async function startServer() {
           db.from("spots").select("status").eq("facility_id", f.id),
           db.from("audit_logs").select("id", { count: "exact", head: true }).eq("facility_id", f.id).in("severity", ["warning", "critical"]).gte("timestamp", since),
         ]);
+        const totalSpots = (spotsRes.data || []).length;
         const activeTrucks = (spotsRes.data || []).filter((s: any) => s.status === "OCCUPIED" || s.status === "occupied").length;
         const openAlerts = alertsRes.count || 0;
         // No health-score model exists yet (the RPC this replaced was never
         // deployed) — simple heuristic until a real one is defined: fewer
         // recent warning/critical alerts = healthier.
         const healthScore = Math.max(0, 100 - openAlerts * 15);
-        return { ...f, activeTrucks, openAlerts, healthScore };
+        const utilization = totalSpots ? activeTrucks / totalSpots : 0;
+        return { ...f, activeTrucks, totalSpots, openAlerts, healthScore, utilization };
       }));
-      res.json(enriched);
+      const totalSpotsAll = enriched.reduce((sum, f: any) => sum + f.totalSpots, 0);
+      const totalActiveAll = enriched.reduce((sum, f: any) => sum + f.activeTrucks, 0);
+      const globalLoadPct = totalSpotsAll ? Math.round((totalActiveAll / totalSpotsAll) * 100) : 0;
+      res.json({ facilities: enriched, globalLoadPct });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
