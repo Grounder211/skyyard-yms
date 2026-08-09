@@ -874,7 +874,7 @@ function EquipmentPanel() {
                   <select value={eq.status} onChange={(e) => setStatus(eq.id, e.target.value)} className={`text-xs font-bold uppercase tracking-wider px-2 py-1 rounded-full border-0 cursor-pointer ${statusColor[eq.status]}`}>
                     {EQUIPMENT_STATUSES.map((s) => <option key={s} value={s}>{s.replace("_", " ")}</option>)}
                   </select>
-                  <button onClick={() => toggleHistory(eq.id)} className="text-slate-400 hover:text-indigo-600 transition-colors"><Clock size={14} /></button>
+                  <button onClick={() => toggleHistory(eq.id)} aria-label="View status history" className="text-slate-400 hover:text-indigo-600 transition-colors"><Clock size={14} /></button>
                   <button onClick={() => remove(eq.id)} className="text-slate-400 hover:text-red-600 transition-colors"><Trash2 size={14} /></button>
                 </div>
               </div>

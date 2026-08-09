@@ -58,7 +58,7 @@ export default function NotificationBell({ scope = "admin" }: { scope?: "admin" 
 
   return (
     <div className="relative">
-      <button onClick={() => setOpen((o) => !o)} className="p-2 text-slate-400 hover:text-slate-600 relative">
+      <button onClick={() => setOpen((o) => !o)} aria-label="Notifications" className="p-2 text-slate-400 hover:text-slate-600 relative">
         <Bell size={20} />
         {items.length > 0 && (
           <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-red-500 rounded-full ring-2 ring-white animate-pulse" />
