@@ -38,8 +38,12 @@ export default function GateConsole() {
     setShiftBusy(true);
     const res = await fetch("/api/shifts/start", { method: "POST" });
     setShiftBusy(false);
-    if (res.ok) { toast("Shift started", "success"); loadShift(); }
-    else toast((await res.json().catch(() => ({})))?.error || "Failed to start shift", "error");
+    if (res.ok) {
+      loadShift();
+      const recent = await fetch("/api/shifts/recent").then((r) => (r.ok ? r.json() : [])).catch(() => []);
+      const handover = recent?.[0]?.handover_notes;
+      toast(handover ? `Shift started — handover from ${recent[0].staff?.name || "previous shift"}: ${handover}` : "Shift started — no handover notes from the previous shift", "success");
+    } else toast((await res.json().catch(() => ({})))?.error || "Failed to start shift", "error");
   };
 
   const endShift = async () => {
