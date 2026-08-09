@@ -17,6 +17,14 @@ import { useToast } from "../contexts/ToastContext";
 
 type ViewType = "day" | "week" | "month" | "list";
 
+const HEALTH_STYLES: Record<string, string> = {
+  ON_TRACK: "bg-teal-100 text-teal-700",
+  AT_RISK: "bg-amber-100 text-amber-700",
+  LATE: "bg-rose-100 text-rose-700",
+  NO_SHOW: "bg-rose-100 text-rose-700",
+  BLOCKED: "bg-red-200 text-red-800",
+};
+
 export default function AppointmentCalendar() {
   const [view, setView] = useState<ViewType>("week");
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -442,6 +450,11 @@ function DayView({ currentDate, appointments, hours, onEdit, onDelete }: any) {
                               <ActionMenu appt={appt} onEdit={onEdit} onDelete={onDelete} />
                             </div>
                          </div>
+                         {appt.health && (
+                           <span title={appt.health_reason} className={`self-start mt-2 text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full ${HEALTH_STYLES[appt.health] || HEALTH_STYLES.ON_TRACK}`}>
+                             {appt.health.replace("_", " ")}
+                           </span>
+                         )}
                          <div className="flex items-center justify-between mt-4 border-t border-slate-50 pt-3">
                             <div className="flex items-center gap-2">
                                <Clock size={12} className="text-slate-400" />
