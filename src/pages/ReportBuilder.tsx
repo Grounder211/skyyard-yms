@@ -19,6 +19,21 @@ export default function ReportBuilder() {
 
   const [results, setResults] = useState<any[] | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [savedReports, setSavedReports] = useState<any[]>([]);
+
+  const loadSavedReports = () => {
+    fetch("/api/admin/reports").then((r) => (r.ok ? r.json() : [])).then((d) => setSavedReports(Array.isArray(d) ? d : [])).catch(() => {});
+  };
+  useEffect(loadSavedReports, []);
+
+  const loadReport = (r: any) => {
+    const config = r.config_json || {};
+    setReportName(r.name || "");
+    setSelectedMetrics(AVAILABLE_METRICS.filter((m) => (config.metrics || []).includes(m.id)));
+    setChartType(config.chartType || "bar");
+    setIsPivotMode(!!config.isPivotMode);
+    setResults(null);
+  };
 
   const handleAddMetric = (metric: any) => {
     if (selectedMetrics.find(m => m.id === metric.id)) return;
@@ -78,8 +93,10 @@ export default function ReportBuilder() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: reportName, description: "Custom BI Report", config })
       });
-      if (res.ok) toast("Report saved to library", "success");
-      else toast("Failed to save report", "error");
+      if (res.ok) {
+        toast("Report saved to library", "success");
+        loadSavedReports();
+      } else toast("Failed to save report", "error");
     } catch (e) {
       toast("Failed to save report", "error");
     }
@@ -121,6 +138,21 @@ export default function ReportBuilder() {
               </button>
             ))}
           </div>
+          {savedReports.length > 0 && (
+            <div className="border-t border-slate-50 pt-4 space-y-2">
+              <h3 className="font-bold text-slate-900 text-sm">Saved reports</h3>
+              {savedReports.map((r) => (
+                <button
+                  key={r.id}
+                  onClick={() => loadReport(r)}
+                  className="w-full p-3 rounded-xl bg-slate-50 border border-slate-100 text-left hover:border-indigo-600 transition-all"
+                >
+                  <p className="text-sm font-bold text-slate-700 truncate">{r.name}</p>
+                  <p className="text-[10px] text-slate-400">{(r.config_json?.metrics || []).length} metrics</p>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Builder Canvas */}
