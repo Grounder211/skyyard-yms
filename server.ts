@@ -698,8 +698,16 @@ async function startServer() {
       // fix as checkBlacklist earlier this session. Interpolating `q`
       // straight into an or() filter string would let PostgREST's own
       // comma/paren/dot syntax be reshaped by the search text itself.
-      const [{ data: trailers }, { data: appts }, { data: carriers }, { data: driversByName }, { data: driversByPhone }, { data: driversByPlate }, { data: exceptions }, { data: passesByNumber }, { data: passesByPlate }] = await Promise.all([
+      const [
+        { data: trailersByPlate }, { data: trailersByPo }, { data: trailersBySku },
+        { data: appts }, { data: carriers },
+        { data: driversByName }, { data: driversByPhone }, { data: driversByPlate },
+        { data: exceptions }, { data: passesByNumber }, { data: passesByPlate },
+        { data: safetyIncidents }, { data: moveOrders }, { data: equipment }, { data: customers },
+      ] = await Promise.all([
         db.from("trailers").select("id, plate, carrier").eq("facility_id", facilityId).ilike("plate", pattern).limit(5),
+        db.from("trailers").select("id, plate, carrier").eq("facility_id", facilityId).ilike("po_number", pattern).limit(5),
+        db.from("trailers").select("id, plate, carrier").eq("facility_id", facilityId).ilike("sku_summary", pattern).limit(5),
         db.from("appointments").select("id, plate, carrier").eq("facility_id", facilityId).ilike("plate", pattern).limit(5),
         db.from("carriers").select("id, name").ilike("name", pattern).limit(5),
         db.from("drivers").select("id, name, phone, default_plate").ilike("name", pattern).limit(5),
@@ -708,17 +716,29 @@ async function startServer() {
         db.from("exceptions").select("id, title, exception_type, status").eq("facility_id", facilityId).ilike("title", pattern).limit(5),
         db.from("gate_passes").select("id, pass_number, plate, carrier_name").eq("facility_id", facilityId).ilike("pass_number", pattern).limit(5),
         db.from("gate_passes").select("id, pass_number, plate, carrier_name").eq("facility_id", facilityId).ilike("plate", pattern).limit(5),
+        db.from("safety_incidents").select("id, category, plate, severity").eq("facility_id", facilityId).ilike("plate", pattern).limit(5),
+        db.from("move_orders").select("id, status, trailers(plate)").eq("facility_id", facilityId).limit(20),
+        db.from("equipment").select("id, name, type").eq("facility_id", facilityId).ilike("name", pattern).limit(5),
+        db.from("customers").select("id, name").eq("facility_id", facilityId).ilike("name", pattern).limit(5),
       ]);
       const dedupe = <T extends { id: any }>(rows: T[]) => Array.from(new Map(rows.map((r) => [r.id, r])).values());
+      const trailers = dedupe([...(trailersByPlate || []), ...(trailersByPo || []), ...(trailersBySku || [])]).slice(0, 5);
       const drivers = dedupe([...(driversByName || []), ...(driversByPhone || []), ...(driversByPlate || [])]).slice(0, 5);
       const gatePasses = dedupe([...(passesByNumber || []), ...(passesByPlate || [])]).slice(0, 5);
+      // move_orders has no free-text column to ilike() against, so filter
+      // client-side on the joined trailer's plate instead of a 6th query.
+      const matchingMoves = (moveOrders || []).filter((m: any) => m.trailers?.plate?.toLowerCase().includes(q.toLowerCase())).slice(0, 5);
       const results = [
-        ...(trailers || []).map((t: any) => ({ id: `trailer-${t.id}`, title: t.plate, subtitle: `Trailer · ${t.carrier || ""}`, url: `/status/${t.id}` })),
-        ...(appts || []).map((a: any) => ({ id: `appt-${a.id}`, title: a.plate, subtitle: `Appointment · ${a.carrier || ""}`, url: `/status/${a.id}` })),
+        ...trailers.map((t: any) => ({ id: `trailer-${t.id}`, title: t.plate, subtitle: `Trailer · ${t.carrier || ""}`, url: `/tracking` })),
+        ...(appts || []).map((a: any) => ({ id: `appt-${a.id}`, title: a.plate, subtitle: `Appointment · ${a.carrier || ""}`, url: `/calendar` })),
         ...(carriers || []).map((c: any) => ({ id: `carrier-${c.id}`, title: c.name, subtitle: "Carrier", url: `/network` })),
         ...drivers.map((d: any) => ({ id: `driver-${d.id}`, title: d.name || d.phone, subtitle: `Driver · ${d.default_plate || d.phone || ""}`, url: `/gate` })),
         ...(exceptions || []).map((e: any) => ({ id: `exception-${e.id}`, title: e.title, subtitle: `Exception · ${e.status}`, url: `/exceptions` })),
         ...gatePasses.map((g: any) => ({ id: `pass-${g.id}`, title: g.pass_number, subtitle: `Gate pass · ${g.plate} · ${g.carrier_name || ""}`, url: `/pipeline` })),
+        ...(safetyIncidents || []).map((s: any) => ({ id: `safety-${s.id}`, title: `${s.category?.replace(/_/g, " ")}`, subtitle: `Safety · ${s.severity} · ${s.plate || ""}`, url: `/safety` })),
+        ...matchingMoves.map((m: any) => ({ id: `move-${m.id}`, title: m.trailers?.plate, subtitle: `Move order · ${m.status}`, url: `/dispatch` })),
+        ...(equipment || []).map((e: any) => ({ id: `equipment-${e.id}`, title: e.name, subtitle: `Equipment · ${e.type?.replace(/_/g, " ")}`, url: `/settings` })),
+        ...(customers || []).map((c: any) => ({ id: `customer-${c.id}`, title: c.name, subtitle: "Customer", url: `/superadmin` })),
       ];
       res.json(results);
     } catch (e: any) {
