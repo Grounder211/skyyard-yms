@@ -25,6 +25,7 @@ import {
   HardHat,
   FileText,
   AlertTriangle,
+  Users,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { Routes, Route, Link, useLocation } from "react-router-dom";
@@ -323,7 +324,7 @@ function Dashboard() {
   const [attention, setAttention] = React.useState<any>({ critical: [], timeCritical: [], operations: [], upcoming: [] });
   const [avgDwellMinutes, setAvgDwellMinutes] = React.useState<number | null>(null);
   const [dailyVelocity, setDailyVelocity] = React.useState(0);
-  const [today, setToday] = React.useState<{ expectedArrivals: number; noShows: number; activeMoves: number }>({ expectedArrivals: 0, noShows: 0, activeMoves: 0 });
+  const [today, setToday] = React.useState<{ expectedArrivals: number; noShows: number; activeMoves: number; hostlersAvailable: number; hostlersBusy: number }>({ expectedArrivals: 0, noShows: 0, activeMoves: 0, hostlersAvailable: 0, hostlersBusy: 0 });
 
   React.useEffect(() => {
     fetch("/api/yard-status")
@@ -333,7 +334,7 @@ function Dashboard() {
         setSpots(data.spots);
         setAvgDwellMinutes(data.avgDwellMinutes);
         setDailyVelocity(data.dailyVelocity ?? 0);
-        setToday(data.today || { expectedArrivals: 0, noShows: 0, activeMoves: 0 });
+        setToday(data.today || { expectedArrivals: 0, noShows: 0, activeMoves: 0, hostlersAvailable: 0, hostlersBusy: 0 });
       });
     const loadAttention = () => fetch("/api/admin/needs-attention").then(r => r.ok ? r.json() : { critical: [], timeCritical: [], operations: [], upcoming: [] }).then(setAttention).catch(() => {});
     loadAttention();
@@ -373,7 +374,7 @@ function Dashboard() {
         </Reveal>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <Reveal preset="fade-up" delay={275}>
           <StatItem icon={<Calendar />} label="Expected Arrivals Today" value={today.expectedArrivals} sub="Scheduled, not yet checked in" color="indigo" />
         </Reveal>
@@ -382,6 +383,9 @@ function Dashboard() {
         </Reveal>
         <Reveal preset="fade-up" delay={325}>
           <StatItem icon={<ArrowRightLeft />} label="Active Moves" value={today.activeMoves} sub="In the dispatch queue" color="indigo" />
+        </Reveal>
+        <Reveal preset="fade-up" delay={350}>
+          <StatItem icon={<Users />} label="Hostlers Available" value={today.hostlersAvailable} sub={`${today.hostlersBusy} busy right now`} color="teal" />
         </Reveal>
       </div>
 

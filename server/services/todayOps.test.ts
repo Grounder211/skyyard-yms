@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { countTodayNoShows, countExpectedArrivalsToday } from "./todayOps.js";
+import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers } from "./todayOps.js";
 
 describe("countTodayNoShows", () => {
   const todayStart = "2026-08-09T00:00:00.000Z";
@@ -34,5 +34,28 @@ describe("countExpectedArrivalsToday", () => {
 
   it("returns 0 for an empty list", () => {
     expect(countExpectedArrivalsToday([], todayStart, todayEnd)).toBe(0);
+  });
+});
+
+describe("countBusyHostlers", () => {
+  it("counts distinct hostlers with an IN_PROGRESS move", () => {
+    const moves = [
+      { status: "IN_PROGRESS", assigned_to: 1 },
+      { status: "IN_PROGRESS", assigned_to: 2 },
+      { status: "PENDING", assigned_to: null },
+    ];
+    expect(countBusyHostlers(moves)).toBe(2);
+  });
+
+  it("counts one hostler once even with multiple IN_PROGRESS moves", () => {
+    const moves = [
+      { status: "IN_PROGRESS", assigned_to: 1 },
+      { status: "IN_PROGRESS", assigned_to: 1 },
+    ];
+    expect(countBusyHostlers(moves)).toBe(1);
+  });
+
+  it("returns 0 when nothing is in progress", () => {
+    expect(countBusyHostlers([{ status: "PENDING", assigned_to: null }])).toBe(0);
   });
 });

@@ -11,6 +11,13 @@ export function countTodayNoShows(
   }).length;
 }
 
+export function countBusyHostlers(moves: { status: string; assigned_to: number | null }[]): number {
+  const busy = new Set(
+    moves.filter((m) => m.status === "IN_PROGRESS" && m.assigned_to != null).map((m) => m.assigned_to)
+  );
+  return busy.size;
+}
+
 export function countExpectedArrivalsToday(
   appointments: { status: string; start_time: string }[],
   todayStartIso: string,

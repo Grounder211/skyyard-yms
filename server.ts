@@ -28,7 +28,7 @@ import { getCurrentTemperature } from "./server/services/smhiWeather.js";
 import { generateSecret as generateTotpSecret, verifyToken as verifyTotpToken, otpauthUrl as totpUri } from "./server/services/totp.js";
 import { checkStageTransition, isLoadReady } from "./server/services/gatePassStages.js";
 import { isDockSlaBreached } from "./server/services/dockSla.js";
-import { countTodayNoShows, countExpectedArrivalsToday } from "./server/services/todayOps.js";
+import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers } from "./server/services/todayOps.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -186,10 +186,14 @@ async function startServer() {
       .eq("facility_id", facilityId)
       .gte("start_time", todayStart.toISOString())
       .lt("start_time", todayEnd);
+    const { count: totalHostlers } = await db.from("users").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("role", "HOSTLER");
+    const busyHostlers = countBusyHostlers(moves);
     const today = {
       expectedArrivals: countExpectedArrivalsToday(todaysAppointments || [], todayStart.toISOString(), todayEnd),
       noShows: countTodayNoShows(todaysAppointments || [], todayStart.toISOString()),
       activeMoves: moves.length,
+      hostlersBusy: busyHostlers,
+      hostlersAvailable: Math.max(0, (totalHostlers || 0) - busyHostlers),
     };
 
     return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24, avgDwellMinutes, dailyVelocity, today };
