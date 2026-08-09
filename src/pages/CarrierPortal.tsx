@@ -12,6 +12,10 @@ export default function CarrierPortal() {
   const [busy, setBusy] = useState(false);
   const [stats, setStats] = useState<any>({});
   const [appointments, setAppointments] = useState<any[]>([]);
+  const [detention, setDetention] = useState<any[]>([]);
+  const [disputingId, setDisputingId] = useState<number | null>(null);
+  const [disputeReason, setDisputeReason] = useState("");
+  const [disputeBusy, setDisputeBusy] = useState(false);
 
   const loadDashboard = async () => {
     const meRes = await fetch("/api/carrier/me");
@@ -21,10 +25,27 @@ export default function CarrierPortal() {
     }
     const me = await meRes.json();
     setCarrier(me.carrier);
-    const [dash, appts] = await Promise.all([fetch("/api/carrier/dashboard"), fetch("/api/carrier/appointments")]);
+    const [dash, appts, det] = await Promise.all([fetch("/api/carrier/dashboard"), fetch("/api/carrier/appointments"), fetch("/api/carrier/detention")]);
     if (dash.ok) setStats(await dash.json());
     if (appts.ok) setAppointments(await appts.json());
+    if (det.ok) setDetention(await det.json());
     setChecking(false);
+  };
+
+  const submitDispute = async (id: number) => {
+    if (!disputeReason.trim()) return;
+    setDisputeBusy(true);
+    const res = await fetch(`/api/carrier/detention/${id}/dispute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: disputeReason }),
+    });
+    setDisputeBusy(false);
+    if (res.ok) {
+      setDisputingId(null);
+      setDisputeReason("");
+      loadDashboard();
+    }
   };
 
   useEffect(() => {
@@ -148,6 +169,64 @@ export default function CarrierPortal() {
                     <p className="text-3xl font-bold text-slate-900">{stats.kpis.complianceRate}%</p>
                     <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mt-1">Appointment compliance</p>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {detention.length > 0 && (
+              <div>
+                <h2 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-3">Detention charges</h2>
+                <div className="space-y-3">
+                  {detention.map((d) => (
+                    <div key={d.id} className="bg-white border border-slate-100 rounded-2xl p-5">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <p className="font-bold text-slate-900">{d.amount_owed} owed — {d.overtime_minutes} min over a {d.threshold_minutes}-min free window</p>
+                          <p className="text-xs text-slate-500 mt-1">
+                            {new Date(d.start_time).toLocaleString()} · {d.actual_minutes} min on site · {d.rate_per_hour}/hr rate
+                          </p>
+                        </div>
+                        <span className={`shrink-0 text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full ${
+                          d.dispute_status === "disputed" ? "bg-amber-100 text-amber-700"
+                          : d.dispute_status === "waived" ? "bg-teal-100 text-teal-700"
+                          : d.dispute_status === "upheld" ? "bg-slate-100 text-slate-600"
+                          : "bg-slate-50 text-slate-400"
+                        }`}>
+                          {d.dispute_status === "none" ? "Not disputed" : d.dispute_status}
+                        </span>
+                      </div>
+
+                      {d.dispute_status === "none" && disputingId !== d.id && (
+                        <button onClick={() => { setDisputingId(d.id); setDisputeReason(""); }} className="mt-3 text-xs font-bold text-indigo-600 hover:text-indigo-800">
+                          Dispute this charge
+                        </button>
+                      )}
+                      {disputingId === d.id && (
+                        <div className="mt-3 space-y-2">
+                          <textarea
+                            value={disputeReason}
+                            onChange={(e) => setDisputeReason(e.target.value.slice(0, 1000))}
+                            placeholder="Explain why this charge is incorrect — e.g. gate was closed, dock unavailable, timestamp is wrong"
+                            rows={2}
+                            maxLength={1000}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none"
+                          />
+                          <div className="flex gap-2">
+                            <button onClick={() => setDisputingId(null)} className="text-xs font-bold text-slate-500 px-3 py-1.5">Cancel</button>
+                            <button onClick={() => submitDispute(d.id)} disabled={disputeBusy || !disputeReason.trim()} className="text-xs font-bold bg-indigo-600 text-white px-3 py-1.5 rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-1.5">
+                              {disputeBusy && <Loader2 size={12} className="animate-spin" />} Submit dispute
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {d.dispute_status === "disputed" && d.dispute_reason && (
+                        <p className="text-xs text-slate-500 mt-2 italic">Your dispute: "{d.dispute_reason}"</p>
+                      )}
+                      {(d.dispute_status === "upheld" || d.dispute_status === "waived") && d.dispute_resolution_notes && (
+                        <p className="text-xs text-slate-500 mt-2">Resolution: {d.dispute_resolution_notes}</p>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </div>
             )}

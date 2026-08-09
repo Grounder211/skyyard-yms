@@ -878,6 +878,15 @@ async function startServer() {
     const { plate, carrier, start_time, duration_minutes, dock_id, load_type, priority_level, special_instructions, customer_id } = req.body;
     const facilityId = req.facilityId || 1;
     try {
+      // customer_id was accepted with no facility check — an appointment
+      // could be linked to another facility's customer, and that customer's
+      // portal would then show this facility's shipment. Same class of gap
+      // as facility-scoping bugs fixed earlier this session.
+      if (customer_id) {
+        const { data: customer } = await db.from("customers").select("id").eq("id", customer_id).eq("facility_id", facilityId).maybeSingle();
+        if (!customer) return res.status(400).json({ error: "Invalid customer" });
+      }
+
       const endTime = new Date(new Date(start_time).getTime() + (duration_minutes || estimateDurationMinutes(load_type)) * 60_000).toISOString();
 
       const capacity = await enforceAppointmentCapacity(facilityId, start_time, endTime);
@@ -916,6 +925,11 @@ async function startServer() {
       for (const field of allowedFields) if (updates[field] !== undefined) patch[field] = updates[field];
 
       if (Object.keys(patch).length === 0) return res.status(400).json({ error: "No valid fields to update" });
+
+      if (patch.customer_id) {
+        const { data: customer } = await db.from("customers").select("id").eq("id", patch.customer_id).eq("facility_id", facilityId).maybeSingle();
+        if (!customer) return res.status(400).json({ error: "Invalid customer" });
+      }
 
       // Rescheduling into an over-capacity hour or a blackout window hit no
       // check at all — same gap as the create path, just reachable via drag/
@@ -2445,6 +2459,64 @@ async function startServer() {
     }
   });
 
+  // Detention dispute workflow — carriers previously had no way to even
+  // see their own detention charges, let alone dispute one. The most-cited
+  // market complaint about detention billing is charges "that could not be
+  // validated" with no dispute mechanism; the audit trail to fix that
+  // already existed here (threshold/actual/overtime minutes, rate, real
+  // timestamps) — it just wasn't surfaced or actionable.
+  app.get("/api/carrier/detention", requireCarrierAuth, async (req: any, res) => {
+    try {
+      const { data } = await db.from("detention_records").select("*").eq("carrier_id", req.session.carrier_id).order("created_at", { ascending: false }).limit(50);
+      res.json(data || []);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/carrier/detention/:id/dispute", requireCarrierAuth, async (req: any, res) => {
+    const { reason } = req.body;
+    if (!reason || !reason.trim()) return res.status(400).json({ error: "A reason is required to dispute a charge" });
+    try {
+      const { data: record } = await db.from("detention_records").select("id, dispute_status").eq("id", req.params.id).eq("carrier_id", req.session.carrier_id).maybeSingle();
+      if (!record) return res.status(404).json({ error: "Detention record not found" });
+      if (record.dispute_status !== "none") return res.status(409).json({ error: `Already ${record.dispute_status}` });
+      const { data, error } = await db.from("detention_records").update({ dispute_status: "disputed", dispute_reason: reason.trim().slice(0, 1000), updated_at: new Date().toISOString() }).eq("id", req.params.id).select().single();
+      if (error) throw error;
+      logAudit({ action: "DETENTION_DISPUTED", entityType: "DETENTION_RECORD", entityId: req.params.id, details: { reason: reason.trim() }, ip: req.ip, facility_id: data.facility_id });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/detention/disputes", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    try {
+      const { data } = await db.from("detention_records").select("*").eq("facility_id", req.facilityId).eq("dispute_status", "disputed").order("updated_at", { ascending: true });
+      res.json(data || []);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/detention/:id/resolve", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const { resolution, notes } = req.body;
+    if (!["upheld", "waived"].includes(resolution)) return res.status(400).json({ error: "Resolution must be upheld or waived" });
+    try {
+      const { data: record } = await db.from("detention_records").select("*").eq("id", req.params.id).eq("facility_id", req.facilityId).maybeSingle();
+      if (!record) return res.status(404).json({ error: "Detention record not found" });
+      if (record.dispute_status !== "disputed") return res.status(409).json({ error: "Not currently disputed" });
+      const patch: any = { dispute_status: resolution, dispute_resolution_notes: notes || null, updated_at: new Date().toISOString() };
+      if (resolution === "waived") patch.amount_owed = 0;
+      const { data, error } = await db.from("detention_records").update(patch).eq("id", req.params.id).select().single();
+      if (error) throw error;
+      logAudit({ action: "DETENTION_DISPUTE_RESOLVED", entityType: "DETENTION_RECORD", entityId: req.params.id, details: { resolution, notes }, ip: req.ip, facility_id: req.facilityId });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Detention & Maintenance Check
   // Was inserting a brand-new detention_records row every 15 minutes for the
   // same overdue trailer forever (same duplicate-insert class of bug fixed
@@ -2741,7 +2813,7 @@ async function startServer() {
     try {
       const patch: any = { updated_at: new Date().toISOString() };
       if (status !== undefined) patch.status = status;
-      if (notes !== undefined) patch.notes = notes;
+      if (notes !== undefined) patch.notes = typeof notes === "string" ? notes.slice(0, 500) : null;
       const { data, error } = await db.from("equipment").update(patch).eq("id", req.params.id).eq("facility_id", req.facilityId).select().single();
       if (error) throw error;
       logAudit({ action: "EQUIPMENT_STATUS_CHANGED", entityType: "EQUIPMENT", entityId: req.params.id, details: { status }, ip: req.ip, facility_id: req.facilityId });

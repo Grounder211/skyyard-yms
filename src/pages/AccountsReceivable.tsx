@@ -116,6 +116,8 @@ export default function AccountsReceivable() {
         </div>
       </div>
 
+      <DisputesPanel />
+
       <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
         <table className="w-full text-left border-collapse">
           <thead>
@@ -232,6 +234,71 @@ export default function AccountsReceivable() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function DisputesPanel() {
+  const { toast } = useToast();
+  const [disputes, setDisputes] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [notes, setNotes] = useState<Record<number, string>>({});
+
+  const load = () => {
+    fetch("/api/admin/detention/disputes").then((r) => r.json()).then(setDisputes).finally(() => setLoading(false));
+  };
+  useEffect(load, []);
+
+  const resolve = async (id: number, resolution: "upheld" | "waived") => {
+    setBusyId(id);
+    const res = await fetch(`/api/admin/detention/${id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resolution, notes: notes[id] || "" }),
+    });
+    setBusyId(null);
+    if (res.ok) {
+      toast(resolution === "waived" ? "Charge waived" : "Charge upheld", "success");
+      load();
+    } else {
+      toast("Failed to resolve dispute", "error");
+    }
+  };
+
+  if (loading || disputes.length === 0) return null;
+
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-3xl p-6 space-y-4">
+      <h3 className="text-sm font-bold uppercase tracking-widest text-amber-700 flex items-center gap-1.5">
+        <ShieldCheck size={14} /> Disputed detention charges ({disputes.length})
+      </h3>
+      {disputes.map((d) => (
+        <div key={d.id} className="bg-white border border-amber-100 rounded-2xl p-5 space-y-3">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="font-bold text-slate-900">{d.carrier_name} — {d.amount_owed} owed</p>
+              <p className="text-xs text-slate-500 mt-1">{d.overtime_minutes} min over threshold · {new Date(d.start_time).toLocaleString()}</p>
+              <p className="text-sm text-slate-600 mt-2 italic">"{d.dispute_reason}"</p>
+            </div>
+          </div>
+          <textarea
+            value={notes[d.id] || ""}
+            onChange={(e) => setNotes({ ...notes, [d.id]: e.target.value })}
+            placeholder="Resolution notes (optional) — shown to the carrier"
+            rows={2}
+            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none"
+          />
+          <div className="flex gap-2">
+            <button onClick={() => resolve(d.id, "waived")} disabled={busyId === d.id} className="text-xs font-bold bg-teal-600 text-white px-3 py-1.5 rounded-lg hover:bg-teal-700 disabled:opacity-50">
+              Waive charge
+            </button>
+            <button onClick={() => resolve(d.id, "upheld")} disabled={busyId === d.id} className="text-xs font-bold bg-slate-100 text-slate-700 px-3 py-1.5 rounded-lg hover:bg-slate-200 disabled:opacity-50">
+              Uphold charge
+            </button>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
