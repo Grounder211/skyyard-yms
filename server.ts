@@ -731,7 +731,7 @@ async function startServer() {
       const results = [
         ...trailers.map((t: any) => ({ id: `trailer-${t.id}`, title: t.plate, subtitle: `Trailer · ${t.carrier || ""}`, url: `/tracking` })),
         ...(appts || []).map((a: any) => ({ id: `appt-${a.id}`, title: a.plate, subtitle: `Appointment · ${a.carrier || ""}`, url: `/calendar` })),
-        ...(carriers || []).map((c: any) => ({ id: `carrier-${c.id}`, title: c.name, subtitle: "Carrier", url: `/network` })),
+        ...(carriers || []).map((c: any) => ({ id: `carrier-${c.id}`, title: c.name, subtitle: "Carrier", url: `/carriers/${c.id}` })),
         ...drivers.map((d: any) => ({ id: `driver-${d.id}`, title: d.name || d.phone, subtitle: `Driver · ${d.default_plate || d.phone || ""}`, url: `/drivers/${d.id}` })),
         ...(exceptions || []).map((e: any) => ({ id: `exception-${e.id}`, title: e.title, subtitle: `Exception · ${e.status}`, url: `/exceptions` })),
         ...gatePasses.map((g: any) => ({ id: `pass-${g.id}`, title: g.pass_number, subtitle: `Gate pass · ${g.plate} · ${g.carrier_name || ""}`, url: `/pipeline` })),
