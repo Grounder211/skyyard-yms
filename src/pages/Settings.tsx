@@ -437,6 +437,27 @@ export default function Settings() {
         </button>
       </div>
 
+      <div className="bg-white border border-slate-200 rounded-[2rem] p-8 space-y-4">
+        <div>
+          <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
+            <DoorOpen size={18} className="text-indigo-600" /> Gate check-in QR
+          </h3>
+          <p className="text-xs text-slate-500 mt-1">One code, printed and posted at the gate. Drivers scan it, verify their phone with an OTP, take a photo, and submit their entry — it lands in the pending-approval queue for a guard to review.</p>
+        </div>
+        {facility?.id && (
+          <div className="flex items-center gap-6">
+            <div className="bg-white p-3 border border-slate-200 rounded-2xl">
+              <QRCodeSVG value={`${window.location.origin}/kiosk/${facility.id}`} size={140} level="M" />
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Link</p>
+              <code className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 block break-all">{window.location.origin}/kiosk/{facility.id}</code>
+              <button onClick={() => window.print()} className="text-xs font-bold text-indigo-600 hover:text-indigo-800">Print this page</button>
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="bg-white border border-slate-200 rounded-[2rem] p-8 space-y-5">
         <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
           <ShieldCheck size={18} className="text-indigo-600" /> Two-factor authentication

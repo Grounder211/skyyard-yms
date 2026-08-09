@@ -377,9 +377,16 @@ export default function GateConsole() {
           <div className="space-y-2">
             {pendingApprovals.map((w: any) => (
               <div key={w.id} className="bg-white border border-indigo-100 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="font-bold text-slate-900 text-sm truncate">{w.truck_plate} — {w.carrier_name}</p>
-                  <p className="text-xs text-slate-400">{w.driver_name} · {w.load_type} · WK-{w.id} · {new Date(w.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
+                <div className="min-w-0 flex items-center gap-3">
+                  {w.photo_url ? (
+                    <img src={w.photo_url} alt="Driver" className="w-10 h-10 rounded-lg object-cover shrink-0 border border-slate-200" />
+                  ) : (
+                    <div className="w-10 h-10 rounded-lg bg-slate-100 shrink-0" />
+                  )}
+                  <div className="min-w-0">
+                    <p className="font-bold text-slate-900 text-sm truncate">{w.truck_plate} — {w.carrier_name}</p>
+                    <p className="text-xs text-slate-400">{w.driver_name} · {w.load_type} · WK-{w.id} · {new Date(w.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
+                  </div>
                 </div>
                 <div className="flex gap-2 shrink-0">
                   <button

@@ -16,7 +16,10 @@ const RESULT_RESET_MS = 20_000;
 export default function KioskCheckinPage() {
   const { facilityId = "1" } = useParams();
 
-  const [step, setStep] = useState<"idle" | "phone" | "code" | "form" | "result">("idle");
+  const [step, setStep] = useState<"idle" | "phone" | "code" | "photo" | "form" | "result">("idle");
+  const [photo, setPhoto] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const [countryCode, setCountryCode] = useState("+46");
   const [nationalNumber, setNationalNumber] = useState("");
   const [code, setCode] = useState("");
@@ -30,16 +33,48 @@ export default function KioskCheckinPage() {
     direction: "INBOUND", consent: false, website: "", po_number: "", sku_summary: "",
   });
 
+  const stopCamera = () => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+  };
+
   const resetAll = () => {
+    stopCamera();
     setStep("idle");
     setCountryCode("+46");
     setNationalNumber("");
     setCode("");
+    setPhoto(null);
     setBusy(false);
     setError("");
     setStatusToken(null);
     setStatus(null);
     setForm({ truck_plate: "", carrier_name: "", trailer_number: "", load_type: "standard", direction: "INBOUND", consent: false, website: "", po_number: "", sku_summary: "" });
+  };
+
+  // Camera only — never a file picker, so there's no path for a driver to
+  // submit someone else's photo or a saved image instead of themselves
+  // standing at the gate right now.
+  useEffect(() => {
+    if (step !== "photo") return;
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
+      .then((stream) => {
+        streamRef.current = stream;
+        if (videoRef.current) videoRef.current.srcObject = stream;
+      })
+      .catch(() => setError("Camera access is required to continue. Please allow camera access and try again."));
+    return stopCamera;
+  }, [step]);
+
+  const capturePhoto = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = 480;
+    canvas.height = 480 * (video.videoHeight / video.videoWidth || 0.75);
+    canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
+    setPhoto(canvas.toDataURL("image/jpeg", 0.7));
+    stopCamera();
   };
 
   // Inactivity reset — a kiosk left mid-flow (driver walked away, distracted)
@@ -54,7 +89,7 @@ export default function KioskCheckinPage() {
     bumpInactivity();
     return () => { if (inactivityTimer.current) clearTimeout(inactivityTimer.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, countryCode, nationalNumber, code, form]);
+  }, [step, countryCode, nationalNumber, code, photo, form]);
 
   const enterKiosk = () => {
     setStep("phone");
@@ -86,7 +121,7 @@ export default function KioskCheckinPage() {
       body: JSON.stringify({ phone: toE164(countryCode, nationalNumber), code }),
     });
     setBusy(false);
-    if (res.ok) setStep("form");
+    if (res.ok) setStep("photo");
     else setError("Invalid or expired code.");
   };
 
@@ -101,7 +136,7 @@ export default function KioskCheckinPage() {
     const res = await fetch("/api/public/walkin-checkin", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...form, facility_id: Number(facilityId) }),
+      body: JSON.stringify({ ...form, facility_id: Number(facilityId), photo_base64: photo }),
     });
     const data = await res.json();
     setBusy(false);
@@ -192,6 +227,37 @@ export default function KioskCheckinPage() {
               </form>
             )}
 
+            {step === "photo" && (
+              <div className="space-y-6 text-center">
+                <h1 className="text-3xl font-black text-slate-900">Take your photo</h1>
+                <p className="text-slate-500">This is shown to the gate guard to confirm it's you.</p>
+                <div className="relative rounded-2xl overflow-hidden bg-slate-900 aspect-square max-w-sm mx-auto">
+                  {photo ? (
+                    <img src={photo} alt="Captured" className="w-full h-full object-cover" />
+                  ) : (
+                    <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
+                  )}
+                </div>
+                <div className="flex gap-3">
+                  <KioskBackButton onClick={() => { setPhoto(null); setStep("code"); }} />
+                  {photo ? (
+                    <>
+                      <button type="button" onClick={() => setPhoto(null)} className="flex-1 bg-slate-100 text-slate-600 py-5 rounded-2xl text-xl font-bold hover:bg-slate-200 transition-all">
+                        Retake
+                      </button>
+                      <button type="button" onClick={() => setStep("form")} className="flex-1 bg-indigo-600 text-white py-5 rounded-2xl text-xl font-bold hover:bg-indigo-700 transition-all">
+                        Use photo
+                      </button>
+                    </>
+                  ) : (
+                    <button type="button" onClick={capturePhoto} className="flex-1 bg-indigo-600 text-white py-5 rounded-2xl text-xl font-bold hover:bg-indigo-700 transition-all">
+                      Capture
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {step === "form" && (
               <form onSubmit={submit} className="space-y-5">
                 <div className="flex items-center gap-2 text-teal-700 bg-teal-50 border border-teal-200 rounded-2xl px-5 py-3 text-sm font-bold">
@@ -225,7 +291,7 @@ export default function KioskCheckinPage() {
                 </label>
 
                 <div className="flex gap-3">
-                  <KioskBackButton onClick={() => setStep("code")} />
+                  <KioskBackButton onClick={() => setStep("photo")} />
                   <button type="submit" disabled={busy} className="flex-1 bg-indigo-600 text-white py-5 rounded-2xl text-xl font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                     {busy && <Loader2 size={20} className="animate-spin" />} Request entry
                   </button>

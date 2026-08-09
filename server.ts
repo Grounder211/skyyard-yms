@@ -451,7 +451,10 @@ async function startServer() {
   };
 
   app.use(cors({ origin: corsOriginCheck, credentials: true }));
-  app.use(express.json());
+  // Raised from the 100kb default to fit a compressed gate-kiosk selfie
+  // (base64 JPEG) in the same JSON body as the rest of the walk-in form —
+  // still capped well below anything that could be used for a DoS payload.
+  app.use(express.json({ limit: "2mb" }));
   app.use(express.urlencoded({ extended: true })); // Twilio's inbound SMS webhook posts form-encoded, not JSON
 
   // Brute-force protection: staff/carrier login, capped per-IP.
@@ -1105,13 +1108,21 @@ async function startServer() {
   };
 
   app.post("/api/public/walkin-checkin", requireDriverAuth, publicWalkinLimiter, async (req: any, res) => {
-    const { truck_plate, carrier_name, trailer_number, load_type, direction, consent, website, po_number, sku_summary } = req.body;
+    const { truck_plate, carrier_name, trailer_number, load_type, direction, consent, website, po_number, sku_summary, photo_base64 } = req.body;
     const facilityId = req.body.facility_id || 1;
 
     // Honeypot: a hidden field real drivers never see or fill; only bots fill every field.
     if (website) return res.status(400).json({ error: "Invalid submission" });
     if (!truck_plate || !carrier_name) return res.status(400).json({ error: "Plate and carrier are required" });
     if (consent !== true) return res.status(400).json({ error: "Consent to data processing is required" });
+
+    // Kiosk camera capture only — never a file upload. A data: URL under
+    // ~1.5MB is a plausible compressed webcam snapshot; anything else (a
+    // huge payload, or a non-image scheme) gets silently dropped rather
+    // than stored, since it's optional and never blocks the check-in.
+    const photoUrl = typeof photo_base64 === "string" && /^data:image\/(jpeg|png|webp);base64,/.test(photo_base64) && photo_base64.length < 1_500_000
+      ? photo_base64
+      : null;
 
     try {
       const { data: driver } = await db.from("drivers").select("id, phone, name").eq("id", req.session.driver_id).maybeSingle();
@@ -1123,7 +1134,7 @@ async function startServer() {
           driver_name: driver.name || "Unknown", carrier_name, phone: driver.phone, truck_plate,
           trailer_number: trailer_number || null, load_type, direction, status: "rejected",
           rejection_reason: `Blacklisted: ${blacklistHit.reason}`, reviewed_at: new Date().toISOString(),
-          driver_id: driver.id, facility_id: facilityId, source: "self_service_qr", consent_given: true,
+          driver_id: driver.id, facility_id: facilityId, source: "self_service_qr", consent_given: true, photo_url: photoUrl,
         }).select("id, status_token").single();
         logAudit({ action: "BLACKLIST_BLOCKED_SELF_SERVICE", entityType: "TRAILER", entityId: truck_plate, details: { reason: blacklistHit.reason }, ip: req.ip, facility_id: facilityId, severity: "warning" });
         raiseException({ facility_id: facilityId, exception_type: "blacklist_block", severity: "warning", entity_type: "TRAILER", entity_id: truck_plate, title: `Blacklisted entry blocked: ${truck_plate}`, description: blacklistHit.reason, source: "self_service_qr" });
@@ -1134,7 +1145,7 @@ async function startServer() {
         driver_name: driver.name || "Unknown", carrier_name, phone: driver.phone, truck_plate,
         trailer_number: trailer_number || null, load_type, direction, status: "pending_approval",
         driver_id: driver.id, facility_id: facilityId, source: "self_service_qr", consent_given: true,
-        po_number: po_number || null, sku_summary: sku_summary || null,
+        po_number: po_number || null, sku_summary: sku_summary || null, photo_url: photoUrl,
       }).select("id, status_token").single();
       if (error) throw error;
 
@@ -1173,13 +1184,13 @@ async function startServer() {
     });
   });
 
-  app.post("/api/admin/walkin/:id/approve", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+  app.post("/api/admin/walkin/:id/approve", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
     const result = await approveWalkin(Number(req.params.id), req.session.user.id, req.facilityId);
     if (!result.ok) return res.status(400).json({ error: result.error });
     res.json({ success: true, spotName: result.spotName });
   });
 
-  app.post("/api/admin/walkin/:id/reject", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+  app.post("/api/admin/walkin/:id/reject", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
     const result = await rejectWalkin(Number(req.params.id), req.session.user.id, req.facilityId, req.body?.reason);
     if (!result.ok) return res.status(400).json({ error: result.error });
     res.json({ success: true });
@@ -1190,7 +1201,7 @@ async function startServer() {
     res.json(data || []);
   });
 
-  app.get("/api/admin/walkin/pending", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+  app.get("/api/admin/walkin/pending", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
     const { data } = await db.from("walkin_registrations").select("*").eq("facility_id", req.facilityId).eq("status", "pending_approval").order("created_at", { ascending: true });
     res.json(data || []);
   });
