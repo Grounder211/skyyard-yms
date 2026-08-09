@@ -434,6 +434,24 @@ export default function LiveTracking() {
               <Row label="Seal" value={selected.seal_number || "—"} />
               <Row label="PO number" value={selected.po_number || "—"} />
               <Row label="Cargo / SKU" value={selected.sku_summary || "—"} />
+              <div className="flex items-center justify-between py-1.5">
+                <span className="text-slate-500">Cargo status</span>
+                <select
+                  value={selected.cargo_status || "expected"}
+                  onChange={async (e) => {
+                    const status = e.target.value;
+                    const res = await fetch(`/api/trailers/${encodeURIComponent(selected.plate)}/cargo-status`, {
+                      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }),
+                    });
+                    if (res.ok) setSelected({ ...selected, cargo_status: status });
+                  }}
+                  className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs font-semibold"
+                >
+                  {["expected", "arrived", "checked", "loading", "loaded", "unloading", "unloaded", "short", "over", "damaged", "rejected", "completed"].map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
               <Row label="Time on site" value={elapsed(selected.checked_in_at || selected.check_in_time || new Date().toISOString())} mono />
             </div>
 

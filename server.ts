@@ -116,7 +116,7 @@ async function startServer() {
 
     const { data: spots } = await db
       .from("spots")
-      .select("*, trailers!trailers_spot_id_fkey(id, plate, carrier, status, check_in_time, checked_in_at, equipment_type, seal_number, driver_license, po_number, sku_summary, reefer_temp_setpoint, hazmat_class, tare_weight_kg, damage_photos)")
+      .select("*, trailers!trailers_spot_id_fkey(id, plate, carrier, status, check_in_time, checked_in_at, equipment_type, seal_number, driver_license, po_number, sku_summary, reefer_temp_setpoint, hazmat_class, tare_weight_kg, damage_photos, cargo_status)")
       .eq("facility_id", facilityId);
 
     const flatSpots = (spots || []).map((s: any) => {
@@ -139,6 +139,7 @@ async function startServer() {
         hazmat_class: trailer?.hazmat_class,
         tare_weight_kg: trailer?.tare_weight_kg,
         damage_photos: trailer?.damage_photos,
+        cargo_status: trailer?.cargo_status,
       };
     });
 
@@ -3182,6 +3183,22 @@ async function startServer() {
 
       logAudit({ action: "TRAILER_INSPECTION_UPDATED", entityType: "TRAILER", entityId: plate, details: { hazmat_class, tare_weight_kg, damage_note: !!damage_note }, ip: req.ip, facility_id: facilityId, severity: damage_note ? "warning" : "info" });
       res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  const CARGO_STATUSES = ["expected", "arrived", "checked", "loading", "loaded", "unloading", "unloaded", "short", "over", "damaged", "rejected", "completed"];
+
+  app.patch("/api/trailers/:plate/cargo-status", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { status } = req.body;
+    if (!CARGO_STATUSES.includes(status)) return res.status(400).json({ error: "Invalid status" });
+    try {
+      const { data, error } = await db.from("trailers").update({ cargo_status: status }).eq("plate", req.params.plate).eq("facility_id", req.facilityId).select("plate, cargo_status").single();
+      if (error) throw error;
+      logAudit({ action: "CARGO_STATUS_UPDATED", entityType: "TRAILER", entityId: req.params.plate, details: { status }, ip: req.ip, facility_id: req.facilityId });
+      emitUpdate("yard_update", { type: "CARGO_STATUS" });
+      res.json(data);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
