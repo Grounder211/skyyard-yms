@@ -27,6 +27,7 @@ import { logger } from "./server/logger.js";
 import { getCurrentTemperature } from "./server/services/smhiWeather.js";
 import { generateSecret as generateTotpSecret, verifyToken as verifyTotpToken, otpauthUrl as totpUri } from "./server/services/totp.js";
 import { checkStageTransition, isLoadReady } from "./server/services/gatePassStages.js";
+import { isDockSlaBreached } from "./server/services/dockSla.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -149,13 +150,16 @@ async function startServer() {
       .eq("facility_id", facilityId)
       .neq("status", "COMPLETED");
 
-    const moves = (moveRows || []).map((m: any) => ({
-      ...m,
-      plate: m.trailers?.plate,
-      from_name: m.from_spot?.name,
-      to_name: m.to_spot?.name,
-      assignee_name: m.assignee?.name || null,
-    }));
+    const priorityWeight: Record<string, number> = { urgent: 3, high: 2, normal: 1, low: 0 };
+    const moves = (moveRows || [])
+      .map((m: any) => ({
+        ...m,
+        plate: m.trailers?.plate,
+        from_name: m.from_spot?.name,
+        to_name: m.to_spot?.name,
+        assignee_name: m.assignee?.name || null,
+      }))
+      .sort((a: any, b: any) => (priorityWeight[b.priority] ?? 1) - (priorityWeight[a.priority] ?? 1) || new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
     const { data: fSettings } = await db.from("facility_settings").select("detention_threshold_hours").eq("facility_id", facilityId).maybeSingle();
 
@@ -723,7 +727,7 @@ async function startServer() {
 
   app.post("/api/settings/general", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const facilityId = req.session?.facility_id || req.facilityId || 1;
-    const { currency, locale, timezone, detention_rate_per_hour, detention_threshold_hours, max_appointments_per_hour, required_document_types, document_policy } = req.body;
+    const { currency, locale, timezone, detention_rate_per_hour, detention_threshold_hours, dock_sla_minutes, max_appointments_per_hour, required_document_types, document_policy } = req.body;
     try {
       const patch: any = { updated_at: new Date().toISOString() };
       if (currency) patch.currency = currency;
@@ -731,6 +735,7 @@ async function startServer() {
       if (timezone) patch.timezone = timezone;
       if (detention_rate_per_hour !== undefined) patch.detention_rate_per_hour = detention_rate_per_hour;
       if (detention_threshold_hours !== undefined) patch.detention_threshold_hours = detention_threshold_hours;
+      if (dock_sla_minutes !== undefined) patch.dock_sla_minutes = dock_sla_minutes;
       if (max_appointments_per_hour !== undefined) patch.max_appointments_per_hour = max_appointments_per_hour === "" ? null : Number(max_appointments_per_hour);
       if (Array.isArray(required_document_types)) patch.required_document_types = required_document_types;
       if (document_policy) patch.document_policy = document_policy;
@@ -1762,13 +1767,16 @@ async function startServer() {
     }
   });
 
+  const MOVE_PRIORITIES = ["low", "normal", "high", "urgent"];
   app.post("/api/create-move", requireRole("superadmin", "ADMIN", "HOSTLER"), async (req: any, res) => {
-    const { trailerId, fromSpotId, toSpotId, assignedTo } = req.body;
+    const { trailerId, fromSpotId, toSpotId, assignedTo, priority } = req.body;
     const facilityId = req.facilityId;
+    if (priority !== undefined && !MOVE_PRIORITIES.includes(priority)) return res.status(400).json({ error: "Invalid priority" });
     try {
       const { data: move, error } = await db.from("move_orders").insert({
         trailer_id: trailerId, from_spot_id: fromSpotId, to_spot_id: toSpotId, facility_id: facilityId,
         assigned_to: assignedTo || null, status: assignedTo ? "IN_PROGRESS" : "PENDING",
+        priority: priority || "normal",
       }).select().single();
       if (error) throw error;
       logAudit({ action: "MOVE_CREATED", entityType: "TRAILER", entityId: String(trailerId), details: { fromSpotId, toSpotId }, ip: req.ip, facility_id: facilityId });
@@ -2328,6 +2336,31 @@ async function startServer() {
           status: "ACTIVE", invoice_status: "pending",
         });
         notify({ type: "DETENTION_WARNING", recipientType: "CARRIER", recipientId: null, data: { title: "Detention Alert", body: `Trailer ${t.plate} has exceeded free dwell time. Detention charges applying.`, plate: t.plate } });
+      }
+    }
+  });
+
+  // Dock SLA — detention (above) only fires off total time since check-in,
+  // so a trailer that sat PARKED for 20 hours then got stuck LOADING for 3
+  // more never trips it separately. This watches time-in-stage instead, so
+  // a stuck dock operation gets flagged even while the trailer is still
+  // within its overall detention-free window.
+  cron.schedule("*/5 * * * *", async () => {
+    const { data: facilities } = await db.from("facility_settings").select("facility_id, dock_sla_minutes");
+    for (const f of facilities || []) {
+      const slaMinutes = f.dock_sla_minutes || 60;
+      const { data: stuck } = await db.from("gate_passes").select("id, plate, stage, updated_at").eq("facility_id", f.facility_id).in("stage", ["LOADING", "UNLOADING"]);
+      for (const p of stuck || []) {
+        if (!isDockSlaBreached(p.stage, p.updated_at, slaMinutes)) continue;
+        const { data: existing } = await db.from("exceptions").select("id").eq("entity_type", "GATE_PASS").eq("entity_id", String(p.id)).eq("exception_type", "dock_sla_breach").eq("status", "open").maybeSingle();
+        if (existing) continue;
+        raiseException({
+          facility_id: f.facility_id, exception_type: "dock_sla_breach", severity: "warning",
+          entity_type: "GATE_PASS", entity_id: String(p.id),
+          title: `${p.plate} stuck ${p.stage.toLowerCase()} past SLA`,
+          description: `Over ${slaMinutes} minutes in ${p.stage} — dock may be blocked or the load needs attention.`,
+          source: "dock_sla_check",
+        });
       }
     }
   });

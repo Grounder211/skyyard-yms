@@ -259,6 +259,7 @@ export default function Settings() {
         timezone: settings.timezone,
         detention_rate_per_hour: settings.detention_rate_per_hour,
         detention_threshold_hours: settings.detention_threshold_hours,
+        dock_sla_minutes: settings.dock_sla_minutes,
         max_appointments_per_hour: settings.max_appointments_per_hour,
         required_document_types: settings.required_document_types,
         document_policy: settings.document_policy,
@@ -362,6 +363,12 @@ export default function Settings() {
           <div className="space-y-1.5">
             <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Detention rate / hour</label>
             <input type="number" value={settings.detention_rate_per_hour ?? 75} onChange={(e) => setSettings({ ...settings, detention_rate_per_hour: Number(e.target.value) })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5">
+              <Clock size={12} /> Dock SLA (minutes)
+            </label>
+            <input type="number" value={settings.dock_sla_minutes ?? 60} onChange={(e) => setSettings({ ...settings, dock_sla_minutes: Number(e.target.value) })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
           </div>
           <div className="space-y-1.5">
             <label className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5">
