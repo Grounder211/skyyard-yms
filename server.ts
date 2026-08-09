@@ -2884,14 +2884,38 @@ async function startServer() {
     const { status, notes } = req.body;
     if (status !== undefined && !EQUIPMENT_STATUSES.includes(status)) return res.status(400).json({ error: "Invalid status" });
     try {
+      const { data: before } = await db.from("equipment").select("status").eq("id", req.params.id).eq("facility_id", req.facilityId).maybeSingle();
+      if (!before) return res.status(404).json({ error: "Equipment not found" });
+
       const patch: any = { updated_at: new Date().toISOString() };
       if (status !== undefined) patch.status = status;
       if (notes !== undefined) patch.notes = typeof notes === "string" ? notes.slice(0, 500) : null;
       const { data, error } = await db.from("equipment").update(patch).eq("id", req.params.id).eq("facility_id", req.facilityId).select().single();
       if (error) throw error;
+
+      // Phase 30: the single `notes` field only ever held the latest
+      // note — every prior status change (when it broke, how long it was
+      // down, what fixed it) was silently overwritten. Now logged.
+      if (status !== undefined && status !== before.status) {
+        await db.from("equipment_history").insert({
+          equipment_id: Number(req.params.id), facility_id: req.facilityId,
+          from_status: before.status, to_status: status, notes: patch.notes || null,
+          changed_by: req.session?.user?.id || null,
+        });
+      }
+
       logAudit({ action: "EQUIPMENT_STATUS_CHANGED", entityType: "EQUIPMENT", entityId: req.params.id, details: { status }, ip: req.ip, facility_id: req.facilityId });
       emitUpdate("yard_update", { type: "EQUIPMENT" });
       res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/equipment/:id/history", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    try {
+      const { data } = await db.from("equipment_history").select("*, changer:users(name)").eq("equipment_id", req.params.id).eq("facility_id", req.facilityId).order("created_at", { ascending: false }).limit(50);
+      res.json((data || []).map((h: any) => ({ ...h, changed_by_name: h.changer?.name || null })));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

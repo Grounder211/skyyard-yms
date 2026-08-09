@@ -788,11 +788,20 @@ function EquipmentPanel() {
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({ name: "", type: "yard_tractor" });
   const [busy, setBusy] = useState(false);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [history, setHistory] = useState<any[]>([]);
 
   const load = () => {
     fetch("/api/admin/equipment").then((r) => r.json()).then(setRows).finally(() => setLoading(false));
   };
   useEffect(load, []);
+
+  const toggleHistory = async (id: number) => {
+    if (expandedId === id) { setExpandedId(null); return; }
+    setExpandedId(id);
+    const res = await fetch(`/api/admin/equipment/${id}/history`);
+    if (res.ok) setHistory(await res.json());
+  };
 
   const addEquipment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -851,22 +860,40 @@ function EquipmentPanel() {
             const typeInfo = EQUIPMENT_TYPES.find((t) => t.value === eq.type);
             const TypeIcon = typeInfo?.icon || Wrench;
             return (
-            <div key={eq.id} className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-100 rounded-xl px-4 py-2.5 transition-colors hover:bg-slate-100/70">
-              <div className="min-w-0 flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center shrink-0">
-                  <TypeIcon size={14} className="text-slate-500" />
+            <div key={eq.id}>
+              <div className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-100 rounded-xl px-4 py-2.5 transition-colors hover:bg-slate-100/70">
+                <div className="min-w-0 flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center shrink-0">
+                    <TypeIcon size={14} className="text-slate-500" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-bold text-slate-900 text-sm truncate">{eq.name}</p>
+                    <p className="text-xs text-slate-400">{typeInfo?.label || eq.type}</p>
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <p className="font-bold text-slate-900 text-sm truncate">{eq.name}</p>
-                  <p className="text-xs text-slate-400">{typeInfo?.label || eq.type}</p>
+                <div className="flex items-center gap-2 shrink-0">
+                  <select value={eq.status} onChange={(e) => setStatus(eq.id, e.target.value)} className={`text-xs font-bold uppercase tracking-wider px-2 py-1 rounded-full border-0 cursor-pointer ${statusColor[eq.status]}`}>
+                    {EQUIPMENT_STATUSES.map((s) => <option key={s} value={s}>{s.replace("_", " ")}</option>)}
+                  </select>
+                  <button onClick={() => toggleHistory(eq.id)} className="text-slate-400 hover:text-indigo-600 transition-colors"><Clock size={14} /></button>
+                  <button onClick={() => remove(eq.id)} className="text-slate-400 hover:text-red-600 transition-colors"><Trash2 size={14} /></button>
                 </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <select value={eq.status} onChange={(e) => setStatus(eq.id, e.target.value)} className={`text-xs font-bold uppercase tracking-wider px-2 py-1 rounded-full border-0 cursor-pointer ${statusColor[eq.status]}`}>
-                  {EQUIPMENT_STATUSES.map((s) => <option key={s} value={s}>{s.replace("_", " ")}</option>)}
-                </select>
-                <button onClick={() => remove(eq.id)} className="text-slate-400 hover:text-red-600 transition-colors"><Trash2 size={14} /></button>
-              </div>
+              {expandedId === eq.id && (
+                <div className="ml-4 mt-1 mb-2 pl-4 border-l-2 border-slate-100 space-y-1.5">
+                  {history.length === 0 ? (
+                    <p className="text-xs text-slate-400 py-2">No status changes recorded yet.</p>
+                  ) : (
+                    history.map((h) => (
+                      <p key={h.id} className="text-xs text-slate-500">
+                        <span className="font-semibold text-slate-700">{h.from_status.replace("_", " ")} → {h.to_status.replace("_", " ")}</span>
+                        {" · "}{new Date(h.created_at).toLocaleString()}{h.changed_by_name ? ` · ${h.changed_by_name}` : ""}
+                        {h.notes ? ` · "${h.notes}"` : ""}
+                      </p>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
             );
           })}
