@@ -26,6 +26,7 @@ import {
   FileText,
   AlertTriangle,
   Users,
+  Percent,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { Routes, Route, Link, useLocation } from "react-router-dom";
@@ -330,7 +331,7 @@ function Dashboard() {
   const [attention, setAttention] = React.useState<any>({ critical: [], timeCritical: [], operations: [], upcoming: [] });
   const [avgDwellMinutes, setAvgDwellMinutes] = React.useState<number | null>(null);
   const [dailyVelocity, setDailyVelocity] = React.useState(0);
-  const [today, setToday] = React.useState<{ expectedArrivals: number; noShows: number; activeMoves: number; hostlersAvailable: number; hostlersBusy: number }>({ expectedArrivals: 0, noShows: 0, activeMoves: 0, hostlersAvailable: 0, hostlersBusy: 0 });
+  const [today, setToday] = React.useState<{ expectedArrivals: number; noShows: number; activeMoves: number; hostlersAvailable: number; hostlersBusy: number; arrivalsNext60m: number; gateQueue: number; departuresImminent: number; criticalExceptions: number }>({ expectedArrivals: 0, noShows: 0, activeMoves: 0, hostlersAvailable: 0, hostlersBusy: 0, arrivalsNext60m: 0, gateQueue: 0, departuresImminent: 0, criticalExceptions: 0 });
   const [zones, setZones] = React.useState<{ zone: string; total: number; occupied: number }[]>([]);
   const [unresolvedSafetySpotIds, setUnresolvedSafetySpotIds] = React.useState<number[]>([]);
   const [spotsWithOpenExceptions, setSpotsWithOpenExceptions] = React.useState<number[]>([]);
@@ -344,7 +345,7 @@ function Dashboard() {
         setSpots(data.spots);
         setAvgDwellMinutes(data.avgDwellMinutes);
         setDailyVelocity(data.dailyVelocity ?? 0);
-        setToday(data.today || { expectedArrivals: 0, noShows: 0, activeMoves: 0, hostlersAvailable: 0, hostlersBusy: 0 });
+        setToday(data.today || { expectedArrivals: 0, noShows: 0, activeMoves: 0, hostlersAvailable: 0, hostlersBusy: 0, arrivalsNext60m: 0, gateQueue: 0, departuresImminent: 0, criticalExceptions: 0 });
         setZones(data.zones || []);
         setUnresolvedSafetySpotIds(data.unresolvedSafetySpotIds || []);
         setSpotsWithOpenExceptions(data.spotsWithOpenExceptions || []);
@@ -401,6 +402,27 @@ function Dashboard() {
         <Reveal preset="fade-up" delay={350}>
           <StatItem icon={<Users />} label="Hostlers Available" value={today.hostlersAvailable} sub={`${today.hostlersBusy} busy right now`} color="teal" />
         </Reveal>
+      </div>
+
+      <div>
+        <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3">Live Yard Status — Next 60 Minutes</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
+          <Reveal preset="fade-up" delay={375}>
+            <StatItem icon={<DoorOpen />} label="Gate Queue" value={today.gateQueue} sub="Waiting for approval" color={today.gateQueue > 0 ? "amber" : "teal"} />
+          </Reveal>
+          <Reveal preset="fade-up" delay={400}>
+            <StatItem icon={<Percent />} label="Dock Utilization" value={spots.filter((s: any) => s.type === "DOCK").length ? Math.round((spots.filter((s: any) => s.type === "DOCK" && s.status === "OCCUPIED").length / spots.filter((s: any) => s.type === "DOCK").length) * 100) : 0} suffix="%" sub="Docks occupied" color="indigo" />
+          </Reveal>
+          <Reveal preset="fade-up" delay={425}>
+            <StatItem icon={<Calendar />} label="Arrivals Next 60m" value={today.arrivalsNext60m} sub="Scheduled to arrive soon" color="indigo" />
+          </Reveal>
+          <Reveal preset="fade-up" delay={450}>
+            <StatItem icon={<LogOut />} label="Departures Imminent" value={today.departuresImminent} sub="Out-pass issued, not yet exited" color="teal" />
+          </Reveal>
+          <Reveal preset="fade-up" delay={475}>
+            <StatItem icon={<ShieldAlert />} label="Critical Exceptions" value={today.criticalExceptions} sub="Unresolved right now" color={today.criticalExceptions > 0 ? "amber" : "teal"} />
+          </Reveal>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

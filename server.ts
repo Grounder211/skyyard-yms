@@ -193,12 +193,29 @@ async function startServer() {
       .lt("start_time", todayEnd);
     const { count: totalHostlers } = await db.from("users").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("role", "HOSTLER");
     const busyHostlers = countBusyHostlers(moves);
+
+    // Command Center Priority 2 (next-gen roadmap): "what's coming in the
+    // next hour" is a sharper operational signal than a whole-day count.
+    // Reuses countExpectedArrivalsToday's own window args rather than a new
+    // function — it already just filters SCHEDULED appointments by range.
+    const nowIso = new Date().toISOString();
+    const in60Iso = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const arrivalsNext60m = countExpectedArrivalsToday(todaysAppointments || [], nowIso, in60Iso);
+    const [{ count: gateQueue }, { count: departuresImminent }, { count: criticalExceptions }] = await Promise.all([
+      db.from("walkin_registrations").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("status", "pending_approval"),
+      db.from("gate_passes").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("stage", "OUT_PASS"),
+      db.from("exceptions").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("severity", "critical").neq("status", "resolved"),
+    ]);
     const today = {
       expectedArrivals: countExpectedArrivalsToday(todaysAppointments || [], todayStart.toISOString(), todayEnd),
       noShows: countTodayNoShows(todaysAppointments || [], todayStart.toISOString()),
       activeMoves: moves.length,
       hostlersBusy: busyHostlers,
       hostlersAvailable: Math.max(0, (totalHostlers || 0) - busyHostlers),
+      arrivalsNext60m,
+      gateQueue: gateQueue || 0,
+      departuresImminent: departuresImminent || 0,
+      criticalExceptions: criticalExceptions || 0,
     };
 
     const zones = summarizeZoneOccupancy(flatSpots);
