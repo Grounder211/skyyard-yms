@@ -25,6 +25,7 @@ import multer from "multer";
 import { db, unwrap } from "./server/supabaseClient.js";
 import { logger } from "./server/logger.js";
 import { getCurrentTemperature } from "./server/services/smhiWeather.js";
+import { getTrafficProvider } from "./server/services/trafficProvider.js";
 import { generateSecret as generateTotpSecret, verifyToken as verifyTotpToken, otpauthUrl as totpUri } from "./server/services/totp.js";
 import { checkStageTransition, isLoadReady } from "./server/services/gatePassStages.js";
 import { isDockSlaBreached } from "./server/services/dockSla.js";
@@ -4119,6 +4120,44 @@ async function startServer() {
     }
   });
 
+  // Real traffic — Priority 1 of the next-gen roadmap. No provider
+  // credential exists in this environment (checked, not guessed — see
+  // getTrafficProvider). Never fabricate a route/ETA: /status tells staff
+  // and any dashboard exactly what's configured, and /route 503s with a
+  // clear reason instead of returning made-up numbers.
+  app.get("/api/traffic/status", async (req, res) => {
+    const provider = getTrafficProvider();
+    res.json({ configured: !!provider, provider: provider?.name || null });
+  });
+
+  app.get("/api/traffic/route", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const provider = getTrafficProvider();
+    if (!provider) return res.status(503).json({ error: "TRAFFIC PROVIDER NOT CONFIGURED" });
+    const originLat = Number(req.query.originLat);
+    const originLng = Number(req.query.originLng);
+    if (!Number.isFinite(originLat) || !Number.isFinite(originLng)) {
+      return res.status(400).json({ error: "originLat and originLng are required numbers" });
+    }
+    try {
+      let destLat = Number(req.query.destLat);
+      let destLng = Number(req.query.destLng);
+      if (!Number.isFinite(destLat) || !Number.isFinite(destLng)) {
+        const { data: facility } = await db.from("facilities").select("latitude, longitude").eq("id", req.facilityId).maybeSingle();
+        if (facility?.latitude == null || facility?.longitude == null) {
+          return res.status(400).json({ error: "No destination given and facility has no coordinates configured" });
+        }
+        destLat = facility.latitude;
+        destLng = facility.longitude;
+      }
+      const route = await provider.getTrafficAwareRoute({ lat: originLat, lng: originLng }, { lat: destLat, lng: destLng });
+      if (!route) return res.status(502).json({ error: "Traffic provider returned no route" });
+      res.json(route);
+    } catch (e: any) {
+      logger.error("Traffic route fetch failed", { error: e.message });
+      res.status(502).json({ error: "Traffic provider request failed" });
+    }
+  });
+
   // Set a facility's real-world coordinates so weather (and future
   // Trafikverket/geofence work) resolve to the nearest actual station
   // instead of the Stockholm-Bromma fallback.
@@ -4310,6 +4349,9 @@ async function startServer() {
 
   httpServer.listen(PORT, "0.0.0.0", () => {
     logger.info(`SkyYard YMS v4.0 [Supabase + Real-time] running on http://localhost:${PORT}`);
+    const traffic = getTrafficProvider();
+    if (traffic) logger.info(`Traffic provider configured: ${traffic.name}`);
+    else logger.warn("TRAFFIC PROVIDER NOT CONFIGURED — set TRAFFIC_PROVIDER=mapbox and MAPBOX_ACCESS_TOKEN to enable real traffic-aware ETAs");
   });
 }
 
