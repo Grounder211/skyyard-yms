@@ -5,6 +5,14 @@ export default function TVDisplay() {
   const [data, setData] = useState<any>(null);
   const [time, setTime] = useState(new Date());
   const [weather, setWeather] = useState<any>(null);
+  const [notices, setNotices] = useState<any[]>([]);
+
+  useEffect(() => {
+    const loadNotices = () => fetch("/api/admin/needs-attention").then((r) => (r.ok ? r.json() : null)).then((a) => setNotices([...(a?.critical || []), ...(a?.timeCritical || [])])).catch(() => {});
+    loadNotices();
+    const interval = setInterval(loadNotices, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     const loadWeather = () => fetch("/api/weather/current").then((r) => (r.ok ? r.json() : null)).then(setWeather).catch(() => {});
@@ -22,7 +30,7 @@ export default function TVDisplay() {
     const fetchData = async () => {
       try {
         const res = await fetch("/api/yard-status");
-        setData(await res.json());
+        if (res.ok) setData(await res.json());
       } catch (err) {
         console.error("TV sync error", err);
       }
@@ -106,17 +114,25 @@ export default function TVDisplay() {
         </div>
 
         {/* Sidebar Alerts */}
-        <aside className="bg-slate-900 border border-slate-800 rounded-[3rem] p-8 flex flex-col gap-8">
+        <aside className="bg-slate-900 border border-slate-800 rounded-[3rem] p-8 flex flex-col gap-6 overflow-hidden">
            <h3 className="text-lg font-bold flex items-center gap-3 text-red-400">
-              <AlertTriangle /> Critical Notices
+              <AlertTriangle /> Critical Notices {notices.length > 0 && <span className="text-sm bg-red-500/20 px-2.5 py-0.5 rounded-full">{notices.length}</span>}
            </h3>
-           <div className="flex-1 flex flex-col items-center justify-center text-center gap-6 opacity-30">
-              <Globe size={120} className="text-slate-700" />
-              <p className="text-sm font-bold uppercase tracking-widest">Network Surveillance Online</p>
-           </div>
-           <div className="p-6 bg-indigo-500/10 border border-indigo-500/20 rounded-3xl text-indigo-300 text-center">
-              <p className="text-xs font-bold uppercase tracking-widest leading-loose">Shift Change in 18m<br/>Stand by for handover</p>
-           </div>
+           {notices.length === 0 ? (
+             <div className="flex-1 flex flex-col items-center justify-center text-center gap-6 opacity-30">
+                <Globe size={120} className="text-slate-700" />
+                <p className="text-sm font-bold uppercase tracking-widest">All clear — nothing needs attention</p>
+             </div>
+           ) : (
+             <div className="flex-1 space-y-3 overflow-y-auto">
+               {notices.slice(0, 8).map((n: any, i: number) => (
+                 <div key={i} className={`p-5 rounded-3xl border ${n.severity === "critical" ? "bg-red-500/10 border-red-500/30 text-red-300" : "bg-amber-500/10 border-amber-500/30 text-amber-300"}`}>
+                   <p className="font-bold text-sm">{n.title}</p>
+                   <p className="text-xs opacity-70 mt-1">{n.description}</p>
+                 </div>
+               ))}
+             </div>
+           )}
         </aside>
       </main>
     </div>
