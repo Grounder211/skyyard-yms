@@ -1590,6 +1590,30 @@ async function startServer() {
     }
   });
 
+  // Priority 44/45: bulk-resolve, auditable. One audit entry naming every
+  // entity in the batch (matches this app's existing audit granularity —
+  // a summary, not a per-field snapshot — used consistently everywhere
+  // else in this file, not a new heavier standard invented for this).
+  app.post("/api/admin/exceptions/bulk-resolve", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { ids, resolution_notes } = req.body;
+    const userId = req.session?.user?.id || null;
+    if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: "ids must be a non-empty array" });
+    try {
+      const patch: any = { status: "resolved", resolved_at: new Date().toISOString(), resolved_by: userId };
+      if (resolution_notes !== undefined) patch.resolution_notes = resolution_notes;
+      const { data, error } = await db.from("exceptions").update(patch).in("id", ids).eq("facility_id", req.facilityId).neq("status", "resolved").select();
+      if (error) throw error;
+      logAudit({ action: "EXCEPTION_BULK_RESOLVED", entityType: "EXCEPTION", entityId: ids.join(","), details: { requested: ids.length, resolved: (data || []).length, ids }, ip: req.ip, facility_id: req.facilityId });
+      for (const d of data || []) {
+        emitUpdate("exception_updated", d);
+        enqueueWebhook("EXCEPTION_RESOLVED", d, req.facilityId);
+      }
+      res.json({ success: true, resolved: (data || []).length });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.patch("/api/admin/exceptions/:id", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     const { status, owner_id, resolution_notes } = req.body;
     const userId = req.session?.user?.id || null;

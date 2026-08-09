@@ -32,6 +32,8 @@ export default function ExceptionCenter() {
   const [statusFilter, setStatusFilter] = useState("open");
   const [busyId, setBusyId] = useState<number | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number[]>([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [notesDraft, setNotesDraft] = useState("");
 
   const load = async () => {
@@ -80,6 +82,32 @@ export default function ExceptionCenter() {
     }
     setBusyId(null);
   };
+
+  const bulkResolve = async () => {
+    if (selected.length === 0) return;
+    if (!confirm(`Resolve ${selected.length} exception(s)?`)) return;
+    setBulkBusy(true);
+    try {
+      const res = await fetch("/api/admin/exceptions/bulk-resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: selected }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        toast(`Resolved ${data.resolved} exception(s)`, "success");
+        setSelected([]);
+        load();
+      } else {
+        toast("Bulk resolve failed", "error");
+      }
+    } catch {
+      toast("Network error", "error");
+    }
+    setBulkBusy(false);
+  };
+
+  const toggleSelected = (id: number) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   const counts = {
     open: allItems.filter((i) => i.status === "open").length,
@@ -143,10 +171,30 @@ export default function ExceptionCenter() {
         </div>
       ) : (
         <div className="space-y-3">
+          {selected.length > 0 && (
+            <div className="flex items-center justify-between bg-indigo-600 text-white rounded-2xl px-5 py-3 sticky top-0 z-10">
+              <span className="text-sm font-bold">{selected.length} selected</span>
+              <div className="flex gap-3">
+                <button onClick={() => setSelected([])} className="text-xs font-bold text-indigo-100 hover:text-white">Clear</button>
+                <button onClick={bulkResolve} disabled={bulkBusy} className="bg-white text-indigo-600 px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-indigo-50 disabled:opacity-50 flex items-center gap-1.5">
+                  {bulkBusy && <Loader2 size={12} className="animate-spin" />} Resolve selected
+                </button>
+              </div>
+            </div>
+          )}
           {items.map((ex) => (
             <div key={ex.id} className={`border rounded-2xl overflow-hidden ${SEVERITY_STYLES[ex.severity] || SEVERITY_STYLES.info}`}>
-              <button onClick={() => setExpandedId(expandedId === ex.id ? null : ex.id)} className="w-full text-left px-5 py-4 flex items-center justify-between gap-4">
+              <div className="w-full text-left px-5 py-4 flex items-center justify-between gap-4 cursor-pointer" onClick={() => setExpandedId(expandedId === ex.id ? null : ex.id)}>
                 <div className="min-w-0 flex items-center gap-3">
+                  {ex.status !== "resolved" && (
+                    <input
+                      type="checkbox"
+                      checked={selected.includes(ex.id)}
+                      onChange={() => toggleSelected(ex.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="shrink-0 w-4 h-4 rounded accent-indigo-600"
+                    />
+                  )}
                   {ex.severity === "critical" ? <AlertTriangle size={16} className="shrink-0" /> : <Clock size={16} className="shrink-0" />}
                   <div className="min-w-0">
                     <p className="font-bold text-sm truncate">{ex.title}</p>
@@ -157,7 +205,7 @@ export default function ExceptionCenter() {
                   <span className="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full bg-white/60">{STATUS_LABELS[ex.status]}</span>
                   <ChevronDown size={14} className={`transition-transform ${expandedId === ex.id ? "rotate-180" : ""}`} />
                 </div>
-              </button>
+              </div>
               {expandedId === ex.id && (
                 <div className="px-5 pb-5 pt-1 bg-white/40 space-y-3">
                   {ex.description && <p className="text-sm">{ex.description}</p>}
