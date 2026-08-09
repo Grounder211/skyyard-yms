@@ -123,6 +123,7 @@ export default function Settings() {
 
   const WEBHOOK_EVENTS = ["APPOINTMENT_CREATED", "APPOINTMENT_CANCELLED", "EXCEPTION_CREATED", "EXCEPTION_RESOLVED", "TRAILER_MOVED", "TRUCK_DEPARTED"];
   const [webhooks, setWebhooks] = useState<any[]>([]);
+  const [integrations, setIntegrations] = useState<any[]>([]);
   const [newWebhookUrl, setNewWebhookUrl] = useState("");
   const [newWebhookEvents, setNewWebhookEvents] = useState<string[]>([]);
   const [webhookBusy, setWebhookBusy] = useState(false);
@@ -196,6 +197,7 @@ export default function Settings() {
     loadApiKeys();
     loadBlackouts();
     loadWebhooks();
+    fetch("/api/admin/integrations").then((r) => (r.ok ? r.json() : [])).then(setIntegrations).catch(() => {});
   };
 
   useEffect(load, []);
@@ -586,6 +588,28 @@ export default function Settings() {
             ))}
           </div>
         )}
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-[2rem] p-8 space-y-5">
+        <div>
+          <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
+            <Globe2 size={18} className="text-indigo-600" /> Integrations
+          </h3>
+          <p className="text-sm text-slate-500 mt-1">What's actually connected right now — no row here claims a connection that isn't real.</p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {integrations.map((i) => (
+            <div key={i.name} className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-2xl px-4 py-3">
+              <div>
+                <p className="text-sm font-bold text-slate-800">{i.name}</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">{i.detail}</p>
+              </div>
+              <span className={`text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full shrink-0 ml-3 ${i.status === "CONNECTED" ? "bg-teal-100 text-teal-700" : "bg-slate-200 text-slate-500"}`}>
+                {i.status === "CONNECTED" ? "Connected" : "Not configured"}
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="bg-white border border-slate-200 rounded-[2rem] p-8 space-y-5">

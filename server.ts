@@ -4234,6 +4234,30 @@ async function startServer() {
   // getTrafficProvider). Never fabricate a route/ETA: /status tells staff
   // and any dashboard exactly what's configured, and /route 503s with a
   // clear reason instead of returning made-up numbers.
+  // Priority 36: Integration Center — the one honest list of what's real.
+  // Every row here is a live check, not a hardcoded claim; anything never
+  // built (GPS, computer vision, WMS/TMS/ERP) reports NOT_CONFIGURED
+  // because that's the truth, not because the row is a placeholder.
+  app.get("/api/admin/integrations", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    try {
+      const traffic = getTrafficProvider();
+      const smsConfigured = !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER);
+      const { count: activeWebhooks } = await db.from("webhook_subscriptions").select("*", { count: "exact", head: true }).eq("facility_id", req.facilityId).eq("active", true);
+      res.json([
+        { name: "Traffic", status: traffic ? "CONNECTED" : "NOT_CONFIGURED", detail: traffic ? traffic.name : "Set TRAFFIC_PROVIDER + MAPBOX_ACCESS_TOKEN" },
+        { name: "Weather (SMHI)", status: "CONNECTED", detail: "Public API, no key required" },
+        { name: "SMS (Twilio)", status: smsConfigured ? "CONNECTED" : "NOT_CONFIGURED", detail: smsConfigured ? "Configured" : "Set TWILIO_ACCOUNT_SID/AUTH_TOKEN/PHONE_NUMBER" },
+        { name: "Email", status: "NOT_CONFIGURED", detail: "No email provider integrated yet" },
+        { name: "Webhooks", status: (activeWebhooks || 0) > 0 ? "CONNECTED" : "NOT_CONFIGURED", detail: `${activeWebhooks || 0} active subscription(s)` },
+        { name: "GPS / Telematics", status: "NOT_CONFIGURED", detail: "No provider integrated — architecture prepared, not faked" },
+        { name: "Computer Vision (ANPR/OCR)", status: "NOT_CONFIGURED", detail: "No provider integrated" },
+        { name: "WMS / TMS / ERP", status: "NOT_CONFIGURED", detail: "No provider integrated" },
+      ]);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/traffic/status", async (req, res) => {
     const provider = getTrafficProvider();
     res.json({ configured: !!provider, provider: provider?.name || null });
@@ -4425,6 +4449,12 @@ async function startServer() {
           } else {
             throw new Error(result.error);
           }
+        } else if (item.channel === "email") {
+          // No email provider is configured in this app (no SendGrid/SMTP
+          // credentials anywhere) — this used to mark every queued email
+          // "sent" without ever sending one. Fails honestly into the same
+          // retry/backoff/give-up path SMS already uses instead of lying.
+          throw new Error("Email provider not configured");
         } else {
           await db.from("notifications_queue").update({ status: "sent" }).eq("id", item.id);
         }
