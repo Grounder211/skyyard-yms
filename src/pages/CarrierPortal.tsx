@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Warehouse, Building2, Mail, Lock, LogOut, Loader2, Truck, CalendarClock, AlertCircle, Gauge, TrendingUp, XCircle } from "lucide-react";
 import { motion } from "motion/react";
 import { Link } from "react-router-dom";
+import NotificationBell from "../components/NotificationBell";
 
 export default function CarrierPortal() {
   const [checking, setChecking] = useState(true);
@@ -132,9 +133,12 @@ export default function CarrierPortal() {
           </motion.div>
         ) : (
           <div className="space-y-8">
-            <div>
-              <h1 className="text-2xl font-bold text-slate-900">{carrier.name}</h1>
-              <p className="text-slate-500 text-sm">{carrier.email}</p>
+            <div className="flex items-start justify-between">
+              <div>
+                <h1 className="text-2xl font-bold text-slate-900">{carrier.name}</h1>
+                <p className="text-slate-500 text-sm">{carrier.email}</p>
+              </div>
+              <NotificationBell scope="carrier" />
             </div>
 
             <div className="grid grid-cols-2 gap-4">

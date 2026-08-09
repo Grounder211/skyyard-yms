@@ -2310,6 +2310,24 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  app.get("/api/driver/notifications", requireDriverAuth, async (req: any, res) => {
+    try {
+      const { data } = await db.from("in_app_notifications").select("*").eq("user_type", "driver").eq("user_id", req.session.driver_id).is("read_at", null).order("created_at", { ascending: false }).limit(25);
+      res.json(data || []);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/driver/notifications/:id/read", requireDriverAuth, async (req: any, res) => {
+    try {
+      await db.from("in_app_notifications").update({ read_at: new Date().toISOString() }).eq("id", req.params.id).eq("user_id", req.session.driver_id).eq("user_type", "driver");
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/driver/appointments", async (req: any, res) => {
     if (!req.session?.driver_id) return res.status(401).json({ error: "Driver session required" });
     try {
@@ -2584,6 +2602,27 @@ async function startServer() {
       if (error) throw error;
       logAudit({ action: "DETENTION_DISPUTED", entityType: "DETENTION_RECORD", entityId: req.params.id, details: { reason: reason.trim() }, ip: req.ip, facility_id: data.facility_id });
       res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Carriers/drivers have their own session type (not requireRole), so they
+  // can't hit /api/notifications/inapp — that endpoint also has no user_id
+  // filter (fine for ADMIN broadcasts, but would leak across carriers here).
+  app.get("/api/carrier/notifications", requireCarrierAuth, async (req: any, res) => {
+    try {
+      const { data } = await db.from("in_app_notifications").select("*").eq("user_type", "CARRIER").eq("user_id", req.session.carrier_id).is("read_at", null).order("created_at", { ascending: false }).limit(25);
+      res.json(data || []);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/carrier/notifications/:id/read", requireCarrierAuth, async (req: any, res) => {
+    try {
+      await db.from("in_app_notifications").update({ read_at: new Date().toISOString() }).eq("id", req.params.id).eq("user_id", req.session.carrier_id).eq("user_type", "CARRIER");
+      res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

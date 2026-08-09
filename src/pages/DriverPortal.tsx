@@ -4,6 +4,7 @@ import { motion } from "motion/react";
 import { QRCodeSVG } from "qrcode.react";
 import { Link } from "react-router-dom";
 import PhoneInput, { toE164 } from "../components/PhoneInput";
+import NotificationBell from "../components/NotificationBell";
 
 const VEHICLE_TYPES = ["Semi-trailer", "Box truck", "Flatbed", "Refrigerated", "Tanker", "Container chassis"];
 
@@ -159,9 +160,12 @@ export default function DriverPortal() {
           </motion.div>
         ) : (
           <div className="space-y-6">
-            <div className="bg-white border border-slate-100 rounded-3xl p-6">
-              <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Signed in as</p>
-              <p className="text-lg font-bold text-slate-900">{driver.name || driver.phone}</p>
+            <div className="bg-white border border-slate-100 rounded-3xl p-6 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Signed in as</p>
+                <p className="text-lg font-bold text-slate-900">{driver.name || driver.phone}</p>
+              </div>
+              <NotificationBell scope="driver" />
             </div>
 
             {!driver.badge_issued_at ? (

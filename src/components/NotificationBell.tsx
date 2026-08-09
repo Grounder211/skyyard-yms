@@ -11,15 +11,22 @@ interface Notif {
   created_at: string;
 }
 
-export default function NotificationBell() {
+const SCOPE_URLS: Record<string, { list: string; read: (id: number) => string; readAll?: string }> = {
+  admin: { list: "/api/notifications/inapp?userType=ADMIN", read: (id) => `/api/notifications/inapp/${id}/read`, readAll: "/api/notifications/inapp/read-all" },
+  carrier: { list: "/api/carrier/notifications", read: (id) => `/api/carrier/notifications/${id}/read` },
+  driver: { list: "/api/driver/notifications", read: (id) => `/api/driver/notifications/${id}/read` },
+};
+
+export default function NotificationBell({ scope = "admin" }: { scope?: "admin" | "carrier" | "driver" }) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<Notif[]>([]);
   const socketRef = useRef<any>(null);
   const navigate = useNavigate();
+  const urls = SCOPE_URLS[scope];
 
   const load = async () => {
     try {
-      const res = await fetch(`/api/notifications/inapp?userType=ADMIN`);
+      const res = await fetch(urls.list);
       if (res.ok) setItems(await res.json());
     } catch {}
   };
@@ -29,20 +36,20 @@ export default function NotificationBell() {
     socketRef.current = io();
     socketRef.current.on("new_notification", () => load());
     return () => socketRef.current?.disconnect();
-  }, []);
+  }, [scope]);
 
   const markAllRead = async () => {
-    await fetch("/api/notifications/inapp/read-all", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userType: "ADMIN" }),
-    });
+    if (urls.readAll) {
+      await fetch(urls.readAll, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userType: "ADMIN" }) });
+    } else {
+      await Promise.all(items.map((n) => fetch(urls.read(n.id), { method: "POST" }).catch(() => {})));
+    }
     setItems([]);
   };
 
   const openNotification = async (n: Notif) => {
     setItems((prev) => prev.filter((i) => i.id !== n.id));
-    fetch(`/api/notifications/inapp/${n.id}/read`, { method: "POST" }).catch(() => {});
+    fetch(urls.read(n.id), { method: "POST" }).catch(() => {});
     if (n.link) {
       setOpen(false);
       navigate(n.link);
