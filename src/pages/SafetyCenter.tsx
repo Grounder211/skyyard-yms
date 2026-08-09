@@ -50,7 +50,8 @@ export default function SafetyCenter() {
   const [rootCauseDraft, setRootCauseDraft] = useState("");
   const [showReportForm, setShowReportForm] = useState(false);
   const [reportBusy, setReportBusy] = useState(false);
-  const [form, setForm] = useState({ severity: "medium", category: "near_miss", location: "", plate: "", description: "", witnesses: "", immediate_action: "" });
+  const [form, setForm] = useState({ severity: "medium", category: "near_miss", location: "", plate: "", description: "", witnesses: "", immediate_action: "", spot_id: "" });
+  const [spots, setSpots] = useState<any[]>([]);
 
   const load = async () => {
     try {
@@ -65,6 +66,12 @@ export default function SafetyCenter() {
     } catch {}
     setLoading(false);
   };
+
+  // Reuses yard-status's spot list rather than a dedicated endpoint —
+  // this is the same list the yard map already renders.
+  useEffect(() => {
+    fetch("/api/yard-status").then((r) => r.ok ? r.json() : null).then((d) => setSpots(d?.spots || [])).catch(() => {});
+  }, []);
 
   useEffect(() => {
     setLoading(true);
@@ -84,11 +91,11 @@ export default function SafetyCenter() {
       const res = await fetch("/api/admin/safety-incidents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, spot_id: form.spot_id ? Number(form.spot_id) : null }),
       });
       if (res.ok) {
         toast("Safety incident reported", "success");
-        setForm({ severity: "medium", category: "near_miss", location: "", plate: "", description: "", witnesses: "", immediate_action: "" });
+        setForm({ severity: "medium", category: "near_miss", location: "", plate: "", description: "", witnesses: "", immediate_action: "", spot_id: "" });
         setShowReportForm(false);
         load();
       } else {
@@ -251,10 +258,17 @@ export default function SafetyCenter() {
                 </select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="space-y-1.5">
-                <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Location (optional)</label>
-                <input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="e.g. Dock D12" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+                <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Yard spot (optional)</label>
+                <select value={form.spot_id} onChange={(e) => setForm({ ...form, spot_id: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm">
+                  <option value="">Not at a specific spot</option>
+                  {spots.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Location detail (optional)</label>
+                <input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="e.g. near the fuel island" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm" />
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Related plate (optional)</label>

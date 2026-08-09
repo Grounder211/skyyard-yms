@@ -24,6 +24,8 @@ import {
   ShieldAlert,
   HardHat,
   FileText,
+  AlertTriangle,
+  Users,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { Routes, Route, Link, useLocation } from "react-router-dom";
@@ -58,6 +60,7 @@ const SettingsPage = React.lazy(() => import("./pages/Settings"));
 const DriverPortal = React.lazy(() => import("./pages/DriverPortal"));
 const CarrierPortal = React.lazy(() => import("./pages/CarrierPortal"));
 const BookingPage = React.lazy(() => import("./pages/BookingPage"));
+const CustomerPortal = React.lazy(() => import("./pages/CustomerPortal"));
 const PrivacyRequest = React.lazy(() => import("./pages/PrivacyRequest"));
 const GateCheckinPage = React.lazy(() => import("./pages/GateCheckinPage"));
 const GateCheckinStatusPage = React.lazy(() => import("./pages/GateCheckinStatusPage"));
@@ -79,6 +82,7 @@ function RootRoutes() {
       {/* Public routes — no staff login required */}
       <Route path="/display/:token" element={<Suspense fallback={null}><TVDisplay /></Suspense>} />
       <Route path="/book/:token" element={<Suspense fallback={<PageLoader />}><BookingPage /></Suspense>} />
+      <Route path="/customer/:token" element={<Suspense fallback={<PageLoader />}><CustomerPortal /></Suspense>} />
       <Route path="/driver" element={<Suspense fallback={<PageLoader />}><DriverPortal /></Suspense>} />
       <Route path="/carrier" element={<Suspense fallback={<PageLoader />}><CarrierPortal /></Suspense>} />
       <Route path="/privacy" element={<Suspense fallback={<PageLoader />}><PrivacyRequest /></Suspense>} />
@@ -322,6 +326,11 @@ function Dashboard() {
   const [attention, setAttention] = React.useState<any>({ critical: [], timeCritical: [], operations: [], upcoming: [] });
   const [avgDwellMinutes, setAvgDwellMinutes] = React.useState<number | null>(null);
   const [dailyVelocity, setDailyVelocity] = React.useState(0);
+  const [today, setToday] = React.useState<{ expectedArrivals: number; noShows: number; activeMoves: number; hostlersAvailable: number; hostlersBusy: number }>({ expectedArrivals: 0, noShows: 0, activeMoves: 0, hostlersAvailable: 0, hostlersBusy: 0 });
+  const [zones, setZones] = React.useState<{ zone: string; total: number; occupied: number }[]>([]);
+  const [unresolvedSafetySpotIds, setUnresolvedSafetySpotIds] = React.useState<number[]>([]);
+  const [spotsWithOpenExceptions, setSpotsWithOpenExceptions] = React.useState<number[]>([]);
+  const [equipment, setEquipment] = React.useState({ down: 0, total: 0 });
 
   React.useEffect(() => {
     fetch("/api/yard-status")
@@ -331,6 +340,11 @@ function Dashboard() {
         setSpots(data.spots);
         setAvgDwellMinutes(data.avgDwellMinutes);
         setDailyVelocity(data.dailyVelocity ?? 0);
+        setToday(data.today || { expectedArrivals: 0, noShows: 0, activeMoves: 0, hostlersAvailable: 0, hostlersBusy: 0 });
+        setZones(data.zones || []);
+        setUnresolvedSafetySpotIds(data.unresolvedSafetySpotIds || []);
+        setSpotsWithOpenExceptions(data.spotsWithOpenExceptions || []);
+        setEquipment({ down: data.equipmentDown || 0, total: data.equipmentTotal || 0 });
       });
     const loadAttention = () => fetch("/api/admin/needs-attention").then(r => r.ok ? r.json() : { critical: [], timeCritical: [], operations: [], upcoming: [] }).then(setAttention).catch(() => {});
     loadAttention();
@@ -370,6 +384,21 @@ function Dashboard() {
         </Reveal>
       </div>
 
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <Reveal preset="fade-up" delay={275}>
+          <StatItem icon={<Calendar />} label="Expected Arrivals Today" value={today.expectedArrivals} sub="Scheduled, not yet checked in" color="indigo" />
+        </Reveal>
+        <Reveal preset="fade-up" delay={300}>
+          <StatItem icon={<AlertTriangle />} label="No-Shows Today" value={today.noShows} sub="Missed their grace period" color="amber" />
+        </Reveal>
+        <Reveal preset="fade-up" delay={325}>
+          <StatItem icon={<ArrowRightLeft />} label="Active Moves" value={today.activeMoves} sub="In the dispatch queue" color="indigo" />
+        </Reveal>
+        <Reveal preset="fade-up" delay={350}>
+          <StatItem icon={<Users />} label="Hostlers Available" value={today.hostlersAvailable} sub={`${today.hostlersBusy} busy right now`} color="teal" />
+        </Reveal>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <Reveal preset="fade-up" delay={300} className="lg:col-span-2 shadow-spatial">
           <div className="bg-white border border-slate-200 rounded-[2rem] p-8">
@@ -380,19 +409,41 @@ function Dashboard() {
                 <Legend label="Available" color="bg-slate-200" />
               </div>
             </div>
+            {zones.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-6">
+                {zones.map((z) => (
+                  <span key={z.zone} className="text-xs font-bold bg-slate-50 border border-slate-200 text-slate-600 rounded-lg px-3 py-1.5">
+                    {z.zone}: {z.occupied}/{z.total}
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="flex flex-wrap gap-3">
-              {spots.map((spot: any) => (
+              {spots.map((spot: any) => {
+                const flagged = unresolvedSafetySpotIds.includes(spot.id) || spotsWithOpenExceptions.includes(spot.id);
+                const flagLabel = unresolvedSafetySpotIds.includes(spot.id) && spotsWithOpenExceptions.includes(spot.id)
+                  ? "Unresolved safety incident and open exception here"
+                  : unresolvedSafetySpotIds.includes(spot.id)
+                  ? "Unresolved safety incident here"
+                  : spotsWithOpenExceptions.includes(spot.id)
+                  ? "Open exception on this trailer"
+                  : undefined;
+                return (
                 <div
                   key={spot.id}
-                  className={`w-14 h-12 rounded-xl border flex items-center justify-center text-[10px] font-bold transition-all shadow-sm ${
-                    (spot.status === 'OCCUPIED' || spot.plate)
+                  title={flagLabel}
+                  className={`relative w-14 h-12 rounded-xl border flex items-center justify-center text-[10px] font-bold transition-all shadow-sm ${
+                    flagged
+                      ? 'bg-red-50 border-red-400 text-red-700 ring-2 ring-red-300'
+                      : (spot.status === 'OCCUPIED' || spot.plate)
                       ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
                       : 'bg-slate-50 border-slate-100 text-slate-400'
                   }`}
                 >
                   {spot.name}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </Reveal>
@@ -430,6 +481,38 @@ function Dashboard() {
           </div>
         </Reveal>
       </div>
+
+      {spots.some((s: any) => s.type === "DOCK") && (
+        <Reveal preset="fade-up" delay={375}>
+          <div className="bg-white border border-slate-200 rounded-[2rem] p-8 shadow-spatial">
+            <div className="flex items-center justify-between pb-6">
+              <h3 className="font-bold text-slate-900 text-lg">Dock Board</h3>
+              {equipment.total > 0 && (
+                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${equipment.down > 0 ? "bg-amber-100 text-amber-700" : "bg-teal-100 text-teal-700"}`}>
+                  Equipment: {equipment.total - equipment.down}/{equipment.total} available
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {spots.filter((s: any) => s.type === "DOCK").map((dock: any) => (
+                <div key={dock.id} className={`rounded-2xl border p-4 ${dock.plate ? "bg-indigo-50 border-indigo-200" : "bg-slate-50 border-slate-100"}`}>
+                  <p className="text-xs font-bold uppercase tracking-widest text-slate-400">{dock.name}</p>
+                  {dock.plate ? (
+                    <>
+                      <p className="font-bold text-slate-900 mt-1">{dock.plate}</p>
+                      <span className="inline-block mt-2 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-white text-indigo-700 border border-indigo-200">
+                        {dock.cargo_status || "expected"}
+                      </span>
+                    </>
+                  ) : (
+                    <p className="text-sm text-slate-400 mt-1">Empty</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </Reveal>
+      )}
     </div>
   );
 }

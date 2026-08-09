@@ -28,6 +28,7 @@ import { getCurrentTemperature } from "./server/services/smhiWeather.js";
 import { generateSecret as generateTotpSecret, verifyToken as verifyTotpToken, otpauthUrl as totpUri } from "./server/services/totp.js";
 import { checkStageTransition, isLoadReady } from "./server/services/gatePassStages.js";
 import { isDockSlaBreached } from "./server/services/dockSla.js";
+import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers, summarizeZoneOccupancy, matchExceptionPlatesToSpotIds } from "./server/services/todayOps.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -174,7 +175,44 @@ async function startServer() {
     const avgDwellMinutes = dwellSamples.length ? Math.round(dwellSamples.reduce((a, b) => a + b, 0) / dwellSamples.length) : null;
     const dailyVelocity = (departedToday || []).length;
 
-    return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24, avgDwellMinutes, dailyVelocity };
+    // Command Center gap: the "Today's Operations" answer (expected
+    // arrivals / no-shows / active moves) didn't exist anywhere as a
+    // headline number — reuses this same todayStart boundary rather than
+    // introducing a second definition of "today".
+    const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000).toISOString();
+    const { data: todaysAppointments } = await db
+      .from("appointments")
+      .select("status, start_time, no_show_flag")
+      .eq("facility_id", facilityId)
+      .gte("start_time", todayStart.toISOString())
+      .lt("start_time", todayEnd);
+    const { count: totalHostlers } = await db.from("users").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("role", "HOSTLER");
+    const busyHostlers = countBusyHostlers(moves);
+    const today = {
+      expectedArrivals: countExpectedArrivalsToday(todaysAppointments || [], todayStart.toISOString(), todayEnd),
+      noShows: countTodayNoShows(todaysAppointments || [], todayStart.toISOString()),
+      activeMoves: moves.length,
+      hostlersBusy: busyHostlers,
+      hostlersAvailable: Math.max(0, (totalHostlers || 0) - busyHostlers),
+    };
+
+    const zones = summarizeZoneOccupancy(flatSpots);
+
+    // Phase K: safety incidents had a free-text `location` with no real
+    // link to the yard map — location: "Dock D12" can't be reliably
+    // matched back to an actual spot. Added a real spot_id column instead
+    // (nullable — not every incident happens at a numbered spot) so the
+    // map can mark exactly where unresolved incidents are.
+    const { data: unresolvedIncidents } = await db.from("safety_incidents").select("spot_id").eq("facility_id", facilityId).neq("status", "resolved").not("spot_id", "is", null);
+    const unresolvedSafetySpotIds = [...new Set((unresolvedIncidents || []).map((i: any) => i.spot_id))];
+
+    const { data: equipmentRows } = await db.from("equipment").select("status").eq("facility_id", facilityId);
+    const equipmentDown = (equipmentRows || []).filter((e: any) => e.status === "maintenance" || e.status === "broken").length;
+
+    const { data: openTrailerExceptions } = await db.from("exceptions").select("entity_id").eq("facility_id", facilityId).eq("entity_type", "TRAILER").neq("status", "resolved");
+    const spotsWithOpenExceptions = matchExceptionPlatesToSpotIds((openTrailerExceptions || []).map((e: any) => e.entity_id), flatSpots);
+
+    return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24, avgDwellMinutes, dailyVelocity, today, zones, unresolvedSafetySpotIds, equipmentDown, equipmentTotal: (equipmentRows || []).length, spotsWithOpenExceptions };
   };
 
   const emitUpdate = async (event = "yard_update", payload: any = null) => {
@@ -837,7 +875,7 @@ async function startServer() {
   // every other staff-mutation endpoint in this file. Any unauthenticated
   // caller could create, retime, or delete appointments in the yard.
   app.post("/api/appointments", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
-    const { plate, carrier, start_time, duration_minutes, dock_id, load_type, priority_level, special_instructions } = req.body;
+    const { plate, carrier, start_time, duration_minutes, dock_id, load_type, priority_level, special_instructions, customer_id } = req.body;
     const facilityId = req.facilityId || 1;
     try {
       const endTime = new Date(new Date(start_time).getTime() + (duration_minutes || estimateDurationMinutes(load_type)) * 60_000).toISOString();
@@ -853,6 +891,7 @@ async function startServer() {
         load_type: load_type || "LOAD",
         priority_level: priority_level || 2,
         special_instructions: special_instructions || null,
+        customer_id: customer_id || null,
         facility_id: facilityId,
         status: "SCHEDULED",
       }).select().single();
@@ -872,7 +911,7 @@ async function startServer() {
     const updates = req.body;
     const facilityId = req.facilityId || 1;
     try {
-      const allowedFields = ["plate", "carrier", "start_time", "actual_duration_minutes", "status", "priority_level", "dock_id", "special_instructions"];
+      const allowedFields = ["plate", "carrier", "start_time", "actual_duration_minutes", "status", "priority_level", "dock_id", "special_instructions", "customer_id"];
       const patch: any = {};
       for (const field of allowedFields) if (updates[field] !== undefined) patch[field] = updates[field];
 
@@ -1206,6 +1245,66 @@ async function startServer() {
     res.json(data || []);
   });
 
+  // --- Phase M: Workforce & Shift Management ---
+  // Not payroll — just "who's on, what's open, what does the next
+  // person need to know." Handover notes are generated, not typed from
+  // scratch, from the same open-item counts the Action Center already
+  // tracks, so nothing gets forgotten between shifts.
+  app.post("/api/shifts/start", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const userId = req.session.user.id;
+    const facilityId = req.facilityId;
+    try {
+      const { data: existing } = await db.from("shifts").select("id").eq("user_id", userId).is("ended_at", null).maybeSingle();
+      if (existing) return res.status(409).json({ error: "You already have an open shift" });
+      const { data, error } = await db.from("shifts").insert({ facility_id: facilityId, user_id: userId }).select().single();
+      if (error) throw error;
+      logAudit({ action: "SHIFT_STARTED", entityType: "SHIFT", entityId: String(data.id), details: {}, ip: req.ip, facility_id: facilityId });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/shifts/current", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { data } = await db.from("shifts").select("*").eq("user_id", req.session.user.id).is("ended_at", null).maybeSingle();
+    res.json(data || null);
+  });
+
+  app.post("/api/shifts/:id/end", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const facilityId = req.facilityId;
+    try {
+      const { data: shift } = await db.from("shifts").select("*").eq("id", req.params.id).eq("user_id", req.session.user.id).maybeSingle();
+      if (!shift) return res.status(404).json({ error: "Shift not found" });
+      if (shift.ended_at) return res.status(409).json({ error: "Shift already ended" });
+
+      const [{ count: pending }, { count: exceptions }, { count: safety }, { count: unassigned }] = await Promise.all([
+        db.from("walkin_registrations").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("status", "pending_approval"),
+        db.from("exceptions").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).neq("status", "resolved"),
+        db.from("safety_incidents").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).neq("status", "resolved"),
+        db.from("move_orders").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("status", "PENDING").is("assigned_to", null),
+      ]);
+      const parts = [
+        `${pending || 0} gate entry approval(s) pending`,
+        `${exceptions || 0} open exception(s)`,
+        `${safety || 0} unresolved safety incident(s)`,
+        `${unassigned || 0} unclaimed move order(s)`,
+      ];
+      const handoverNotes = parts.join(" · ");
+
+      const { data, error } = await db.from("shifts").update({ ended_at: new Date().toISOString(), handover_notes: handoverNotes }).eq("id", req.params.id).select().single();
+      if (error) throw error;
+      logAudit({ action: "SHIFT_ENDED", entityType: "SHIFT", entityId: req.params.id, details: { handoverNotes }, ip: req.ip, facility_id: facilityId });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/shifts/recent", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { data } = await db.from("shifts").select("*, staff:users(name)").eq("facility_id", req.facilityId).not("ended_at", "is", null).order("ended_at", { ascending: false }).limit(10);
+    res.json((data || []).map((s: any) => ({ ...s, staff_name: s.staff?.name })));
+  });
+
   // Manager Action Center — was a flat, capped-at-8 list covering only 5
   // item types with no urgency grouping and no explicit action per item.
   // Now sections everything into CRITICAL / TIME_CRITICAL / OPERATIONS /
@@ -1329,7 +1428,7 @@ async function startServer() {
   });
 
   app.post("/api/admin/safety-incidents", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
-    const { severity, category, location, plate, driver_id, description, witnesses, immediate_action, photos } = req.body;
+    const { severity, category, location, plate, driver_id, description, witnesses, immediate_action, photos, spot_id } = req.body;
     const userId = req.session?.user?.id || null;
     const facilityId = req.facilityId;
     if (!description || !description.trim()) return res.status(400).json({ error: "Description is required" });
@@ -1340,7 +1439,7 @@ async function startServer() {
         facility_id: facilityId, severity, category, location: location || null, plate: plate || null,
         driver_id: driver_id || null, description: description.trim(), witnesses: witnesses || null,
         immediate_action: immediate_action || null, photos: Array.isArray(photos) ? photos : [],
-        reported_by: userId,
+        reported_by: userId, spot_id: spot_id || null,
       }).select().single();
       if (error) throw error;
       logAudit({ action: "SAFETY_INCIDENT_REPORTED", entityType: "SAFETY_INCIDENT", entityId: String(data.id), details: { severity, category, plate }, ip: req.ip, facility_id: facilityId, severity: severity === "critical" || severity === "high" ? "warning" : "info" });
@@ -2516,6 +2615,46 @@ async function startServer() {
     res.json(valid);
   });
 
+  // --- Phase W: Customer entity — the external stakeholder waiting on a
+  // shipment, distinct from the carrier moving it. Same token-in-URL
+  // pattern as carrier booking links (no password portal, generated at
+  // creation instead of a separate step — one endpoint, not two).
+  app.get("/api/admin/customers", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    try {
+      const { data } = await db.from("customers").select("*").eq("facility_id", req.facilityId).order("created_at", { ascending: false });
+      res.json(data || []);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/customers", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const { name, email, contact_phone } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: "Name is required" });
+    try {
+      const { data, error } = await db.from("customers").insert({ facility_id: req.facilityId, name: name.trim(), email: email || null, contact_phone: contact_phone || null }).select().single();
+      if (error) throw error;
+      logAudit({ action: "CUSTOMER_ADDED", entityType: "CUSTOMER", entityId: String(data.id), details: { name }, ip: req.ip, facility_id: req.facilityId });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Public, token-based — same trust model as carrier booking links:
+  // the token in the URL is the auth. Read-only, so there's no state to
+  // corrupt even if a link leaks.
+  app.get("/api/customer/:token/shipments", async (req, res) => {
+    try {
+      const { data: customer } = await db.from("customers").select("id, name").eq("access_token", req.params.token).maybeSingle();
+      if (!customer) return res.status(404).json({ error: "Invalid link" });
+      const { data: shipments } = await db.from("appointments").select("id, plate, carrier, start_time, status, load_type, checked_in_at, checked_out_at").eq("customer_id", customer.id).order("start_time", { ascending: false }).limit(50);
+      res.json({ customer_name: customer.name, shipments: shipments || [] });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Carrier management: there was previously no way to create a carrier at
   // all — only /api/admin/carriers/:id/booking-link existed, which needs an
   // existing row. With zero carriers in the table, the whole self-service
@@ -2560,6 +2699,62 @@ async function startServer() {
       const { data, error } = await db.from("carriers").update({ flagged: false }).eq("id", id).select("id, name").single();
       if (error) throw error;
       logAudit({ action: "CARRIER_UNFLAGGED", entityType: "CARRIER", entityId: String(id), details: { name: data.name }, ip: req.ip, facility_id: req.facilityId });
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- Phase L: Equipment & Maintenance — yard tractors, forklifts, dock/
+  // gate equipment. New system, not a rename of anything: `vehicles` below
+  // is carrier-owned rolling stock (trailers/trucks); this is the
+  // facility's own operating equipment.
+  const EQUIPMENT_TYPES = ["yard_tractor", "forklift", "dock_equipment", "gate_equipment", "other"];
+  const EQUIPMENT_STATUSES = ["available", "in_use", "maintenance", "broken"];
+
+  app.get("/api/admin/equipment", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    try {
+      const { data } = await db.from("equipment").select("*").eq("facility_id", req.facilityId).order("name", { ascending: true });
+      res.json(data || []);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/equipment", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    const { name, type } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: "Name is required" });
+    if (!EQUIPMENT_TYPES.includes(type)) return res.status(400).json({ error: "Invalid type" });
+    try {
+      const { data, error } = await db.from("equipment").insert({ facility_id: req.facilityId, name: name.trim(), type }).select().single();
+      if (error) throw error;
+      logAudit({ action: "EQUIPMENT_ADDED", entityType: "EQUIPMENT", entityId: String(data.id), details: { name, type }, ip: req.ip, facility_id: req.facilityId });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/admin/equipment/:id", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { status, notes } = req.body;
+    if (status !== undefined && !EQUIPMENT_STATUSES.includes(status)) return res.status(400).json({ error: "Invalid status" });
+    try {
+      const patch: any = { updated_at: new Date().toISOString() };
+      if (status !== undefined) patch.status = status;
+      if (notes !== undefined) patch.notes = notes;
+      const { data, error } = await db.from("equipment").update(patch).eq("id", req.params.id).eq("facility_id", req.facilityId).select().single();
+      if (error) throw error;
+      logAudit({ action: "EQUIPMENT_STATUS_CHANGED", entityType: "EQUIPMENT", entityId: req.params.id, details: { status }, ip: req.ip, facility_id: req.facilityId });
+      emitUpdate("yard_update", { type: "EQUIPMENT" });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/admin/equipment/:id", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    try {
+      await db.from("equipment").delete().eq("id", req.params.id).eq("facility_id", req.facilityId);
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
