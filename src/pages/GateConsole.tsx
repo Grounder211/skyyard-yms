@@ -28,6 +28,33 @@ export default function GateConsole() {
   const { toast } = useToast();
   const { user } = useAuth();
   const [showGateQr, setShowGateQr] = useState(false);
+  const [shift, setShift] = useState<any>(null);
+  const [shiftBusy, setShiftBusy] = useState(false);
+
+  const loadShift = () => fetch("/api/shifts/current").then((r) => r.ok ? r.json() : null).then(setShift).catch(() => {});
+  useEffect(() => { loadShift(); }, []);
+
+  const startShift = async () => {
+    setShiftBusy(true);
+    const res = await fetch("/api/shifts/start", { method: "POST" });
+    setShiftBusy(false);
+    if (res.ok) { toast("Shift started", "success"); loadShift(); }
+    else toast((await res.json().catch(() => ({})))?.error || "Failed to start shift", "error");
+  };
+
+  const endShift = async () => {
+    if (!shift) return;
+    setShiftBusy(true);
+    const res = await fetch(`/api/shifts/${shift.id}/end`, { method: "POST" });
+    setShiftBusy(false);
+    if (res.ok) {
+      const data = await res.json();
+      toast(`Shift ended — handover: ${data.handover_notes}`, "success");
+      setShift(null);
+    } else {
+      toast("Failed to end shift", "error");
+    }
+  };
   const [yard, setYard] = useState<any>({ stats: {}, spots: [], appointments: [] });
   const [visitors, setVisitors] = useState<any[]>([]);
   const [query, setQuery] = useState("");
@@ -356,6 +383,15 @@ export default function GateConsole() {
           <p className="text-slate-500 font-medium">Verify scheduled arrivals, register walk-ins, and manage visitors on-site.</p>
         </div>
         <div className="flex gap-3">
+          {shift ? (
+            <button onClick={endShift} disabled={shiftBusy} className="bg-white border border-amber-300 text-amber-700 rounded-xl px-4 py-2.5 text-sm font-bold hover:bg-amber-50 transition-all disabled:opacity-50">
+              End shift
+            </button>
+          ) : (
+            <button onClick={startShift} disabled={shiftBusy} className="bg-white border border-teal-300 text-teal-700 rounded-xl px-4 py-2.5 text-sm font-bold hover:bg-teal-50 transition-all disabled:opacity-50">
+              Start shift
+            </button>
+          )}
           <button onClick={() => setShowGateQr(true)} className="bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-700 hover:border-indigo-300 transition-all">
             Gate QR
           </button>

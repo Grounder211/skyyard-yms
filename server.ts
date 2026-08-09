@@ -1241,6 +1241,66 @@ async function startServer() {
     res.json(data || []);
   });
 
+  // --- Phase M: Workforce & Shift Management ---
+  // Not payroll — just "who's on, what's open, what does the next
+  // person need to know." Handover notes are generated, not typed from
+  // scratch, from the same open-item counts the Action Center already
+  // tracks, so nothing gets forgotten between shifts.
+  app.post("/api/shifts/start", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const userId = req.session.user.id;
+    const facilityId = req.facilityId;
+    try {
+      const { data: existing } = await db.from("shifts").select("id").eq("user_id", userId).is("ended_at", null).maybeSingle();
+      if (existing) return res.status(409).json({ error: "You already have an open shift" });
+      const { data, error } = await db.from("shifts").insert({ facility_id: facilityId, user_id: userId }).select().single();
+      if (error) throw error;
+      logAudit({ action: "SHIFT_STARTED", entityType: "SHIFT", entityId: String(data.id), details: {}, ip: req.ip, facility_id: facilityId });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/shifts/current", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { data } = await db.from("shifts").select("*").eq("user_id", req.session.user.id).is("ended_at", null).maybeSingle();
+    res.json(data || null);
+  });
+
+  app.post("/api/shifts/:id/end", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const facilityId = req.facilityId;
+    try {
+      const { data: shift } = await db.from("shifts").select("*").eq("id", req.params.id).eq("user_id", req.session.user.id).maybeSingle();
+      if (!shift) return res.status(404).json({ error: "Shift not found" });
+      if (shift.ended_at) return res.status(409).json({ error: "Shift already ended" });
+
+      const [{ count: pending }, { count: exceptions }, { count: safety }, { count: unassigned }] = await Promise.all([
+        db.from("walkin_registrations").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("status", "pending_approval"),
+        db.from("exceptions").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).neq("status", "resolved"),
+        db.from("safety_incidents").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).neq("status", "resolved"),
+        db.from("move_orders").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("status", "PENDING").is("assigned_to", null),
+      ]);
+      const parts = [
+        `${pending || 0} gate entry approval(s) pending`,
+        `${exceptions || 0} open exception(s)`,
+        `${safety || 0} unresolved safety incident(s)`,
+        `${unassigned || 0} unclaimed move order(s)`,
+      ];
+      const handoverNotes = parts.join(" · ");
+
+      const { data, error } = await db.from("shifts").update({ ended_at: new Date().toISOString(), handover_notes: handoverNotes }).eq("id", req.params.id).select().single();
+      if (error) throw error;
+      logAudit({ action: "SHIFT_ENDED", entityType: "SHIFT", entityId: req.params.id, details: { handoverNotes }, ip: req.ip, facility_id: facilityId });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/shifts/recent", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { data } = await db.from("shifts").select("*, staff:users(name)").eq("facility_id", req.facilityId).not("ended_at", "is", null).order("ended_at", { ascending: false }).limit(10);
+    res.json((data || []).map((s: any) => ({ ...s, staff_name: s.staff?.name })));
+  });
+
   // Manager Action Center — was a flat, capped-at-8 list covering only 5
   // item types with no urgency grouping and no explicit action per item.
   // Now sections everything into CRITICAL / TIME_CRITICAL / OPERATIONS /
