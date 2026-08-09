@@ -20,7 +20,7 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const ENTITY_TYPES = ["appointment", "driver", "trailer", "carrier", "vehicle", "shipment"];
-const DOC_TYPES = ["Bill of Lading", "CMR", "Delivery note", "Packing list", "Purchase order", "Proof of delivery", "Driver ID", "Vehicle registration", "Insurance", "Inspection certificate", "Customs documentation", "Dangerous goods documentation", "Temperature record", "Seal documentation", "Cargo manifest", "Other"];
+export const DOC_TYPES = ["Bill of Lading", "CMR", "Delivery note", "Packing list", "Purchase order", "Proof of delivery", "Driver ID", "Vehicle registration", "Insurance", "Inspection certificate", "Customs documentation", "Dangerous goods documentation", "Temperature record", "Seal documentation", "Cargo manifest", "Other"];
 
 function timeAgo(iso: string) {
   const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);

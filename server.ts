@@ -17,7 +17,7 @@ import { checkAppointmentCapacity, hourBucket } from "./server/services/appointm
 import { evaluateReading, isReadingStale, STALE_READING_HOURS } from "./server/services/reeferMonitor.js";
 import { evaluateSla, isNoShow, isOnTimeArrival } from "./server/services/complianceMonitor.js";
 import { shouldNotifyExpiry } from "./server/services/vehicleExpiry.js";
-import { nextExpiryAlertLevel } from "./server/services/documentExpiry.js";
+import { nextExpiryAlertLevel, missingDocumentTypes } from "./server/services/documentExpiry.js";
 import crypto from "crypto";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import PDFDocument from "pdfkit";
@@ -722,7 +722,7 @@ async function startServer() {
 
   app.post("/api/settings/general", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const facilityId = req.session?.facility_id || req.facilityId || 1;
-    const { currency, locale, timezone, detention_rate_per_hour, detention_threshold_hours, max_appointments_per_hour } = req.body;
+    const { currency, locale, timezone, detention_rate_per_hour, detention_threshold_hours, max_appointments_per_hour, required_document_types, document_policy } = req.body;
     try {
       const patch: any = { updated_at: new Date().toISOString() };
       if (currency) patch.currency = currency;
@@ -731,6 +731,8 @@ async function startServer() {
       if (detention_rate_per_hour !== undefined) patch.detention_rate_per_hour = detention_rate_per_hour;
       if (detention_threshold_hours !== undefined) patch.detention_threshold_hours = detention_threshold_hours;
       if (max_appointments_per_hour !== undefined) patch.max_appointments_per_hour = max_appointments_per_hour === "" ? null : Number(max_appointments_per_hour);
+      if (Array.isArray(required_document_types)) patch.required_document_types = required_document_types;
+      if (document_policy) patch.document_policy = document_policy;
       await db.from("facility_settings").update(patch).eq("facility_id", facilityId);
       res.json({ success: true });
     } catch (e: any) {
@@ -3277,6 +3279,26 @@ async function startServer() {
       next();
     });
   };
+
+  // Priority 4: document completeness — before/at gate check-in, tells the
+  // guard whether required paperwork is on file for a plate, per the
+  // facility's own configured required_document_types + document_policy
+  // (not one hardcoded global rule).
+  app.get("/api/documents/completeness", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const { related_entity_type, related_entity_id } = req.query;
+    if (!related_entity_type || !related_entity_id) return res.status(400).json({ error: "related_entity_type and related_entity_id are required" });
+    try {
+      const [{ data: settings }, { data: docs }] = await Promise.all([
+        db.from("facility_settings").select("required_document_types, document_policy").eq("facility_id", req.facilityId).maybeSingle(),
+        db.from("documents").select("doc_type").eq("facility_id", req.facilityId).eq("related_entity_type", related_entity_type).eq("related_entity_id", related_entity_id).not("verification_status", "in", "(rejected,expired)"),
+      ]);
+      const required = settings?.required_document_types || [];
+      const missing = missingDocumentTypes(required, (docs || []).map((d: any) => d.doc_type));
+      res.json({ ready: missing.length === 0, missing, policy: settings?.document_policy || "warn" });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
 
   app.get("/api/documents", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     const { related_entity_type, related_entity_id, status } = req.query;

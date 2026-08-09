@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { daysUntil, nextExpiryAlertLevel } from "./documentExpiry.js";
+import { daysUntil, nextExpiryAlertLevel, missingDocumentTypes } from "./documentExpiry.js";
+
+describe("missingDocumentTypes", () => {
+  it("returns required types not present in uploaded types", () => {
+    expect(missingDocumentTypes(["Insurance", "Driver ID"], ["Insurance"])).toEqual(["Driver ID"]);
+  });
+
+  it("returns empty array when everything required is present", () => {
+    expect(missingDocumentTypes(["Insurance"], ["Insurance", "Driver ID"])).toEqual([]);
+  });
+});
 
 describe("daysUntil", () => {
   it("counts whole days between today and a future date", () => {

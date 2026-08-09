@@ -24,3 +24,9 @@ export function nextExpiryAlertLevel(expiryDateIso: string, lastAlertedLevel: nu
   if (lastAlertedLevel !== null && crossedLevel >= lastAlertedLevel) return null; // already alerted at this level or a tighter one
   return crossedLevel;
 }
+
+// Priority-4: which of a facility's required doc types are missing for an
+// entity, checked against its non-rejected/non-expired uploaded types.
+export function missingDocumentTypes(required: string[], uploadedTypes: string[]): string[] {
+  return required.filter((t) => !uploadedTypes.includes(t));
+}

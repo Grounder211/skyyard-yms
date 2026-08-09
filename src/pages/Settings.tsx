@@ -3,6 +3,7 @@ import { Globe2, Coins, Clock, Bell, Warehouse, FileLock2, CheckCircle2, Loader2
 import { QRCodeSVG } from "qrcode.react";
 import { Link } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
+import { DOC_TYPES } from "./DocumentCenter";
 import { useToast } from "../contexts/ToastContext";
 
 const CURRENCIES = ["SEK", "EUR", "USD", "NOK", "DKK"];
@@ -259,6 +260,8 @@ export default function Settings() {
         detention_rate_per_hour: settings.detention_rate_per_hour,
         detention_threshold_hours: settings.detention_threshold_hours,
         max_appointments_per_hour: settings.max_appointments_per_hour,
+        required_document_types: settings.required_document_types,
+        document_policy: settings.document_policy,
       }),
     });
     setSaving(false);
@@ -367,6 +370,28 @@ export default function Settings() {
             <input type="number" min={1} placeholder="Unlimited" value={settings.max_appointments_per_hour ?? ""} onChange={(e) => setSettings({ ...settings, max_appointments_per_hour: e.target.value === "" ? null : Number(e.target.value) })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
             <p className="text-[11px] text-slate-400">Blocks new bookings once this many appointments start in the same clock hour. Leave blank for no cap.</p>
           </div>
+        </div>
+
+        <div className="pt-4 border-t border-slate-100 space-y-3">
+          <p className="text-sm font-bold text-slate-900">Required documents at gate check-in</p>
+          <p className="text-xs text-slate-500">Guard sees a warning (or is blocked) if these document types aren't on file for a plate.</p>
+          <div className="flex flex-wrap gap-2">
+            {DOC_TYPES.map((t) => {
+              const list: string[] = settings.required_document_types || [];
+              const on = list.includes(t);
+              return (
+                <button key={t} type="button" onClick={() => setSettings({ ...settings, required_document_types: on ? list.filter((x) => x !== t) : [...list, t] })}
+                  className={`px-3 py-1.5 rounded-lg text-[11px] font-bold border ${on ? "bg-indigo-600 border-indigo-600 text-white" : "bg-white border-slate-200 text-slate-500"}`}>
+                  {t}
+                </button>
+              );
+            })}
+          </div>
+          <select value={settings.document_policy || "warn"} onChange={(e) => setSettings({ ...settings, document_policy: e.target.value })} className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm">
+            <option value="warn">Warn only</option>
+            <option value="block">Block gate entry</option>
+            <option value="require_approval">Require supervisor approval</option>
+          </select>
         </div>
 
         <div className="pt-4 border-t border-slate-100 space-y-3">

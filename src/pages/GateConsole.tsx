@@ -141,10 +141,17 @@ export default function GateConsole() {
     return list.filter((a) => (a.plate || "").toLowerCase().includes(q) || (a.carrier || "").toLowerCase().includes(q) || String(a.id).includes(q));
   }, [yard.appointments, query]);
 
+  const [docCompleteness, setDocCompleteness] = useState<{ ready: boolean; missing: string[]; policy: string } | null>(null);
+
   const openCheckin = (appt: any) => {
     setCheckinTarget(appt);
     setCheckinForm({ plate: appt.plate || "", carrierName: appt.carrier || "", sealNumber: "", poNumber: "", skuSummary: "" });
     setDiscrepancy(null);
+    setDocCompleteness(null);
+    if (appt.plate) {
+      fetch(`/api/documents/completeness?related_entity_type=trailer&related_entity_id=${encodeURIComponent(appt.plate)}`)
+        .then((r) => (r.ok ? r.json() : null)).then((d) => d && !d.ready && setDocCompleteness(d)).catch(() => {});
+    }
   };
 
   const [badgeScanBusy, setBadgeScanBusy] = useState(false);
@@ -597,6 +604,15 @@ export default function GateConsole() {
                     </div>
                   </div>
                 )}
+                {docCompleteness && (
+                  <div className={`border rounded-xl p-4 text-sm flex items-start gap-2.5 ${docCompleteness.policy === "block" ? "bg-red-50 border-red-200 text-red-800" : "bg-amber-50 border-amber-200 text-amber-800"}`}>
+                    <ShieldAlert size={16} className="shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold uppercase tracking-widest text-[10px] mb-1">Documentation incomplete{docCompleteness.policy === "block" ? " — entry blocked" : ""}</p>
+                      <p>Missing: {docCompleteness.missing.join(", ")}</p>
+                    </div>
+                  </div>
+                )}
                 <Field
                   label="Plate"
                   required
@@ -610,10 +626,10 @@ export default function GateConsole() {
                 <Field label="Cargo / SKU summary (optional)" value={checkinForm.skuSummary} onChange={(v) => setCheckinForm({ ...checkinForm, skuSummary: v })} />
                 <button
                   onClick={() => submitCheckin(false)}
-                  disabled={busy}
+                  disabled={busy || (docCompleteness?.policy === "block")}
                   className="w-full bg-indigo-600 text-white py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
                 >
-                  {busy && <Loader2 size={14} className="animate-spin" />} Confirm & assign spot
+                  {busy && <Loader2 size={14} className="animate-spin" />} {docCompleteness?.policy === "block" ? "Blocked — missing documents" : "Confirm & assign spot"}
                 </button>
               </div>
             )}
