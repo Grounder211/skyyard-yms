@@ -31,6 +31,7 @@ import { checkStageTransition, isLoadReady } from "./server/services/gatePassSta
 import { isDockSlaBreached } from "./server/services/dockSla.js";
 import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers, summarizeZoneOccupancy, matchExceptionPlatesToSpotIds } from "./server/services/todayOps.js";
 import { classifyAppointmentHealth } from "./server/services/appointmentHealth.js";
+import { findDockConflict } from "./server/services/dockConflict.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -954,6 +955,15 @@ async function startServer() {
       const capacity = await enforceAppointmentCapacity(facilityId, start_time, endTime);
       if (!capacity.allowed) return res.status(409).json({ error: "CAPACITY_BLOCKED", reason: capacity.reason });
 
+      if (dock_id) {
+        const [{ data: dockAppts }, { data: dockRule }] = await Promise.all([
+          db.from("appointments").select("dock_id, start_time, end_time, status, load_type").eq("facility_id", facilityId).eq("dock_id", dock_id).not("status", "in", "(CANCELLED,COMPLETED)"),
+          db.from("dock_rules").select("allowed_equipment_types").eq("dock_door_id", dock_id).eq("facility_id", facilityId).maybeSingle(),
+        ]);
+        const conflict = findDockConflict({ dock_id, start_time, end_time: endTime, load_type: load_type || null }, dockAppts || [], dockRule?.allowed_equipment_types || null);
+        if (conflict) return res.status(409).json({ error: "DOCK_CONFLICT", reason: conflict.reason });
+      }
+
       const { data: newAppt, error } = await db.from("appointments").insert({
         plate, carrier, start_time,
         actual_duration_minutes: duration_minutes || 60,
@@ -997,12 +1007,26 @@ async function startServer() {
       // check at all — same gap as the create path, just reachable via drag/
       // reschedule instead of new-booking. Check before writing, against the
       // *prospective* window, excluding this appointment's own current row.
-      if (patch.start_time) {
-        const { data: existing } = await db.from("appointments").select("actual_duration_minutes, load_type").eq("id", id).eq("facility_id", facilityId).maybeSingle();
+      if (patch.start_time || patch.dock_id !== undefined) {
+        const { data: existing } = await db.from("appointments").select("start_time, actual_duration_minutes, dock_id, load_type").eq("id", id).eq("facility_id", facilityId).maybeSingle();
         const minutes = patch.actual_duration_minutes || existing?.actual_duration_minutes || estimateDurationMinutes(existing?.load_type);
-        const prospectiveEnd = new Date(new Date(patch.start_time).getTime() + minutes * 60_000).toISOString();
-        const capacity = await enforceAppointmentCapacity(facilityId, patch.start_time, prospectiveEnd, Number(id));
-        if (!capacity.allowed) return res.status(409).json({ error: "CAPACITY_BLOCKED", reason: capacity.reason });
+        const effectiveStart = patch.start_time || existing?.start_time;
+        const prospectiveEnd = new Date(new Date(effectiveStart).getTime() + minutes * 60_000).toISOString();
+
+        if (patch.start_time) {
+          const capacity = await enforceAppointmentCapacity(facilityId, patch.start_time, prospectiveEnd, Number(id));
+          if (!capacity.allowed) return res.status(409).json({ error: "CAPACITY_BLOCKED", reason: capacity.reason });
+        }
+
+        const effectiveDockId = patch.dock_id !== undefined ? patch.dock_id : existing?.dock_id;
+        if (effectiveDockId) {
+          const [{ data: dockAppts }, { data: dockRule }] = await Promise.all([
+            db.from("appointments").select("dock_id, start_time, end_time, status, load_type").eq("facility_id", facilityId).eq("dock_id", effectiveDockId).neq("id", id).not("status", "in", "(CANCELLED,COMPLETED)"),
+            db.from("dock_rules").select("allowed_equipment_types").eq("dock_door_id", effectiveDockId).eq("facility_id", facilityId).maybeSingle(),
+          ]);
+          const conflict = findDockConflict({ dock_id: effectiveDockId, start_time: effectiveStart, end_time: prospectiveEnd, load_type: existing?.load_type || null }, dockAppts || [], dockRule?.allowed_equipment_types || null);
+          if (conflict) return res.status(409).json({ error: "DOCK_CONFLICT", reason: conflict.reason });
+        }
       }
 
       let { data: updated, error } = await db.from("appointments").update(patch).eq("id", id).eq("facility_id", facilityId).select().single();
