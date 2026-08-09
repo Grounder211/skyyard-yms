@@ -3607,7 +3607,7 @@ async function startServer() {
       // its own copy, but this insert never actually set deadline_at —
       // every request showed "Invalid Date" to staff.
       const deadlineAt = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
-      await db.from("data_subject_requests").insert({ facility_id: 1, request_type, requester_phone: isEmail ? null : phone_or_email, requester_email: isEmail ? phone_or_email : null, status: "pending", deadline_at: deadlineAt });
+      await db.from("data_subject_requests").insert({ facility_id: req.facilityId, request_type, requester_phone: isEmail ? null : phone_or_email, requester_email: isEmail ? phone_or_email : null, status: "pending", deadline_at: deadlineAt });
       res.json({ success: true, message: "Request received. We will process it within 72 hours." });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -3651,7 +3651,7 @@ async function startServer() {
   // exists specifically to handle PII responsibly.
   app.get("/api/admin/data-requests", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     try {
-      const { data } = await db.from("data_subject_requests").select("*").order("created_at", { ascending: false });
+      const { data } = await db.from("data_subject_requests").select("*").eq("facility_id", req.facilityId).order("created_at", { ascending: false });
       res.json(data || []);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -3665,7 +3665,7 @@ async function startServer() {
       if (status) patch.status = status;
       if (notes) patch.notes = notes;
       if (status === "completed") patch.completed_at = new Date().toISOString();
-      await db.from("data_subject_requests").update(patch).eq("id", req.params.id);
+      await db.from("data_subject_requests").update(patch).eq("id", req.params.id).eq("facility_id", req.facilityId);
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -3679,7 +3679,7 @@ async function startServer() {
   // records the export's own URL back onto the request.
   app.get("/api/admin/data-requests/:id/export", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     try {
-      const { data: request } = await db.from("data_subject_requests").select("*").eq("id", req.params.id).maybeSingle();
+      const { data: request } = await db.from("data_subject_requests").select("*").eq("id", req.params.id).eq("facility_id", req.facilityId).maybeSingle();
       if (!request) return res.status(404).json({ error: "Request not found" });
       const phone = request.requester_phone;
       const email = request.requester_email;
