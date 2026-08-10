@@ -352,7 +352,6 @@ function Dashboard() {
   const [unresolvedSafetySpotIds, setUnresolvedSafetySpotIds] = React.useState<number[]>([]);
   const [spotsWithOpenExceptions, setSpotsWithOpenExceptions] = React.useState<number[]>([]);
   const [equipment, setEquipment] = React.useState({ down: 0, total: 0 });
-  const [forecast, setForecast] = React.useState<{ threshold: number; windows: { minutes: number; expectedOccupied: number; totalSpots: number; pct: number; atRisk: boolean }[] } | null>(null);
   const [unmanagedTrailers, setUnmanagedTrailers] = React.useState<{ spotId: number; spotName: string; plate: string; dwellHours: number }[]>([]);
   const [arrivalsAtRisk, setArrivalsAtRisk] = React.useState<any[]>([]);
   const [detentionRisk, setDetentionRisk] = React.useState<any[]>([]);
@@ -375,7 +374,6 @@ function Dashboard() {
         setUnmanagedTrailers(data.unmanagedTrailers || []);
         setFacility(data.facility || null);
       });
-    fetch("/api/admin/capacity-forecast").then(r => r.ok ? r.json() : null).then(setForecast).catch(() => {});
     fetch("/api/admin/arrivals-eta").then(r => r.ok ? r.json() : null)
       .then(d => setArrivalsAtRisk((d?.arrivals || []).filter((a: any) => a.risk === "AT_RISK" || a.risk === "LATE")))
       .catch(() => {});
@@ -532,25 +530,6 @@ function Dashboard() {
                   <p className="text-xs text-slate-500 mt-0.5">{r.reason}</p>
                 </div>
                 <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-lg bg-amber-500 text-white">{r.minutesUntilThreshold}m to threshold</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {forecast && forecast.windows.length > 0 && (
-        <div className="bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 rounded-sm shadow-sm p-6">
-          <div className="flex items-baseline justify-between mb-4">
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Capacity Forecast</p>
-            <p className="text-[11px] font-semibold text-slate-400">Risk threshold {forecast.threshold}% · from real scheduled arrivals/departures</p>
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            {forecast.windows.map((w) => (
-              <div key={w.minutes} className={`rounded-2xl border p-4 ${w.atRisk ? "bg-amber-500/10 border-amber-500/30" : "bg-[var(--surface-container-low)] border-[var(--outline-variant)]/30"}`}>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">In {w.minutes < 60 ? `${w.minutes}m` : `${w.minutes / 60}h`}</p>
-                <p className={`text-2xl font-bold mt-1 ${w.atRisk ? "text-amber-700" : "text-[var(--on-surface)]"}`}>{w.pct}%</p>
-                <p className="text-[11px] font-semibold text-slate-400">{w.expectedOccupied} / {w.totalSpots} spots</p>
-                {w.atRisk && <p className="text-[10px] font-bold uppercase tracking-widest text-amber-400 mt-1">Capacity risk</p>}
               </div>
             ))}
           </div>

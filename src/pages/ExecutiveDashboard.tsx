@@ -35,6 +35,7 @@ export default function ExecutiveDashboard() {
   const [carrierStats, setCarrierStats] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [heatmap, setHeatmap] = useState<number[][] | null>(null);
+  const [forecast, setForecast] = useState<{ threshold: number; windows: { minutes: number; expectedOccupied: number; totalSpots: number; pct: number; atRisk: boolean }[] } | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -55,6 +56,7 @@ export default function ExecutiveDashboard() {
 
   useEffect(() => {
     fetch("/api/admin/analytics/heatmap").then(r => r.json()).then(d => setHeatmap(d.grid)).catch(() => {});
+    fetch("/api/admin/capacity-forecast").then(r => r.ok ? r.json() : null).then(setForecast).catch(() => {});
   }, []);
 
   const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -147,6 +149,27 @@ export default function ExecutiveDashboard() {
           </div>
         </div>
       </div>
+
+      {forecast && forecast.windows.length > 0 && (
+        <div className="bg-white border border-slate-200 p-8 rounded-3xl shadow-sm">
+          <div className="flex items-baseline justify-between mb-6">
+            <h3 className="font-bold text-slate-900 text-lg flex items-center gap-2">
+              <TrendingUp size={18} className="text-indigo-600" /> Capacity Forecast
+            </h3>
+            <p className="text-slate-500 text-sm">Risk threshold {forecast.threshold}% · from real scheduled arrivals/departures</p>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            {forecast.windows.map((w) => (
+              <div key={w.minutes} className={`rounded-2xl border p-4 ${w.atRisk ? "bg-red-50 border-red-200" : "bg-slate-50 border-slate-100"}`}>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">In {w.minutes < 60 ? `${w.minutes}m` : `${w.minutes / 60}h`}</p>
+                <p className={`text-2xl font-bold mt-1 ${w.atRisk ? "text-red-600" : "text-slate-900"}`}>{w.pct}%</p>
+                <p className="text-slate-500 text-xs font-semibold">{w.expectedOccupied} / {w.totalSpots} spots</p>
+                {w.atRisk && <p className="text-[10px] font-bold uppercase tracking-widest text-red-500 mt-1">Capacity risk</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {heatmap && (
         <div className="bg-white border border-slate-200 p-8 rounded-3xl shadow-sm">
