@@ -240,7 +240,7 @@ export default function SafetyCenter() {
                   <AlertTriangle size={16} className="shrink-0" />
                   <div className="min-w-0">
                     <p className="font-bold text-sm truncate">{CATEGORY_LABELS[inc.category] || inc.category}{inc.plate ? ` · ${inc.plate}` : ""}</p>
-                    <p className="text-xs opacity-70">{inc.severity} · {timeAgo(inc.created_at)}{inc.location ? ` · ${inc.location}` : ""} {inc.reporter?.name ? `· reported by ${inc.reporter.name}` : ""}</p>
+                    <p className="text-xs opacity-70">{inc.severity} · {timeAgo(inc.created_at)}{inc.location ? ` · ${inc.location}` : ""} {inc.reporter?.name ? `· reported by ${inc.reporter.name}` : ""}{inc.shift_id ? ` · shift #${inc.shift_id}` : ""}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">

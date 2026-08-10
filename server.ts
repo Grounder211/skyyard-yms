@@ -1546,11 +1546,17 @@ async function startServer() {
     if (!["low", "medium", "high", "critical"].includes(severity)) return res.status(400).json({ error: "Invalid severity" });
     if (!SAFETY_CATEGORIES.includes(category)) return res.status(400).json({ error: "Invalid category" });
     try {
+      // Tier-2 audit-defense need (sourced research): which shift was on
+      // duty when this happened. Only set when the reporter has a
+      // currently-open shift — never guessed from a closed/past one.
+      const { data: openShift } = userId
+        ? await db.from("shifts").select("id").eq("user_id", userId).eq("facility_id", facilityId).is("ended_at", null).maybeSingle()
+        : { data: null };
       const { data, error } = await db.from("safety_incidents").insert({
         facility_id: facilityId, severity, category, location: location || null, plate: plate || null,
         driver_id: driver_id || null, description: description.trim(), witnesses: witnesses || null,
         immediate_action: immediate_action || null, photos: Array.isArray(photos) ? photos : [],
-        reported_by: userId, spot_id: spot_id || null,
+        reported_by: userId, spot_id: spot_id || null, shift_id: openShift?.id || null,
       }).select().single();
       if (error) throw error;
       logAudit({ action: "SAFETY_INCIDENT_REPORTED", entityType: "SAFETY_INCIDENT", entityId: String(data.id), details: { severity, category, plate }, ip: req.ip, facility_id: facilityId, severity: severity === "critical" || severity === "high" ? "warning" : "info" });
