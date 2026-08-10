@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers, summarizeZoneOccupancy, matchExceptionPlatesToSpotIds } from "./todayOps.js";
+import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers, summarizeZoneOccupancy, matchExceptionPlatesToSpotIds, findUnmanagedTrailers } from "./todayOps.js";
 
 describe("countTodayNoShows", () => {
   const todayStart = "2026-08-09T00:00:00.000Z";
@@ -96,5 +96,35 @@ describe("summarizeZoneOccupancy", () => {
 
   it("returns an empty array for no spots", () => {
     expect(summarizeZoneOccupancy([])).toEqual([]);
+  });
+});
+
+describe("findUnmanagedTrailers", () => {
+  const now = "2026-08-09T14:00:00.000Z";
+  const spot = (over: any) => ({ id: 1, name: "P-01", trailer_id: 10, plate: "ABC123", checked_in_at: "2026-08-09T10:00:00.000Z", ...over });
+
+  it("flags a trailer past the threshold with no active move and no exception", () => {
+    const result = findUnmanagedTrailers([spot({})], [], [], now, 2);
+    expect(result).toEqual([{ spotId: 1, spotName: "P-01", plate: "ABC123", dwellHours: 4 }]);
+  });
+
+  it("does not flag a trailer with an active move order", () => {
+    const result = findUnmanagedTrailers([spot({})], [{ trailer_id: 10, status: "IN_PROGRESS" }], [], now, 2);
+    expect(result).toEqual([]);
+  });
+
+  it("does not flag a trailer already covered by an open exception", () => {
+    const result = findUnmanagedTrailers([spot({})], [], ["ABC123"], now, 2);
+    expect(result).toEqual([]);
+  });
+
+  it("does not flag a trailer still under the dwell threshold", () => {
+    const result = findUnmanagedTrailers([spot({ checked_in_at: "2026-08-09T13:00:00.000Z" })], [], [], now, 2);
+    expect(result).toEqual([]);
+  });
+
+  it("ignores empty spots with no trailer", () => {
+    const result = findUnmanagedTrailers([spot({ trailer_id: undefined, plate: undefined, checked_in_at: undefined })], [], [], now, 2);
+    expect(result).toEqual([]);
   });
 });

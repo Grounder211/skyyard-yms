@@ -29,7 +29,7 @@ import { getTrafficProvider } from "./server/services/trafficProvider.js";
 import { generateSecret as generateTotpSecret, verifyToken as verifyTotpToken, otpauthUrl as totpUri } from "./server/services/totp.js";
 import { checkStageTransition, isLoadReady } from "./server/services/gatePassStages.js";
 import { isDockSlaBreached } from "./server/services/dockSla.js";
-import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers, summarizeZoneOccupancy, matchExceptionPlatesToSpotIds } from "./server/services/todayOps.js";
+import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers, summarizeZoneOccupancy, matchExceptionPlatesToSpotIds, findUnmanagedTrailers } from "./server/services/todayOps.js";
 import { classifyAppointmentHealth } from "./server/services/appointmentHealth.js";
 import { findDockConflict } from "./server/services/dockConflict.js";
 import { forecastOccupancy } from "./server/services/capacityForecast.js";
@@ -237,7 +237,13 @@ async function startServer() {
     const { data: openTrailerExceptions } = await db.from("exceptions").select("entity_id").eq("facility_id", facilityId).eq("entity_type", "TRAILER").neq("status", "resolved");
     const spotsWithOpenExceptions = matchExceptionPlatesToSpotIds((openTrailerExceptions || []).map((e: any) => e.entity_id), flatSpots);
 
-    return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24, avgDwellMinutes, dailyVelocity, today, zones, unresolvedSafetySpotIds, equipmentDown, equipmentTotal: (equipmentRows || []).length, spotsWithOpenExceptions };
+    // Sourced from real yard-manager pain points: a carrier drops a
+    // trailer and nobody's told, or a trailer just sits past a dwell
+    // threshold with no move working it — both solvable with data already
+    // fetched above, no new query.
+    const unmanagedTrailers = findUnmanagedTrailers(flatSpots, moves, (openTrailerExceptions || []).map((e: any) => e.entity_id), new Date().toISOString());
+
+    return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24, avgDwellMinutes, dailyVelocity, today, zones, unresolvedSafetySpotIds, equipmentDown, equipmentTotal: (equipmentRows || []).length, spotsWithOpenExceptions, unmanagedTrailers };
   };
 
   const emitUpdate = async (event = "yard_update", payload: any = null) => {

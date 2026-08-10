@@ -44,6 +44,32 @@ export function countBusyHostlers(moves: { status: string; assigned_to: number |
   return busy.size;
 }
 
+// Sourced from real yard-manager research: "carrier drops a trailer,
+// nobody tells the warehouse" and "trailers sit past a dwell threshold
+// with nobody noticing" are both independently documented pains, both
+// solvable with data this app already has — no new table, no GPS. A
+// trailer is unmanaged when it's sat past the threshold with no move
+// order working it and no exception already tracking it (avoids
+// double-signaling something already visible elsewhere).
+export function findUnmanagedTrailers(
+  spots: { id: number; name: string; trailer_id: number | undefined; plate: string | undefined; checked_in_at: string | undefined }[],
+  moves: { trailer_id: number; status: string }[],
+  openExceptionPlates: string[],
+  nowIso: string,
+  thresholdHours = 2
+): { spotId: number; spotName: string; plate: string; dwellHours: number }[] {
+  const activeTrailerIds = new Set(
+    moves.filter((m) => m.status === "PENDING" || m.status === "IN_PROGRESS").map((m) => m.trailer_id)
+  );
+  const flaggedPlates = new Set(openExceptionPlates);
+  const now = new Date(nowIso).getTime();
+
+  return spots
+    .filter((s) => s.trailer_id != null && s.plate && s.checked_in_at && !activeTrailerIds.has(s.trailer_id) && !flaggedPlates.has(s.plate))
+    .map((s) => ({ spotId: s.id, spotName: s.name, plate: s.plate!, dwellHours: Math.round(((now - new Date(s.checked_in_at!).getTime()) / 3600000) * 10) / 10 }))
+    .filter((s) => s.dwellHours >= thresholdHours);
+}
+
 export function countExpectedArrivalsToday(
   appointments: { status: string; start_time: string }[],
   todayStartIso: string,

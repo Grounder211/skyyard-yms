@@ -337,6 +337,7 @@ function Dashboard() {
   const [spotsWithOpenExceptions, setSpotsWithOpenExceptions] = React.useState<number[]>([]);
   const [equipment, setEquipment] = React.useState({ down: 0, total: 0 });
   const [forecast, setForecast] = React.useState<{ threshold: number; windows: { minutes: number; expectedOccupied: number; totalSpots: number; pct: number; atRisk: boolean }[] } | null>(null);
+  const [unmanagedTrailers, setUnmanagedTrailers] = React.useState<{ spotId: number; spotName: string; plate: string; dwellHours: number }[]>([]);
 
   React.useEffect(() => {
     fetch("/api/yard-status")
@@ -351,6 +352,7 @@ function Dashboard() {
         setUnresolvedSafetySpotIds(data.unresolvedSafetySpotIds || []);
         setSpotsWithOpenExceptions(data.spotsWithOpenExceptions || []);
         setEquipment({ down: data.equipmentDown || 0, total: data.equipmentTotal || 0 });
+        setUnmanagedTrailers(data.unmanagedTrailers || []);
       });
     fetch("/api/admin/capacity-forecast").then(r => r.ok ? r.json() : null).then(setForecast).catch(() => {});
     const loadAttention = () => fetch("/api/admin/needs-attention").then(r => r.ok ? r.json() : { critical: [], timeCritical: [], operations: [], upcoming: [] }).then(setAttention).catch(() => {});
@@ -426,6 +428,21 @@ function Dashboard() {
           </Reveal>
         </div>
       </div>
+
+      {unmanagedTrailers.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-[2rem] p-6">
+          <p className="text-xs font-bold uppercase tracking-widest text-amber-700 mb-3 flex items-center gap-2">
+            <AlertTriangle size={14} /> Unmanaged Trailers — sitting with no active move, not yet flagged
+          </p>
+          <div className="flex flex-wrap gap-3">
+            {unmanagedTrailers.map((t) => (
+              <span key={t.spotId} className="text-sm font-bold px-3 py-2 rounded-xl bg-white border border-amber-200 text-amber-800">
+                {t.plate} <span className="text-amber-500 font-medium">· {t.spotName} · {t.dwellHours}h</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {forecast && forecast.windows.length > 0 && (
         <div className="bg-white border border-slate-200 rounded-[2rem] p-6">
