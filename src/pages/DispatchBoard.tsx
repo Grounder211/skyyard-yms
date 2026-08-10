@@ -17,6 +17,8 @@ export default function DispatchBoard() {
   const [hostlers, setHostlers] = useState<any[]>([]);
   const [myTasksOnly, setMyTasksOnly] = useState(false);
   const [claimBusyId, setClaimBusyId] = useState<number | null>(null);
+  const [parkingRecs, setParkingRecs] = useState<any[]>([]);
+  const [applyingRecId, setApplyingRecId] = useState<number | null>(null);
 
   const load = async () => {
     try {
@@ -26,19 +28,50 @@ export default function DispatchBoard() {
     setLoading(false);
   };
 
+  const loadParkingRecs = async () => {
+    try {
+      const res = await fetch("/api/admin/smart-parking");
+      if (res.ok) setParkingRecs(await res.json());
+    } catch {}
+  };
+
   useEffect(() => {
     load();
+    loadParkingRecs();
     if (user?.role === "superadmin" || user?.role === "ADMIN") {
       fetch("/api/admin/hostlers").then((r) => (r.ok ? r.json() : [])).then((d) => setHostlers(Array.isArray(d) ? d : [])).catch(() => {});
     }
     const socket = io();
-    socket.on("yard_update", load);
-    socket.on("move_update", load);
+    socket.on("yard_update", () => { load(); loadParkingRecs(); });
+    socket.on("move_update", () => { load(); loadParkingRecs(); });
     return () => {
       socket.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.role]);
+
+  // Phase 12: Smart Parking — recommendation only, an admin/hostler has to
+  // click through to actually create the move order (never silently moved).
+  const applyParkingRec = async (rec: any) => {
+    setApplyingRecId(rec.trailerId);
+    try {
+      const res = await fetch("/api/create-move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trailerId: rec.trailerId, fromSpotId: rec.currentSpotId, toSpotId: rec.recommendedSpotId, priority: "normal" }),
+      });
+      if (res.ok) {
+        toast(`Move order created: ${rec.plate} → ${rec.recommendedSpotName}`, "success");
+        load();
+        loadParkingRecs();
+      } else {
+        toast("Failed to create move", "error");
+      }
+    } catch {
+      toast("Network error", "error");
+    }
+    setApplyingRecId(null);
+  };
 
   const spots = yard.spots || [];
   const moves = yard.moves || [];
@@ -175,6 +208,32 @@ export default function DispatchBoard() {
         <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Dispatch & Move Orders</h1>
         <p className="text-slate-500 font-medium">Click an occupied spot to move it to a dock/parking slot, or dispatch it off-site.</p>
       </div>
+
+      {parkingRecs.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-[2rem] p-6 shadow-spatial">
+          <h3 className="font-bold text-slate-900 text-base mb-4 flex items-center gap-2">
+            <MapPin size={16} className="text-emerald-600" /> Smart parking suggestions
+          </h3>
+          <div className="space-y-2">
+            {parkingRecs.map((rec: any) => (
+              <div key={rec.trailerId} className="flex items-center justify-between gap-4 bg-emerald-50/50 border border-emerald-100 rounded-xl px-4 py-3">
+                <div className="text-sm">
+                  <span className="font-bold text-slate-900">{rec.plate}</span>
+                  <span className="text-slate-500"> · {rec.currentSpotName} → {rec.recommendedSpotName}</span>
+                  <p className="text-xs text-slate-500 mt-0.5">{rec.reason} {rec.expectedBenefit}.</p>
+                </div>
+                <button
+                  onClick={() => applyParkingRec(rec)}
+                  disabled={applyingRecId === rec.trailerId}
+                  className="shrink-0 bg-emerald-600 text-white text-xs font-bold px-3 py-2 rounded-lg hover:bg-emerald-700 transition-all disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {applyingRecId === rec.trailerId && <Loader2 size={12} className="animate-spin" />} Create move
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 bg-white border border-slate-200 rounded-[2rem] p-8 shadow-spatial">

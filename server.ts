@@ -35,6 +35,7 @@ import { findDockConflict } from "./server/services/dockConflict.js";
 import { deriveTrailerStatus } from "./server/services/trailerStatus.js";
 import { forecastOccupancy } from "./server/services/capacityForecast.js";
 import { rankHostlersByWorkload } from "./server/services/hostlerRecommendation.js";
+import { recommendParkingMoves } from "./server/services/smartParking.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2986,6 +2987,46 @@ async function startServer() {
     const valid = scored.map((s, i) => ({ ...availableSlots[i], ...s })).filter(s => s.score > 0).sort((a, b) => b.score - a.score);
     if (valid.length > 0) (valid[0] as any).recommended = true;
     res.json(valid);
+  });
+
+  // Priority 47: Smart Parking — recommend repositioning a parked trailer
+  // into the same zone as its own next dock appointment, ahead of the
+  // hostler move that will happen anyway. Recommendation only; creating
+  // the move order (POST /api/create-move) still needs a human to act.
+  app.get("/api/admin/smart-parking", requireRole("superadmin", "ADMIN", "HOSTLER"), async (req: any, res) => {
+    const facilityId = req.facilityId;
+    try {
+      const [{ data: spots }, { data: appts }] = await Promise.all([
+        db.from("spots").select("id, name, type, zone_name, trailers!trailers_spot_id_fkey(id, plate, status)").eq("facility_id", facilityId),
+        db.from("appointments").select("plate, dock_id, start_time").eq("facility_id", facilityId).eq("status", "SCHEDULED").gte("start_time", new Date().toISOString()),
+      ]);
+      const dockSpotById = new Map((spots || []).filter((s: any) => s.type === "DOCK").map((s: any) => [s.id, s]));
+
+      const parkedTrailers = (spots || [])
+        .filter((s: any) => s.type === "PARKING")
+        .flatMap((s: any) => {
+          const trailer = (Array.isArray(s.trailers) ? s.trailers : [s.trailers]).find((t: any) => t && t.status !== "DISPATCHED");
+          if (!trailer?.plate) return [];
+          return [{ trailerId: trailer.id, plate: trailer.plate, spotId: s.id, spotName: s.name, zoneName: s.zone_name ?? null }];
+        });
+
+      const emptyParkingSpots = (spots || [])
+        .filter((s: any) => s.type === "PARKING")
+        .filter((s: any) => !(Array.isArray(s.trailers) ? s.trailers : [s.trailers]).some((t: any) => t && t.status !== "DISPATCHED"))
+        .map((s: any) => ({ id: s.id, name: s.name, zoneName: s.zone_name ?? null }));
+
+      const upcomingAppointments = (appts || [])
+        .filter((a: any) => a.dock_id != null && dockSpotById.has(a.dock_id))
+        .map((a: any) => {
+          const dock = dockSpotById.get(a.dock_id);
+          return { plate: a.plate, dockSpotId: a.dock_id, dockName: dock.name, dockZoneName: dock.zone_name ?? null, startTime: a.start_time };
+        });
+
+      res.json(recommendParkingMoves(parkedTrailers, upcomingAppointments, emptyParkingSpots));
+    } catch (e: any) {
+      logger.error("Smart parking recommendation failed", { error: e.message });
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // --- Phase W: Customer entity — the external stakeholder waiting on a
