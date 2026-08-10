@@ -209,33 +209,30 @@ function AppLayout({ children, user }: any) {
   const navItems = allNavItems.filter((item) => canAccess(user.role, item.to));
 
   return (
-    <div className="dark flex h-screen bg-slate-950 overflow-hidden font-sans">
+    <div className="flex h-screen bg-[var(--background)] overflow-hidden font-sans">
       <CommandPalette />
       {/* Sidebar */}
       <aside className={`
         ${sidebarOpen ? 'w-64' : 'w-20'}
-        bg-slate-900 border-r border-slate-800 transition-[width] duration-300 flex flex-col z-50
+        bg-[var(--surface-container-low)] border-r border-[var(--outline-variant)]/20 transition-[width] duration-300 flex flex-col z-50
       `}>
-        <div className="h-16 flex items-center px-6 border-b border-slate-800/80">
-          <Warehouse className="text-indigo-400 w-8 h-8 shrink-0" />
-          {sidebarOpen && <span className="ml-3 font-bold text-xl tracking-tight text-white" style={{ fontFamily: "var(--font-heading)" }}>SkyYard</span>}
+        <div className="h-16 flex items-center px-6">
+          <Warehouse className="text-[var(--primary)] w-8 h-8 shrink-0" />
+          {sidebarOpen && <span className="ml-3 font-extrabold text-xl tracking-tight text-[var(--primary)]" style={{ fontFamily: "var(--font-heading)" }}>SkyYard</span>}
         </div>
 
-        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+        <nav className="flex-1 mt-4 px-3 space-y-1 overflow-y-auto">
           {navItems.map(item => (
             <Link
               key={item.to}
               to={item.to}
               className={`
-                group relative flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-150
+                flex items-center gap-3 px-3 py-3 rounded-sm transition-all duration-150
                 ${location.pathname === item.to
-                  ? 'bg-indigo-500/15 text-indigo-300'
-                  : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 hover:translate-x-0.5'}
+                  ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
+                  : 'text-[var(--on-surface-variant)] hover:bg-[var(--surface-container-high)]'}
               `}
             >
-              {location.pathname === item.to && (
-                <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-full bg-indigo-400" />
-              )}
               <span className="shrink-0">{item.icon}</span>
               {sidebarOpen && <span className="font-medium text-sm">{item.label}</span>}
             </Link>
@@ -243,7 +240,7 @@ function AppLayout({ children, user }: any) {
 
           {sidebarOpen && onlineUsers.length > 0 && (
             <div className="mt-10 px-3">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4">Online Now</p>
+              <p className="text-[10px] font-bold text-[var(--on-surface-variant)] uppercase tracking-widest mb-4">Online Now</p>
               <div className="space-y-3">
                 {onlineUsers.map(u => (
                   <div key={u.id} className="flex items-center gap-3">
@@ -254,10 +251,10 @@ function AppLayout({ children, user }: any) {
                       {u.initials}
                     </div>
                     <div className="flex-1 min-w-0">
-                       <p className="text-[11px] font-bold text-slate-300 truncate">{u.name}</p>
-                       <p className="text-[9px] font-medium text-slate-500 truncate tracking-tight uppercase">{u.page.split('/').pop() || 'HOME'}</p>
+                       <p className="text-[11px] font-bold text-[var(--on-surface)] truncate">{u.name}</p>
+                       <p className="text-[9px] font-medium text-[var(--on-surface-variant)] truncate tracking-tight uppercase">{u.page.split('/').pop() || 'HOME'}</p>
                     </div>
-                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <div className="w-1.5 h-1.5 rounded-full bg-[var(--secondary)] animate-pulse" />
                   </div>
                 ))}
               </div>
@@ -265,54 +262,58 @@ function AppLayout({ children, user }: any) {
           )}
         </nav>
 
-        <div className="p-4 border-t border-slate-800/80 space-y-1">
+        <div className="p-4 border-t border-[var(--outline-variant)]/20 flex items-center gap-3">
           {canAccess(user.role, "/settings") && (
-          <Link to="/settings" className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 transition-all">
-            <SettingsIcon size={20} />
+          <Link to="/settings" className="flex items-center gap-3 px-3 py-2.5 rounded-sm text-[var(--on-surface-variant)] hover:bg-[var(--surface-container-high)] transition-all">
+            <SettingsIcon size={18} />
             {sidebarOpen && <span className="font-medium text-sm">{t("nav.settings")}</span>}
           </Link>
           )}
-          <button onClick={logout} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-red-400 hover:bg-red-500/10 transition-all">
-            <LogOut size={20} />
-            {sidebarOpen && <span className="font-medium text-sm">{t("nav.logout")}</span>}
-          </button>
         </div>
+        {sidebarOpen && (
+          <div className="px-4 pb-4">
+            <button onClick={logout} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-sm text-[var(--error)] hover:bg-[var(--error-container)]/40 transition-all">
+              <LogOut size={18} />
+              <span className="font-medium text-sm">{t("nav.logout")}</span>
+            </button>
+          </div>
+        )}
       </aside>
 
       {/* Main Container */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="h-16 bg-slate-900/95 backdrop-blur border-b border-slate-800 flex items-center justify-between px-8">
+        <header className="h-16 bg-[var(--surface-container-lowest)] border-b border-[var(--outline-variant)]/20 flex items-center justify-between px-8 sticky top-0 z-10">
           <div className="flex items-center gap-4">
-            <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-2 text-slate-500 hover:text-slate-200 hover:bg-slate-800 rounded-md xl:hidden">
+            <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-2 text-[var(--on-surface-variant)] hover:text-[var(--primary)] hover:bg-[var(--surface-container-low)] rounded-sm xl:hidden">
               <Menu size={20} />
             </button>
             <div className="relative group hidden sm:block">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--on-surface-variant)]" />
               <input
                 placeholder="Search yard (Cmd+K)..."
                 readOnly
                 onClick={() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }))}
-                className="bg-slate-800/70 border border-slate-700 text-slate-200 placeholder:text-slate-500 rounded-lg py-1.5 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition-all w-64 cursor-pointer"
+                className="bg-[var(--surface-container-low)] border-none text-[var(--on-surface)] placeholder:text-[var(--outline)]/70 rounded-sm py-2 pl-10 pr-4 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--primary)] transition-all w-64 cursor-pointer"
               />
             </div>
           </div>
 
           <div className="flex items-center gap-4">
             <NotificationBell />
-            <div className="h-8 w-px bg-slate-800" />
+            <div className="h-8 w-px bg-[var(--outline-variant)]/30" />
             <div className="flex items-center gap-3">
               <div className="text-right hidden md:block">
-                <p className="text-sm font-semibold text-slate-100 leading-tight">{user.name || user.email}</p>
-                <p className="text-[11px] text-slate-500 font-medium">{user.role} · Terminal Active</p>
+                <p className="text-sm font-semibold text-[var(--on-surface)] leading-tight">{user.name || user.email}</p>
+                <p className="text-[11px] text-[var(--on-surface-variant)] font-medium">{user.role} · Terminal Active</p>
               </div>
-              <div className="w-9 h-9 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-300 font-bold text-sm ring-1 ring-indigo-500/30">
+              <div className="w-9 h-9 rounded-full bg-[var(--surface-container-high)] flex items-center justify-center text-[var(--on-surface)] font-bold text-sm border border-[var(--outline-variant)]">
                 {(user.name || user.email)?.charAt(0)?.toUpperCase()}
               </div>
             </div>
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-8 bg-slate-950 custom-scrollbar">
+        <main className="flex-1 overflow-y-auto p-8 bg-[var(--background)] custom-scrollbar">
           <motion.div
             key={location.pathname}
             initial={{ opacity: 0, y: 10 }}
@@ -390,12 +391,12 @@ function Dashboard() {
       <Reveal preset="fade-up" delay={0}>
         <div className="flex justify-between items-end">
           <div>
-            <h2 className="text-4xl font-bold text-white tracking-tight" style={{ fontFamily: "var(--font-heading)" }}>Overview</h2>
-            <p className="text-slate-500 font-medium mt-1">Terminal activities for the current cycle.</p>
+            <h2 className="text-4xl font-extrabold text-[var(--on-surface)] tracking-tight" style={{ fontFamily: "var(--font-heading)" }}>Overview</h2>
+            <p className="text-[var(--on-surface-variant)] font-medium mt-1">Terminal activities for the current cycle.</p>
           </div>
           <div className="flex gap-3">
-            <Link to="/gate" className="bg-slate-900 border border-slate-800 text-slate-300 px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-800 hover:border-slate-700 transition-all">Gate Console</Link>
-            <Link to="/gate" className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-500 active:scale-[0.98] transition-all shadow-lg shadow-indigo-950/50">Add Entry</Link>
+            <Link to="/gate" className="bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)] text-[var(--on-surface-variant)] px-4 py-2.5 rounded-sm text-sm font-bold hover:bg-[var(--surface-container-low)] transition-all">Gate Console</Link>
+            <Link to="/gate" className="bg-[var(--primary)] text-[var(--primary-foreground)] px-5 py-2.5 rounded-sm text-sm font-bold hover:bg-[var(--primary-container)] active:scale-[0.98] transition-all shadow-sm">Add Entry</Link>
           </div>
         </div>
       </Reveal>
@@ -452,7 +453,7 @@ function Dashboard() {
       </div>
 
       {facility && (
-        <div className="bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-6 hover:border-slate-700 transition-colors">
+        <div className="bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 rounded-sm shadow-sm p-6 hover:shadow-md transition-shadow">
           <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
             <MapPin size={14} className="text-indigo-500" /> Facility Map
           </p>
@@ -475,7 +476,7 @@ function Dashboard() {
           </p>
           <div className="flex flex-wrap gap-3">
             {unmanagedTrailers.map((t) => (
-              <span key={t.spotId} className="text-sm font-bold px-3 py-2 rounded-xl bg-slate-900/70 border border-amber-500/30 text-amber-300">
+              <span key={t.spotId} className="text-sm font-bold px-3 py-2 rounded-sm bg-white border border-amber-500/40 text-amber-800">
                 {t.plate} <span className="text-amber-500/80 font-medium">· {t.spotName} · {t.dwellHours}h</span>
               </span>
             ))}
@@ -484,7 +485,7 @@ function Dashboard() {
       )}
 
       {arrivalsAtRisk.length > 0 && (
-        <div className="bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-6 hover:border-slate-700 transition-colors">
+        <div className="bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 rounded-sm shadow-sm p-6 hover:shadow-md transition-shadow">
           <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
             <AlertTriangle size={14} className="text-amber-500" /> Arrivals At Risk — real traffic-aware ETA vs. appointment
           </p>
@@ -492,7 +493,7 @@ function Dashboard() {
             {arrivalsAtRisk.map((a) => (
               <div key={a.id} className={`flex items-center justify-between gap-4 rounded-xl px-4 py-3 border ${a.risk === "LATE" ? "bg-red-500/10 border-red-500/30" : "bg-amber-500/10 border-amber-500/30"}`}>
                 <div className="text-sm">
-                  <span className="font-bold text-white">{a.plate}</span>
+                  <span className="font-bold text-[var(--on-surface)]">{a.plate}</span>
                   <span className="text-slate-500"> · {a.carrier} · appointment {new Date(a.startTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                   <p className="text-xs text-slate-500 mt-0.5">{a.reason}</p>
                 </div>
@@ -504,7 +505,7 @@ function Dashboard() {
       )}
 
       {detentionRisk.length > 0 && (
-        <div className="bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-6 hover:border-slate-700 transition-colors">
+        <div className="bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 rounded-sm shadow-sm p-6 hover:shadow-md transition-shadow">
           <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
             <AlertTriangle size={14} className="text-amber-500" /> Detention Risk — real cost projection, not yet accruing
           </p>
@@ -512,7 +513,7 @@ function Dashboard() {
             {detentionRisk.map((r) => (
               <div key={r.plate} className="flex items-center justify-between gap-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
                 <div className="text-sm">
-                  <span className="font-bold text-white">{r.plate}</span>
+                  <span className="font-bold text-[var(--on-surface)]">{r.plate}</span>
                   <span className="text-slate-500"> · {r.dwellMinutes} min dwell so far</span>
                   <p className="text-xs text-slate-500 mt-0.5">{r.reason}</p>
                 </div>
@@ -524,16 +525,16 @@ function Dashboard() {
       )}
 
       {forecast && forecast.windows.length > 0 && (
-        <div className="bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-6">
+        <div className="bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 rounded-sm shadow-sm p-6">
           <div className="flex items-baseline justify-between mb-4">
             <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Capacity Forecast</p>
             <p className="text-[11px] font-semibold text-slate-400">Risk threshold {forecast.threshold}% · from real scheduled arrivals/departures</p>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             {forecast.windows.map((w) => (
-              <div key={w.minutes} className={`rounded-2xl border p-4 ${w.atRisk ? "bg-amber-500/10 border-amber-500/30" : "bg-slate-800/50 border-slate-700/50"}`}>
+              <div key={w.minutes} className={`rounded-2xl border p-4 ${w.atRisk ? "bg-amber-500/10 border-amber-500/30" : "bg-[var(--surface-container-low)] border-[var(--outline-variant)]/30"}`}>
                 <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">In {w.minutes < 60 ? `${w.minutes}m` : `${w.minutes / 60}h`}</p>
-                <p className={`text-2xl font-bold mt-1 ${w.atRisk ? "text-amber-400" : "text-white"}`}>{w.pct}%</p>
+                <p className={`text-2xl font-bold mt-1 ${w.atRisk ? "text-amber-700" : "text-[var(--on-surface)]"}`}>{w.pct}%</p>
                 <p className="text-[11px] font-semibold text-slate-400">{w.expectedOccupied} / {w.totalSpots} spots</p>
                 {w.atRisk && <p className="text-[10px] font-bold uppercase tracking-widest text-amber-400 mt-1">Capacity risk</p>}
               </div>
@@ -544,9 +545,9 @@ function Dashboard() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <Reveal preset="fade-up" delay={300} className="lg:col-span-2 shadow-spatial">
-          <div className="bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-8">
+          <div className="bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 rounded-sm shadow-sm p-8">
             <div className="flex justify-between items-center mb-8">
-              <h3 className="font-bold text-white text-lg" style={{ fontFamily: "var(--font-heading)" }}>Yard Status Map</h3>
+              <h3 className="font-bold text-[var(--on-surface)] text-lg" style={{ fontFamily: "var(--font-heading)" }}>Yard Status Map</h3>
               <div className="flex gap-6">
                 <Legend label="Occupied" color="bg-indigo-500" />
                 <Legend label="Available" color="bg-slate-600" />
@@ -555,7 +556,7 @@ function Dashboard() {
             {zones.length > 0 && (
               <div className="flex flex-wrap gap-2 mb-6">
                 {zones.map((z) => (
-                  <span key={z.zone} className="text-xs font-bold bg-slate-800/60 border border-slate-700 text-slate-300 rounded-lg px-3 py-1.5">
+                  <span key={z.zone} className="text-xs font-bold bg-[var(--surface-container-low)] border border-[var(--outline-variant)] text-[var(--on-surface-variant)] rounded-sm px-3 py-1.5">
                     {z.zone}: {z.occupied}/{z.total}
                   </span>
                 ))}
@@ -577,10 +578,10 @@ function Dashboard() {
                   title={flagLabel}
                   className={`relative w-14 h-12 rounded-xl border flex items-center justify-center text-[10px] font-bold transition-all duration-200 hover:scale-105 ${
                     flagged
-                      ? 'bg-red-500/15 border-red-500/50 text-red-300 ring-2 ring-red-500/40'
+                      ? 'bg-red-500/15 border-red-500/50 text-red-700 ring-2 ring-red-500/40'
                       : (spot.status === 'OCCUPIED' || spot.plate)
-                      ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-300'
-                      : 'bg-slate-800/50 border-slate-700/50 text-slate-400'
+                      ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-700'
+                      : 'bg-[var(--surface-container-low)] border-[var(--outline-variant)]/30 text-slate-400'
                   }`}
                 >
                   {spot.name}
@@ -592,10 +593,10 @@ function Dashboard() {
         </Reveal>
 
         <Reveal preset="fade-up" delay={350}>
-          <div className="bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-8 hover:border-slate-700 transition-colors">
-            <h3 className="font-bold text-white text-lg pb-6 flex items-center justify-between" style={{ fontFamily: "var(--font-heading)" }}>
+          <div className="bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 rounded-sm shadow-sm p-8 hover:shadow-md transition-shadow">
+            <h3 className="font-bold text-[var(--on-surface)] text-lg pb-6 flex items-center justify-between" style={{ fontFamily: "var(--font-heading)" }}>
               Action Center
-              {actionCenterTotal > 0 && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-500/15 text-red-300">{actionCenterTotal}</span>}
+              {actionCenterTotal > 0 && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-500/15 text-red-700">{actionCenterTotal}</span>}
             </h3>
             <div className="space-y-6 max-h-[420px] overflow-y-auto pr-1">
               {actionCenterTotal === 0 && <p className="text-sm text-slate-400 text-center py-8">Nothing needs attention right now.</p>}
@@ -627,9 +628,9 @@ function Dashboard() {
 
       {spots.some((s: any) => s.type === "DOCK") && (
         <Reveal preset="fade-up" delay={375}>
-          <div className="bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-8 hover:border-slate-700 transition-colors">
+          <div className="bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 rounded-sm shadow-sm p-8 hover:shadow-md transition-shadow">
             <div className="flex items-center justify-between pb-6">
-              <h3 className="font-bold text-white text-lg" style={{ fontFamily: "var(--font-heading)" }}>Dock Board</h3>
+              <h3 className="font-bold text-[var(--on-surface)] text-lg" style={{ fontFamily: "var(--font-heading)" }}>Dock Board</h3>
               {equipment.total > 0 && (
                 <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${equipment.down > 0 ? "bg-amber-500/10 text-amber-400" : "bg-teal-500/10 text-teal-400"}`}>
                   Equipment: {equipment.total - equipment.down}/{equipment.total} available
@@ -639,26 +640,26 @@ function Dashboard() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {spots.filter((s: any) => s.type === "DOCK").map((dock: any) => {
                 const cargoColor: Record<string, string> = {
-                  loaded: "bg-teal-500/10 text-teal-300 border-teal-500/30",
-                  unloaded: "bg-teal-500/10 text-teal-300 border-teal-500/30",
-                  completed: "bg-teal-500/10 text-teal-300 border-teal-500/30",
-                  short: "bg-red-500/10 text-red-300 border-red-500/30",
-                  over: "bg-red-500/10 text-red-300 border-red-500/30",
-                  damaged: "bg-red-500/10 text-red-300 border-red-500/30",
-                  rejected: "bg-red-500/10 text-red-300 border-red-500/30",
+                  loaded: "bg-teal-500/10 text-teal-700 border-teal-500/30",
+                  unloaded: "bg-teal-500/10 text-teal-700 border-teal-500/30",
+                  completed: "bg-teal-500/10 text-teal-700 border-teal-500/30",
+                  short: "bg-red-500/10 text-red-700 border-red-500/30",
+                  over: "bg-red-500/10 text-red-700 border-red-500/30",
+                  damaged: "bg-red-500/10 text-red-700 border-red-500/30",
+                  rejected: "bg-red-500/10 text-red-700 border-red-500/30",
                 };
                 return (
-                <div key={dock.id} className={`rounded-2xl border p-4 transition-all duration-200 hover:-translate-y-0.5 ${dock.plate ? "bg-indigo-500/10 border-indigo-500/30 hover:border-indigo-400/50" : "bg-slate-800/50 border-slate-700/50"}`}>
+                <div key={dock.id} className={`rounded-2xl border p-4 transition-all duration-200 hover:-translate-y-0.5 ${dock.plate ? "bg-indigo-500/10 border-indigo-500/30 hover:border-indigo-400/50" : "bg-[var(--surface-container-low)] border-[var(--outline-variant)]/30"}`}>
                   <p className="text-xs font-bold uppercase tracking-widest text-slate-400">{dock.name}</p>
                   {dock.plate ? (
                     <>
-                      <p className="font-bold text-white mt-1">{dock.plate}</p>
-                      <span className={`inline-block mt-2 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${cargoColor[dock.cargo_status] || "bg-slate-800 text-indigo-300 border-indigo-500/30"}`}>
+                      <p className="font-bold text-[var(--on-surface)] mt-1">{dock.plate}</p>
+                      <span className={`inline-block mt-2 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${cargoColor[dock.cargo_status] || "bg-[var(--surface-container-high)] text-[var(--on-surface)] border-[var(--outline-variant)]"}`}>
                         {dock.cargo_status || "expected"}
                       </span>
                     </>
                   ) : (
-                    <p className="text-sm text-slate-400 mt-1 flex items-center gap-1.5"><DoorOpen size={14} className="text-slate-300" /> Empty</p>
+                    <p className="text-sm text-[var(--on-surface-variant)] mt-1 flex items-center gap-1.5"><DoorOpen size={14} className="text-[var(--outline)]" /> Empty</p>
                   )}
                 </div>
                 );
@@ -673,11 +674,14 @@ function Dashboard() {
 
 function StatItem({ icon, label, value, suffix = "", sub, color, to }: any) {
   const tilt = use3DTilt(5);
+  // Mapped to the Stitch reference's metric-card language: colored
+  // left border + a matching soft icon chip, not a full-tint card.
   const colors: any = {
-    indigo: 'bg-indigo-500/10 text-indigo-300',
-    teal: 'bg-teal-500/10 text-teal-300',
-    amber: 'bg-amber-500/10 text-amber-300'
+    indigo: { border: "border-l-[var(--primary)]", chip: "bg-[var(--surface-container-high)] text-[var(--on-surface)]" },
+    teal: { border: "border-l-[var(--secondary)]", chip: "bg-[var(--secondary-container)] text-[var(--on-secondary-container)]" },
+    amber: { border: "border-l-[#c76c00]", chip: "bg-[var(--tertiary-fixed)] text-[var(--on-tertiary-fixed-variant)]" },
   };
+  const c = colors[color] || colors.indigo;
   // Command Center spec: "each KPI must be clickable" — drills into the
   // page that actually explains the number, instead of a dead-end card.
   const Wrapper: any = to ? Link : "div";
@@ -688,19 +692,19 @@ function StatItem({ icon, label, value, suffix = "", sub, color, to }: any) {
       ref={tilt.ref}
       onMouseMove={tilt.onMouseMove}
       onMouseLeave={tilt.onMouseLeave}
-      className={`bg-slate-900/70 border border-slate-800 p-8 rounded-[1.75rem] hover:border-slate-700 hover:bg-slate-900 hover:-translate-y-0.5 shadow-none hover:shadow-2xl hover:shadow-black/20 transition-all duration-300 flex flex-col gap-4 group ${to ? "cursor-pointer" : ""}`}
+      className={`bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 border-l-4 ${c.border} p-6 rounded-sm shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 flex flex-col gap-3 group ${to ? "cursor-pointer" : ""}`}
       style={{ transformStyle: "preserve-3d" }}
     >
-      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${colors[color]} group-hover:scale-110 transition-transform`} style={{ transform: "translateZ(20px)" }}>
-        {React.cloneElement(icon, { size: 24 })}
+      <div className={`w-10 h-10 rounded-sm flex items-center justify-center ${c.chip} group-hover:scale-105 transition-transform`} style={{ transform: "translateZ(20px)" }}>
+        {React.cloneElement(icon, { size: 20 })}
       </div>
       <div style={{ transform: "translateZ(10px)" }}>
-        <h4 className="text-4xl font-bold text-white tracking-tight" style={{ fontFamily: "var(--font-heading)" }}>
+        <h4 className="text-4xl font-extrabold text-[var(--on-surface)] tracking-tight" style={{ fontFamily: "var(--font-heading)" }}>
           {typeof value === "number" ? <><CountUp value={value} />{suffix}</> : value}
         </h4>
-        <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mt-2">{label}</p>
+        <p className="text-[10px] font-bold text-[var(--on-surface-variant)] uppercase tracking-widest mt-2">{label}</p>
       </div>
-      <p className="text-[11px] font-semibold text-slate-500 mt-2">{sub}</p>
+      <p className="text-[11px] font-semibold text-[var(--on-surface-variant)]">{sub}</p>
     </Wrapper>
   );
 }
@@ -713,11 +717,11 @@ function AlertItem({ severity, msg, time, actionLabel }: any) {
         severity === 'warning' ? 'bg-amber-500' : 'bg-indigo-400'
       }`} />
       <div className="space-y-0.5 flex-1 min-w-0">
-        <p className="text-sm font-bold text-slate-200 leading-tight group-hover:text-indigo-300 transition-colors">{msg}</p>
+        <p className="text-sm font-bold text-[var(--on-surface)] leading-tight group-hover:text-indigo-700 transition-colors">{msg}</p>
         <p className="text-[11px] font-medium text-slate-500">{time}</p>
       </div>
       {actionLabel && (
-        <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-indigo-300 group-hover:text-indigo-200 border border-indigo-500/30 group-hover:border-indigo-400/50 rounded-lg px-2 py-1 transition-colors">{actionLabel}</span>
+        <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-white bg-black group-hover:bg-indigo-700 border border-transparent rounded-sm px-2 py-1 transition-colors">{actionLabel}</span>
       )}
     </div>
   );

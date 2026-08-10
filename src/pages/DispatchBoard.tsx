@@ -208,20 +208,20 @@ export default function DispatchBoard() {
   return (
     <div className="space-y-8 max-w-7xl mx-auto pb-20">
       <div>
-        <h1 className="text-3xl font-bold text-white tracking-tight" style={{ fontFamily: "var(--font-heading)" }}>Dispatch & Move Orders</h1>
+        <h1 className="text-3xl font-bold text-[var(--on-surface)] tracking-tight" style={{ fontFamily: "var(--font-heading)" }}>Dispatch & Move Orders</h1>
         <p className="text-slate-500 font-medium">Click an occupied spot to move it to a dock/parking slot, or dispatch it off-site.</p>
       </div>
 
       {parkingRecs.length > 0 && (
-        <div className="bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-6">
-          <h3 className="font-bold text-white text-base mb-4 flex items-center gap-2" style={{ fontFamily: "var(--font-heading)" }}>
+        <div className="bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 rounded-sm shadow-sm p-6">
+          <h3 className="font-bold text-[var(--on-surface)] text-base mb-4 flex items-center gap-2" style={{ fontFamily: "var(--font-heading)" }}>
             <MapPin size={16} className="text-emerald-400" /> Smart parking suggestions
           </h3>
           <div className="space-y-2">
             {parkingRecs.map((rec: any) => (
               <div key={rec.trailerId} className="flex items-center justify-between gap-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-3">
                 <div className="text-sm">
-                  <span className="font-bold text-white">{rec.plate}</span>
+                  <span className="font-bold text-[var(--on-surface)]">{rec.plate}</span>
                   <span className="text-slate-500"> · {rec.currentSpotName} → {rec.recommendedSpotName}</span>
                   <p className="text-xs text-slate-500 mt-0.5">{rec.reason} {rec.expectedBenefit}.</p>
                 </div>
@@ -239,16 +239,16 @@ export default function DispatchBoard() {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-8">
+        <div className="lg:col-span-2 bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 rounded-sm shadow-sm p-8">
           <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
-            <h3 className="font-bold text-white text-lg flex items-center gap-2" style={{ fontFamily: "var(--font-heading)" }}>
+            <h3 className="font-bold text-[var(--on-surface)] text-lg flex items-center gap-2" style={{ fontFamily: "var(--font-heading)" }}>
               <MapPin size={18} className="text-indigo-400" /> Yard map
             </h3>
-            <div className="flex gap-1 bg-slate-800/70 rounded-lg p-1">
-              <button type="button" onClick={() => setViewMode("map")} title="Map view" className={`p-1.5 rounded-md transition-colors ${viewMode === "map" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"}`}>
+            <div className="flex gap-1 bg-[var(--surface-container-low)] rounded-sm p-1">
+              <button type="button" onClick={() => setViewMode("map")} title="Map view" className={`p-1.5 rounded-md transition-colors ${viewMode === "map" ? "bg-[var(--primary)] text-white" : "text-[var(--on-surface-variant)] hover:text-black"}`}>
                 <MapIcon size={14} />
               </button>
-              <button type="button" onClick={() => setViewMode("grid")} title="Grid view" className={`p-1.5 rounded-md transition-colors ${viewMode === "grid" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"}`}>
+              <button type="button" onClick={() => setViewMode("grid")} title="Grid view" className={`p-1.5 rounded-md transition-colors ${viewMode === "grid" ? "bg-[var(--primary)] text-white" : "text-[var(--on-surface-variant)] hover:text-black"}`}>
                 <LayoutGrid size={14} />
               </button>
             </div>
@@ -273,7 +273,7 @@ export default function DispatchBoard() {
                     className={`w-20 h-16 rounded-xl border flex flex-col items-center justify-center text-[10px] font-bold transition-all shadow-sm ${
                       spot.plate
                         ? "bg-indigo-50 border-indigo-200 text-indigo-700 hover:border-indigo-500 cursor-pointer"
-                        : "bg-slate-800/50 border-slate-700/50 text-slate-500 cursor-default"
+                        : "bg-[var(--surface-container-low)] border-[var(--outline-variant)]/30 text-[var(--on-surface-variant)] cursor-default"
                     }`}
                   >
                     <span>{spot.name}</span>
@@ -289,9 +289,9 @@ export default function DispatchBoard() {
           )}
         </div>
 
-        <div className="bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-8">
+        <div className="bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 rounded-sm shadow-sm p-8">
           <div className="flex items-center justify-between gap-3 mb-6">
-            <h3 className="font-bold text-white text-lg flex items-center gap-2" style={{ fontFamily: "var(--font-heading)" }}>
+            <h3 className="font-bold text-[var(--on-surface)] text-lg flex items-center gap-2" style={{ fontFamily: "var(--font-heading)" }}>
               <ArrowRight size={18} className="text-amber-400" /> Move tasks
             </h3>
             {user?.role === "HOSTLER" && (
@@ -307,19 +307,19 @@ export default function DispatchBoard() {
               const isClaimed = !!m.assigned_to;
               const isRecommended = m.id === recommendedMoveId;
               return (
-                <div key={m.id} className={`p-4 rounded-2xl border ${isRecommended ? "bg-indigo-500/10 border-indigo-500/40 ring-2 ring-indigo-500/20" : "bg-slate-800/50 border-slate-700/50"}`}>
+                <div key={m.id} className={`p-4 rounded-2xl border ${isRecommended ? "bg-indigo-500/10 border-indigo-500/40 ring-2 ring-indigo-500/20" : "bg-[var(--surface-container-low)] border-[var(--outline-variant)]/30"}`}>
                   {isRecommended && (
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-300 mb-2 flex items-center gap-1">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-700 mb-2 flex items-center gap-1">
                       <Hand size={10} /> Recommended next
                     </p>
                   )}
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <p className="font-bold text-white text-sm flex items-center gap-1.5">
+                      <p className="font-bold text-[var(--on-surface)] text-sm flex items-center gap-1.5">
                         {m.plate}
                         {m.priority && m.priority !== "normal" && (
                           <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${
-                            m.priority === "urgent" ? "bg-red-500/15 text-red-300" : m.priority === "high" ? "bg-amber-500/15 text-amber-300" : "bg-slate-700 text-slate-400"
+                            m.priority === "urgent" ? "bg-red-500/15 text-red-700" : m.priority === "high" ? "bg-amber-500/15 text-amber-800" : "bg-[var(--surface-container-high)] text-[var(--on-surface-variant)]"
                           }`}>
                             {m.priority}
                           </span>
@@ -329,18 +329,18 @@ export default function DispatchBoard() {
                         {m.from_name} <ArrowRight size={10} /> {m.to_name}
                       </p>
                     </div>
-                    <span className={`shrink-0 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${isClaimed ? "bg-indigo-500/15 text-indigo-300" : "bg-slate-700 text-slate-400"}`}>
+                    <span className={`shrink-0 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${isClaimed ? "bg-indigo-500/15 text-indigo-700" : "bg-[var(--surface-container-high)] text-[var(--on-surface-variant)]"}`}>
                       {isClaimed ? (isMine ? "You" : m.assignee_name || "Assigned") : "Unassigned"}
                     </span>
                   </div>
                   <div className="mt-3 flex gap-2">
                     {!isClaimed && (
-                      <button onClick={() => claimMove(m.id)} disabled={claimBusyId === m.id} className="flex-1 bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 text-xs font-bold py-2 rounded-lg hover:bg-indigo-500/20 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50">
+                      <button onClick={() => claimMove(m.id)} disabled={claimBusyId === m.id} className="flex-1 bg-indigo-500/10 border border-indigo-500/30 text-indigo-700 text-xs font-bold py-2 rounded-lg hover:bg-indigo-500/20 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50">
                         {claimBusyId === m.id ? <Loader2 size={12} className="animate-spin" /> : <Hand size={12} />} Claim
                       </button>
                     )}
                     {isClaimed && (isMine || user?.role === "ADMIN" || user?.role === "superadmin") && (
-                      <button onClick={() => releaseMove(m.id)} disabled={claimBusyId === m.id} className="bg-slate-800 border border-slate-700 text-slate-400 text-xs font-bold px-3 py-2 rounded-lg hover:bg-slate-700 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50">
+                      <button onClick={() => releaseMove(m.id)} disabled={claimBusyId === m.id} className="bg-[var(--surface-container-high)] border border-[var(--outline-variant)] text-[var(--on-surface-variant)] text-xs font-bold px-3 py-2 rounded-lg hover:bg-slate-700 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50">
                         <UserX size={12} />
                       </button>
                     )}
@@ -366,7 +366,7 @@ export default function DispatchBoard() {
             onClick={() => setSelected(null)}
           >
             <motion.div
-              className="bg-slate-900 border-l border-slate-800 p-8 max-w-md w-full h-full shadow-2xl overflow-y-auto custom-scrollbar"
+              className="bg-white border-l border-[var(--outline-variant)]/30 p-8 max-w-md w-full h-full shadow-2xl overflow-y-auto custom-scrollbar"
               initial={{ x: "100%" }}
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
@@ -375,10 +375,10 @@ export default function DispatchBoard() {
             >
             <div className="flex items-center justify-between mb-6">
               <div>
-                <h3 className="font-bold text-lg text-white" style={{ fontFamily: "var(--font-heading)" }}>{selected.plate}</h3>
+                <h3 className="font-bold text-lg text-[var(--on-surface)]" style={{ fontFamily: "var(--font-heading)" }}>{selected.plate}</h3>
                 <p className="text-xs text-slate-500">{selected.carrier} &middot; currently at {selected.name}</p>
               </div>
-              <button onClick={() => setSelected(null)} className="text-slate-500 hover:text-white transition-colors">
+              <button onClick={() => setSelected(null)} className="text-[var(--on-surface-variant)] hover:text-black transition-colors">
                 <X size={18} />
               </button>
             </div>
@@ -388,7 +388,7 @@ export default function DispatchBoard() {
                 <label className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5">
                   <DoorOpen size={12} /> Move to
                 </label>
-                <select value={targetSpot} onChange={(e) => setTargetSpot(Number(e.target.value))} className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30">
+                <select value={targetSpot} onChange={(e) => setTargetSpot(Number(e.target.value))} className="w-full bg-[var(--surface-container-low)] border border-[var(--outline-variant)] text-[var(--on-surface)] rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30">
                   <option value="">Select a free spot...</option>
                   {emptySpots.map((s: any) => (
                     <option key={s.id} value={s.id}>{s.name} ({s.type})</option>
@@ -397,7 +397,7 @@ export default function DispatchBoard() {
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Priority</label>
-                <select value={movePriority} onChange={(e) => setMovePriority(e.target.value)} className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30">
+                <select value={movePriority} onChange={(e) => setMovePriority(e.target.value)} className="w-full bg-[var(--surface-container-low)] border border-[var(--outline-variant)] text-[var(--on-surface)] rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30">
                   <option value="low">Low</option>
                   <option value="normal">Normal</option>
                   <option value="high">High</option>
@@ -409,7 +409,7 @@ export default function DispatchBoard() {
                   <label className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5">
                     <UserCheck size={12} /> Assign to (optional)
                   </label>
-                  <select value={assignTo} onChange={(e) => setAssignTo(e.target.value ? Number(e.target.value) : "")} className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30">
+                  <select value={assignTo} onChange={(e) => setAssignTo(e.target.value ? Number(e.target.value) : "")} className="w-full bg-[var(--surface-container-low)] border border-[var(--outline-variant)] text-[var(--on-surface)] rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30">
                     <option value="">Leave unassigned — claimable by any hostler</option>
                     {hostlers.map((h: any) => (
                       <option key={h.id} value={h.id}>
@@ -424,7 +424,7 @@ export default function DispatchBoard() {
               </button>
 
               <div className="pt-4 border-t border-slate-800">
-                <button onClick={dispatchTrailer} disabled={busy} className="w-full bg-red-500/10 text-red-300 py-2.5 rounded-xl text-sm font-bold hover:bg-red-500/20 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                <button onClick={dispatchTrailer} disabled={busy} className="w-full bg-red-500/10 text-red-700 py-2.5 rounded-xl text-sm font-bold hover:bg-red-500/20 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                   <LogOut size={14} /> Dispatch off-site
                 </button>
               </div>

@@ -337,43 +337,43 @@ export default function YardMap({ spots, facility, unresolvedSafetySpotIds, spot
 
   if (!MAPBOX_TOKEN) {
     return (
-      <div className={`flex flex-col items-center justify-center gap-2 bg-slate-900/60 border border-slate-800 rounded-2xl text-slate-500 ${className}`} style={{ height }}>
-        <span className="text-sm font-bold text-slate-300">Map unavailable</span>
+      <div className={`flex flex-col items-center justify-center gap-2 bg-[var(--surface-container-high)] border border-[var(--outline-variant)]/40 rounded-sm text-[var(--on-surface-variant)] ${className}`} style={{ height }}>
+        <span className="text-sm font-bold text-[var(--on-surface)]">Map unavailable</span>
         <span className="text-xs">VITE_MAPBOX_ACCESS_TOKEN not configured</span>
       </div>
     );
   }
 
   return (
-    <div className={`relative rounded-2xl overflow-hidden border border-slate-800 ${className}`} style={{ height }}>
+    <div className={`relative rounded-sm overflow-hidden border border-[var(--outline-variant)]/30 ${className}`} style={{ height }}>
       <style>{`@keyframes yard-map-pulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.7); opacity: .5; } }`}</style>
       {/* mapbox-gl.css ships its own `.mapboxgl-map { position: relative }`,
           which wins the cascade over Tailwind's `.absolute` class (same
           specificity, loaded later) and collapses this container to 0
           height. Inline style always wins over any stylesheet class. */}
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
-      <div className="absolute top-3 left-3 z-10 flex gap-1 bg-slate-900/90 backdrop-blur rounded-lg p-1 shadow-lg border border-slate-700/60">
-        <button type="button" onClick={() => setStyle("command")} className={`text-[10px] font-bold uppercase tracking-wide px-2.5 py-1.5 rounded-md transition-all duration-150 ${style === "command" ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"}`}>Map</button>
-        <button type="button" onClick={() => setStyle("satellite")} className={`text-[10px] font-bold uppercase tracking-wide px-2.5 py-1.5 rounded-md transition-all duration-150 ${style === "satellite" ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"}`}>Satellite</button>
+      <div className="absolute top-3 left-3 z-10 flex gap-1 bg-white/95 backdrop-blur rounded-sm p-1 shadow-sm border border-[var(--outline-variant)]/30">
+        <button type="button" onClick={() => setStyle("command")} className={`text-[10px] font-bold uppercase tracking-wide px-2.5 py-1.5 rounded-sm transition-all duration-150 ${style === "command" ? "bg-black text-white" : "text-[var(--on-surface-variant)] hover:bg-[var(--surface-container-low)]"}`}>Map</button>
+        <button type="button" onClick={() => setStyle("satellite")} className={`text-[10px] font-bold uppercase tracking-wide px-2.5 py-1.5 rounded-sm transition-all duration-150 ${style === "satellite" ? "bg-black text-white" : "text-[var(--on-surface-variant)] hover:bg-[var(--surface-container-low)]"}`}>Satellite</button>
       </div>
       {!facility.configured && (
-        <div className="absolute bottom-3 left-3 z-10 bg-amber-500/15 backdrop-blur border border-amber-500/30 text-amber-300 text-[10px] font-bold px-2.5 py-1.5 rounded-lg shadow-lg max-w-[70%]">
+        <div className="absolute bottom-3 left-3 z-10 bg-[var(--tertiary-fixed)]/90 backdrop-blur border border-[#c76c00]/30 text-[var(--on-tertiary-fixed-variant)] text-[10px] font-bold px-2.5 py-1.5 rounded-sm shadow-sm max-w-[70%]">
           Approximate location — set real facility coordinates in Settings
         </div>
       )}
       {!ready && !loadError && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-slate-900 text-slate-500 pointer-events-none">
-          <div className="w-6 h-6 border-2 border-indigo-500/20 border-t-indigo-400 rounded-full animate-spin" />
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-[var(--surface-container-high)] text-[var(--on-surface-variant)] pointer-events-none">
+          <div className="w-6 h-6 border-2 border-black/10 border-t-black rounded-full animate-spin" />
           <span className="text-xs font-bold uppercase tracking-widest">Loading map…</span>
         </div>
       )}
       {ready && tilesSlow && !loadError && (
-        <div className="absolute bottom-3 right-3 z-10 bg-amber-500/15 backdrop-blur border border-amber-500/30 text-amber-300 text-[10px] font-bold px-2.5 py-1.5 rounded-lg shadow-lg">
+        <div className="absolute bottom-3 right-3 z-10 bg-[var(--tertiary-fixed)]/90 backdrop-blur border border-[#c76c00]/30 text-[var(--on-tertiary-fixed-variant)] text-[10px] font-bold px-2.5 py-1.5 rounded-sm shadow-sm">
           Map tiles are slow to load — check your network
         </div>
       )}
       {loadError && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-900/95 text-red-400 text-sm font-bold px-4 text-center">
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/95 text-[var(--error)] text-sm font-bold px-4 text-center">
           Map error: {loadError}
         </div>
       )}

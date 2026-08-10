@@ -1,15 +1,12 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 @import "tailwindcss";
 
-/* Class-based dark mode (Stitch redesign) — the app shell forces `.dark`
-   on the root wrapper rather than following prefers-color-scheme, since
-   there's no theme toggle in scope; this keeps `dark:` variants usable
-   without fighting the OS setting. */
-@custom-variant dark (&:where(.dark, .dark *));
-
+/* Stitch-generated palette, applied verbatim (Logistics Pro reference) —
+   Material-token names, light surfaces, black primary, green=success,
+   sharp corners. Dark mode dropped: this reference is light-only. */
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-heading: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: "Manrope", "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
@@ -19,49 +16,58 @@
   --shadow-spatial: 0 25px 50px -12px rgba(0, 0, 0, 0.15);
 }
 
-@supports (color: oklch(0 0 0)) {
-  :root {
-    --background: oklch(0.98 0.01 240); /* #f8fafc variant */
-    --foreground: oklch(0.15 0.05 240); /* #0f172a variant */
-    
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.15 0.05 240);
-    
-    --primary: oklch(0.60 0.18 250); /* Technical Blue */
-    --primary-foreground: oklch(1 0 0);
-    
-    --accent-teal: oklch(0.72 0.15 185);
-    --accent-amber: oklch(0.78 0.18 80);
-    --accent-red: oklch(0.55 0.22 30);
-    --accent-green: oklch(0.70 0.17 145);
-    
-    --secondary: oklch(0.96 0.02 240);
-    --muted: oklch(0.96 0.02 240);
-    --muted-foreground: oklch(0.55 0.05 240);
-    
-    --border: oklch(0.92 0.02 240);
-    --ring: oklch(0.60 0.18 250);
-    
-    --radius: 1.25rem;
-  }
+:root {
+  --background: #f8f9ff;
+  --foreground: #0b1c30;
 
-  .dark {
-    --background: oklch(0.15 0.05 240);
-    --foreground: oklch(0.98 0.01 240);
-    
-    --card: oklch(0.22 0.05 240);
-    --card-foreground: oklch(0.98 0.01 240);
-    
-    --primary: oklch(0.70 0.18 250);
-    --border: oklch(0.25 0.05 240);
-    --muted: oklch(0.22 0.05 240);
-  }
+  --card: #ffffff;
+  --card-foreground: #0b1c30;
+
+  --primary: #000000;
+  --primary-foreground: #ffffff;
+  --primary-container: #1c1b1b;
+
+  --secondary: #006d35;
+  --on-secondary: #ffffff;
+  --secondary-container: #8df9a8;
+  --on-secondary-container: #007439;
+
+  --error: #ba1a1a;
+  --on-error: #ffffff;
+  --error-container: #ffdad6;
+  --on-error-container: #93000a;
+
+  --tertiary-fixed: #ffdcc3;
+  --on-tertiary-fixed-variant: #6e3900;
+  --on-tertiary-container: #c76c00;
+
+  --surface: #f8f9ff;
+  --surface-dim: #cbdbf5;
+  --surface-bright: #f8f9ff;
+  --surface-container-lowest: #ffffff;
+  --surface-container-low: #eff4ff;
+  --surface-container: #e5eeff;
+  --surface-container-high: #dce9ff;
+  --surface-container-highest: #d3e4fe;
+  --on-surface: #0b1c30;
+  --on-surface-variant: #444748;
+
+  --outline: #747878;
+  --outline-variant: #c4c7c7;
+
+  --muted: #eff4ff;
+  --muted-foreground: #444748;
+
+  --border: #c4c7c7;
+  --ring: #000000;
+
+  --radius: 0.25rem;
 }
 
 @layer base {
   * { @apply border-[var(--border)]; }
-  body { @apply bg-[var(--background)] text-[var(--foreground)] antialiased font-sans transition-colors duration-500; }
-  h1, h2, h3, h4 { @apply font-bold tracking-tight; }
+  body { @apply bg-[var(--background)] text-[var(--foreground)] antialiased font-sans; }
+  h1, h2, h3, h4 { @apply font-bold tracking-tight; font-family: var(--font-heading); }
 }
 
 @layer components {
@@ -89,37 +95,36 @@
   .motion-fade-up { animation: fadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
   .motion-spring-pop { animation: springPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
 
-  /* Skeleton loading state (Stitch redesign) */
+  /* Skeleton loading state */
   .skeleton {
-    @apply relative overflow-hidden bg-slate-200 dark:bg-slate-800/80 rounded-xl;
+    @apply relative overflow-hidden bg-[var(--surface-container-high)] rounded;
   }
   .skeleton::after {
     content: "";
     @apply absolute inset-0;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.5), transparent);
     background-size: 200% 100%;
     animation: shimmer 1.6s ease-in-out infinite;
   }
 }
 
-/* Mapbox popup — soften the hard default appearance to match the rest of
-   the app's transition language instead of the library's instant snap-in. */
+/* Mapbox popup — match the Stitch palette instead of the library default. */
 .mapboxgl-popup {
   animation: fadeUp 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 .mapboxgl-popup-content {
-  @apply !bg-slate-900 !text-slate-100 !shadow-xl !rounded-xl !border !border-slate-700/60;
+  @apply !bg-white !text-[#0b1c30] !shadow-lg !rounded !border !border-[#c4c7c7]/40;
 }
 .mapboxgl-popup-tip {
-  border-top-color: var(--color-slate-900, #0f172a) !important;
-  border-bottom-color: var(--color-slate-900, #0f172a) !important;
+  border-top-color: #ffffff !important;
+  border-bottom-color: #ffffff !important;
 }
 .mapboxgl-popup-close-button {
-  @apply !text-slate-400 hover:!text-white;
+  @apply !text-[#747878] hover:!text-black;
 }
 
-/* Custom Scrollbar — shell is forced dark (no theme toggle in scope) */
+/* Custom Scrollbar */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { @apply bg-slate-700 rounded-full hover:bg-slate-600 transition-colors; }
+::-webkit-scrollbar-thumb { @apply bg-[var(--outline-variant)] rounded-full hover:bg-[var(--outline)] transition-colors; }
 
