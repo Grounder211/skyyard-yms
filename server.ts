@@ -139,6 +139,13 @@ async function startServer() {
       const { trailers, ...rest } = s;
       return {
         ...rest,
+        // spots.status is a cached flag that move/exit/swap paths keep in
+        // sync, but it can still drift from reality (stale seed rows, a
+        // manual DB edit, a path we haven't found yet) — deriving it from
+        // whether a real trailer actually occupies the spot means every
+        // consumer (Dashboard KPIs, GateConsole, TVDisplay, LiveTracking)
+        // shows the truth even when the cached column is wrong.
+        status: trailer ? "OCCUPIED" : "EMPTY",
         allowed_equipment_types: dockRuleMap.get(s.id),
         trailer_id: trailer?.id,
         plate: trailer?.plate,
@@ -1918,6 +1925,12 @@ async function startServer() {
       if (error) throw error;
       await db.from("gate_logs").insert({ facility_id: req.facilityId, event_type: "exit", trailer_id: pass.trailer_id, truck_plate: pass.plate, guard_user_id: req.session.user.id, notes: `Gate pass ${pass.pass_number} exited` });
       if (pass.spot_id) await db.from("spots").update({ status: "EMPTY" }).eq("id", pass.spot_id);
+      // The spot got freed above, but the trailer's own record kept
+      // pointing at it and stayed IN_YARD/DOCKED — dispatch_trailer_tx
+      // clears both status and spot_id on the way out, exit never did.
+      // Left stale, the next spot lookup for this dock/space still finds
+      // this "departed" trailer sitting in it.
+      if (pass.trailer_id) await db.from("trailers").update({ status: "DISPATCHED", spot_id: null, checked_out_at: new Date().toISOString() }).eq("id", pass.trailer_id);
       logAudit({ action: "GATE_PASS_EXITED", entityType: "GATE_PASS", entityId: String(pass.id), details: { plate: pass.plate }, ip: req.ip, facility_id: req.facilityId });
       emitUpdate("yard_update", { type: "GATE_PASS" });
       res.json(data);
