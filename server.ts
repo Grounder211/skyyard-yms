@@ -3005,7 +3005,17 @@ async function startServer() {
       const { data: customer } = await db.from("customers").select("id, name").eq("access_token", req.params.token).maybeSingle();
       if (!customer) return res.status(404).json({ error: "Invalid link" });
       const { data: shipments } = await db.from("appointments").select("id, plate, carrier, start_time, status, load_type, checked_in_at, checked_out_at").eq("customer_id", customer.id).order("start_time", { ascending: false }).limit(50);
-      res.json({ customer_name: customer.name, shipments: shipments || [] });
+      const plates = Array.from(new Set((shipments || []).map((s: any) => s.plate).filter(Boolean)));
+      const { data: trailers } = plates.length
+        ? await db.from("trailers").select("plate, status, checked_out_at, spots(name, type)").in("plate", plates)
+        : { data: [] as any[] };
+      const trailerByPlate = new Map((trailers || []).map((t: any) => [t.plate, t]));
+      const enriched = (shipments || []).map((s: any) => {
+        const t = trailerByPlate.get(s.plate);
+        const trailerStatus = deriveTrailerStatus(t ? { status: t.status, checked_out_at: t.checked_out_at, spot_name: t.spots?.name || null, spot_type: t.spots?.type || null } : null);
+        return { ...s, trailer_status: trailerStatus.label, trailer_status_detail: trailerStatus.detail };
+      });
+      res.json({ customer_name: customer.name, shipments: enriched });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

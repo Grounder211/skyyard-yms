@@ -97,6 +97,9 @@ export default function CustomerPortal() {
                     {dwellMinutes != null && (
                       <p className="text-xs text-slate-400 mt-0.5">On site {Math.floor(dwellMinutes / 60)}h {dwellMinutes % 60}m</p>
                     )}
+                    {s.trailer_status_detail && dwellMinutes == null && (
+                      <p className="text-xs text-slate-400 mt-0.5">{s.trailer_status_detail}</p>
+                    )}
                   </div>
                   <span className={`shrink-0 text-xs font-bold uppercase tracking-wider px-3 py-1.5 rounded-full flex items-center gap-1.5 ${info.color}`}>
                     <Icon size={12} /> {info.label}
