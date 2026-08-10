@@ -43,6 +43,11 @@ export default function PipelineBoard() {
   const [slipTarget, setSlipTarget] = useState<any>(null);
   const [busy, setBusy] = useState<number | null>(null);
   const [, forceTick] = useState(0);
+  // PARKED -> LOADING needs a real dock chosen before it can proceed — the
+  // server tells us when there's a genuine choice (multiple free docks, or
+  // none free and a swap is needed) instead of silently guessing.
+  const [dockPicker, setDockPicker] = useState<{ pass: any; availableDocks: any[]; occupiedDocks: any[] } | null>(null);
+  const [swapConfirm, setSwapConfirm] = useState<{ pass: any; dockId: number; occupantTrailerId: number; occupantPlate: string } | null>(null);
 
   const load = async () => {
     try {
@@ -63,19 +68,29 @@ export default function PipelineBoard() {
     };
   }, []);
 
-  const advance = async (pass: any, stage: string) => {
+  const advance = async (pass: any, stage: string, extra?: { dockId?: number; confirmSwapWithTrailerId?: number }) => {
     setBusy(pass.id);
     const res = await fetch(`/api/gate-pass/${pass.id}/advance`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ stage }),
+      body: JSON.stringify({ stage, ...extra }),
     });
     setBusy(null);
     if (res.ok) {
       toast(`${pass.plate} moved to ${stage.replace(/_/g, " ").toLowerCase()}`, "success");
+      setDockPicker(null);
+      setSwapConfirm(null);
       load();
     } else {
       const data = await res.json().catch(() => ({}));
+      if (data.needsDockSelection) {
+        setDockPicker({ pass, availableDocks: data.availableDocks || [], occupiedDocks: data.occupiedDocks || [] });
+        return;
+      }
+      if (data.needsSwapConfirmation && extra?.dockId) {
+        setSwapConfirm({ pass, dockId: extra.dockId, occupantTrailerId: data.occupantTrailerId, occupantPlate: data.occupantPlate });
+        return;
+      }
       toast(data.error || "Failed to advance", "error");
     }
   };
@@ -238,6 +253,58 @@ export default function PipelineBoard() {
       {verifyTarget && <VerifyModal pass={verifyTarget} onClose={() => setVerifyTarget(null)} onSubmit={submitVerify} busy={busy === verifyTarget.id} />}
       {slipTarget && <SlipModal pass={slipTarget} onClose={() => setSlipTarget(null)} />}
       {rateTarget && <RateModal pass={rateTarget} onClose={() => setRateTarget(null)} onSubmit={submitRating} busy={busy === rateTarget.id} />}
+      {dockPicker && (
+        <div className="fixed inset-0 z-[9998] bg-black/50 flex items-center justify-center p-6" onClick={() => setDockPicker(null)}>
+          <div className="bg-white rounded-sm p-6 max-w-sm w-full shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-bold text-[var(--on-surface)]">Which dock for {dockPicker.pass.plate}?</h3>
+            <p className="text-xs text-[var(--on-surface-variant)] mt-1 mb-4">Choose a free dock, or swap with a trailer already at one.</p>
+            {dockPicker.availableDocks.length > 0 && (
+              <div className="space-y-1.5 mb-3">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--on-surface-variant)]">Free</p>
+                {dockPicker.availableDocks.map((d) => (
+                  <button key={d.id} onClick={() => advance(dockPicker.pass, "LOADING", { dockId: d.id })} disabled={busy === dockPicker.pass.id} className="w-full text-left text-sm font-semibold bg-[var(--secondary-container)] text-[var(--on-secondary-container)] rounded-sm px-3 py-2 hover:opacity-80 transition-opacity disabled:opacity-50">
+                    {d.name}{d.zoneName ? ` · ${d.zoneName}` : ""}
+                  </button>
+                ))}
+              </div>
+            )}
+            {dockPicker.occupiedDocks.length > 0 && (
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--on-surface-variant)]">Occupied — swap</p>
+                {dockPicker.occupiedDocks.map((d) => (
+                  <button key={d.id} onClick={() => advance(dockPicker.pass, "LOADING", { dockId: d.id })} disabled={busy === dockPicker.pass.id} className="w-full text-left text-sm font-semibold bg-[var(--surface-container-high)] text-[var(--on-surface)] rounded-sm px-3 py-2 hover:opacity-80 transition-opacity disabled:opacity-50">
+                    {d.name}{d.zoneName ? ` · ${d.zoneName}` : ""} — swap with {d.plate}
+                  </button>
+                ))}
+              </div>
+            )}
+            {dockPicker.availableDocks.length === 0 && dockPicker.occupiedDocks.length === 0 && (
+              <p className="text-sm text-[var(--on-surface-variant)]">No compatible dock exists for this trailer's equipment type.</p>
+            )}
+            <button onClick={() => setDockPicker(null)} className="w-full text-xs font-bold text-[var(--on-surface-variant)] mt-4 py-2 hover:text-black">Cancel</button>
+          </div>
+        </div>
+      )}
+      {swapConfirm && (
+        <div className="fixed inset-0 z-[9998] bg-black/50 flex items-center justify-center p-6" onClick={() => setSwapConfirm(null)}>
+          <div className="bg-white rounded-sm p-6 max-w-sm w-full shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-bold text-[var(--on-surface)]">Confirm swap</h3>
+            <p className="text-sm text-[var(--on-surface-variant)] mt-2">
+              {swapConfirm.pass.plate} will take the dock; <span className="font-semibold">{swapConfirm.occupantPlate}</span> will move to {swapConfirm.pass.plate}'s current spot.
+            </p>
+            <div className="flex gap-2 mt-4">
+              <button onClick={() => setSwapConfirm(null)} className="flex-1 text-xs font-bold bg-[var(--surface-container-high)] text-[var(--on-surface-variant)] rounded-sm py-2 hover:opacity-80">Cancel</button>
+              <button
+                onClick={() => advance(swapConfirm.pass, "LOADING", { dockId: swapConfirm.dockId, confirmSwapWithTrailerId: swapConfirm.occupantTrailerId })}
+                disabled={busy === swapConfirm.pass.id}
+                className="flex-1 text-xs font-bold bg-black text-white rounded-sm py-2 hover:opacity-90 disabled:opacity-50"
+              >
+                Confirm swap
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

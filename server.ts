@@ -18,6 +18,7 @@ import { evaluateReading, isReadingStale, STALE_READING_HOURS } from "./server/s
 import { evaluateSla, isNoShow, isOnTimeArrival } from "./server/services/complianceMonitor.js";
 import { shouldNotifyExpiry } from "./server/services/vehicleExpiry.js";
 import { nextExpiryAlertLevel, missingDocumentTypes } from "./server/services/documentExpiry.js";
+import { resolveDockAssignment, type DockCandidate } from "./server/services/dockAssignment.js";
 import crypto from "crypto";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import PDFDocument from "pdfkit";
@@ -1766,13 +1767,78 @@ async function startServer() {
   });
 
   app.post("/api/gate-pass/:id/advance", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
-    const { stage } = req.body;
+    const { stage, dockId, confirmSwapWithTrailerId } = req.body;
     try {
       const { data: pass } = await db.from("gate_passes").select("*").eq("id", req.params.id).eq("facility_id", req.facilityId).maybeSingle();
       if (!pass) return res.status(404).json({ error: "Gate pass not found" });
 
       const transition = checkStageTransition(pass.stage, stage, { license_verified: pass.license_verified, vehicle_matched: pass.vehicle_matched });
       if (!transition.ok) return res.status(400).json({ error: transition.error });
+
+      // PARKED -> LOADING was flipping a status label with no connection
+      // to where the trailer actually is — a trailer could be marked
+      // "loading" while still sitting in a parking spot, no dock ever
+      // chosen. This makes the stage advance also place the trailer:
+      // auto-assign the one obvious empty compatible dock, ask which dock
+      // when there's a real choice (or none free — offer a swap instead
+      // of just failing).
+      if (stage === "LOADING" && pass.stage === "PARKED" && pass.trailer_id) {
+        const { data: trailer } = await db.from("trailers").select("id, spot_id, equipment_type, plate").eq("id", pass.trailer_id).maybeSingle();
+        const { data: currentSpot } = trailer?.spot_id
+          ? await db.from("spots").select("id, type").eq("id", trailer.spot_id).maybeSingle()
+          : { data: null };
+
+        if (trailer && currentSpot?.type !== "DOCK") {
+          const [{ data: docks }, { data: dockRules }] = await Promise.all([
+            db.from("spots").select("id, name, status, zone_name, trailers!trailers_spot_id_fkey(id, plate)").eq("facility_id", req.facilityId).eq("type", "DOCK"),
+            db.from("dock_rules").select("dock_door_id, allowed_equipment_types").eq("facility_id", req.facilityId),
+          ]);
+          const ruleMap = new Map((dockRules || []).map((r: any) => [r.dock_door_id, r.allowed_equipment_types]));
+          const eType = trailer.equipment_type || "standard";
+          const compatible: DockCandidate[] = (docks || [])
+            .filter((d: any) => (ruleMap.get(d.id) || ["standard"]).includes(eType))
+            .map((d: any) => {
+              const occupant = Array.isArray(d.trailers) ? d.trailers[0] : d.trailers;
+              return { id: d.id, name: d.name, zoneName: d.zone_name, occupantTrailerId: occupant?.id ?? null, occupantPlate: occupant?.plate ?? null };
+            });
+
+          const decision = resolveDockAssignment(compatible, dockId, confirmSwapWithTrailerId);
+
+          if (decision.action === "needsSelection") {
+            return res.status(409).json({
+              error: decision.available.length === 0 ? "No compatible dock is free — choose one to swap with" : "Multiple compatible docks are free — choose one",
+              needsDockSelection: true,
+              availableDocks: decision.available.map((d) => ({ id: d.id, name: d.name, zoneName: d.zoneName })),
+              occupiedDocks: decision.occupied.map((d) => ({ id: d.id, name: d.name, zoneName: d.zoneName, plate: d.occupantPlate })),
+            });
+          }
+          if (decision.action === "invalid") return res.status(400).json({ error: decision.error });
+          if (decision.action === "needsSwapConfirmation") {
+            return res.status(409).json({
+              error: `Dock ${compatible.find((d) => d.id === decision.dockId)?.name} is occupied by ${decision.occupantPlate} — confirm swap to proceed`,
+              needsSwapConfirmation: true,
+              occupantTrailerId: decision.occupantTrailerId,
+              occupantPlate: decision.occupantPlate,
+            });
+          }
+
+          const chosenDockId = decision.dockId;
+          if (decision.action === "swap") {
+            const { data: swapResult, error: swapError } = await db.rpc("swap_trailers_tx", { p_trailer_a_id: trailer.id, p_trailer_b_id: decision.occupantTrailerId });
+            if (swapError) throw swapError;
+            logAudit({ action: "TRAILER_SWAP", entityType: "TRAILER", entityId: String(trailer.id), details: swapResult, ip: req.ip, facility_id: req.facilityId });
+          } else {
+            const { data: move, error: moveError } = await db.from("move_orders").insert({
+              trailer_id: trailer.id, from_spot_id: trailer.spot_id, to_spot_id: chosenDockId, facility_id: req.facilityId, status: "PENDING",
+            }).select().single();
+            if (moveError) throw moveError;
+            const { error: completeError } = await db.rpc("complete_move_tx", { p_move_id: move.id });
+            if (completeError) throw completeError;
+          }
+          await db.from("gate_passes").update({ spot_id: chosenDockId }).eq("id", pass.id);
+          emitUpdate("yard_update", { type: "MOVE_COMPLETE" });
+        }
+      }
 
       if (stage === "READY_FOR_EXIT" && pass.trailer_id) {
         const { data: trailer } = await db.from("trailers").select("cargo_status").eq("id", pass.trailer_id).maybeSingle();
