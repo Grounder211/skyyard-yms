@@ -3479,6 +3479,7 @@ async function startServer() {
     m3: "Detention Revenue",
     m4: "No-Show Rate",
     m5: "Peak Hour Volume",
+    m6: "Gate Throughput (In/Out)",
   };
 
   app.post("/api/analytics/query", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
@@ -3528,6 +3529,12 @@ async function startServer() {
         for (const row of data || []) byHour[new Date(row.timestamp).getHours()]++;
         const peakHour = byHour.indexOf(Math.max(...byHour));
         results.push({ id: "m5", label: METRIC_LABELS.m5, value: byHour[peakHour] || 0, unit: `entries at ${String(peakHour).padStart(2, "0")}:00`, series: byHour.map((count, hour) => ({ label: `${String(hour).padStart(2, "0")}:00`, value: count })), sampleSize: data?.length || 0 });
+      }
+
+      if (wanted.includes("m6")) {
+        const { count: entries } = await db.from("gate_logs").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("event_type", "entry").gte("timestamp", cutoff);
+        const { count: exits } = await db.from("gate_logs").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("event_type", "exit").gte("timestamp", cutoff);
+        results.push({ id: "m6", label: METRIC_LABELS.m6, value: (entries || 0) + (exits || 0), unit: `${entries || 0} in / ${exits || 0} out`, sampleSize: (entries || 0) + (exits || 0) });
       }
 
       res.json({ periodDays, metrics: results });

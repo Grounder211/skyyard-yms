@@ -8,6 +8,7 @@ const AVAILABLE_METRICS = [
   { id: "m3", label: "Detention Revenue", category: "Finance" },
   { id: "m4", label: "No-Show Rate", category: "Appointments" },
   { id: "m5", label: "Peak Hour Volume", category: "Gate" },
+  { id: "m6", label: "Gate Throughput (In/Out)", category: "Gate" },
 ];
 
 export default function ReportBuilder() {
