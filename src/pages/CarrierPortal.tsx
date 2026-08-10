@@ -247,6 +247,7 @@ export default function CarrierPortal() {
                         <th className="px-6 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Plate</th>
                         <th className="px-6 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Time</th>
                         <th className="px-6 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Dock</th>
+                        <th className="px-6 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Trailer</th>
                         <th className="px-6 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Status</th>
                       </tr>
                     </thead>
@@ -256,6 +257,11 @@ export default function CarrierPortal() {
                           <td className="px-6 py-3 text-sm font-bold text-slate-800">{a.plate}</td>
                           <td className="px-6 py-3 text-sm text-slate-600">{a.start_time ? new Date(a.start_time).toLocaleString() : "—"}</td>
                           <td className="px-6 py-3 text-sm text-slate-600">{a.dock_name || "—"}</td>
+                          <td className="px-6 py-3">
+                            <span className={`text-xs font-bold px-2 py-1 rounded-full ${a.trailer_status === "AT_DOCK" ? "bg-indigo-100 text-indigo-700" : a.trailer_status === "IN_YARD" ? "bg-teal-100 text-teal-700" : a.trailer_status === "DEPARTED" ? "bg-slate-100 text-slate-500" : "bg-amber-100 text-amber-700"}`}>
+                              {a.trailer_status_detail}
+                            </span>
+                          </td>
                           <td className="px-6 py-3 text-sm font-semibold text-indigo-600">{a.status}</td>
                         </tr>
                       ))}

@@ -32,6 +32,7 @@ import { isDockSlaBreached } from "./server/services/dockSla.js";
 import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers, summarizeZoneOccupancy, matchExceptionPlatesToSpotIds, findUnmanagedTrailers } from "./server/services/todayOps.js";
 import { classifyAppointmentHealth } from "./server/services/appointmentHealth.js";
 import { findDockConflict } from "./server/services/dockConflict.js";
+import { deriveTrailerStatus } from "./server/services/trailerStatus.js";
 import { forecastOccupancy } from "./server/services/capacityForecast.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -2452,7 +2453,17 @@ async function startServer() {
     try {
       const { data: appts } = await db.from("appointments").select("*, spots(name)").eq("driver_id", req.session.driver_id).order("start_time", { ascending: false }).limit(20);
       const { data: walkins } = await db.from("walkin_registrations").select("*").eq("phone", req.session.driver_phone).order("created_at", { ascending: false }).limit(20);
-      res.json({ appointments: (appts || []).map((a: any) => ({ ...a, dock_name: a.spots?.name })), walkins: walkins || [] });
+      const plates = Array.from(new Set((appts || []).map((a: any) => a.plate).filter(Boolean)));
+      const { data: trailers } = plates.length
+        ? await db.from("trailers").select("plate, status, checked_out_at, spots(name, type)").in("plate", plates)
+        : { data: [] as any[] };
+      const trailerByPlate = new Map((trailers || []).map((t: any) => [t.plate, t]));
+      const appointments = (appts || []).map((a: any) => {
+        const t = trailerByPlate.get(a.plate);
+        const trailerStatus = deriveTrailerStatus(t ? { status: t.status, checked_out_at: t.checked_out_at, spot_name: t.spots?.name || null, spot_type: t.spots?.type || null } : null);
+        return { ...a, dock_name: a.spots?.name, trailer_status: trailerStatus.label, trailer_status_detail: trailerStatus.detail };
+      });
+      res.json({ appointments, walkins: walkins || [] });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -2689,7 +2700,16 @@ async function startServer() {
   app.get("/api/carrier/appointments", requireCarrierAuth, async (req: any, res) => {
     try {
       const { data: appts } = await db.from("appointments").select("*, spots(name)").eq("carrier_id", req.session.carrier_id).order("start_time", { ascending: false }).limit(50);
-      res.json((appts || []).map((a: any) => ({ ...a, dock_name: a.spots?.name })));
+      const plates = Array.from(new Set((appts || []).map((a: any) => a.plate).filter(Boolean)));
+      const { data: trailers } = plates.length
+        ? await db.from("trailers").select("plate, status, checked_out_at, spots(name, type)").in("plate", plates)
+        : { data: [] as any[] };
+      const trailerByPlate = new Map((trailers || []).map((t: any) => [t.plate, t]));
+      res.json((appts || []).map((a: any) => {
+        const t = trailerByPlate.get(a.plate);
+        const trailerStatus = deriveTrailerStatus(t ? { status: t.status, checked_out_at: t.checked_out_at, spot_name: t.spots?.name || null, spot_type: t.spots?.type || null } : null);
+        return { ...a, dock_name: a.spots?.name, trailer_status: trailerStatus.label, trailer_status_detail: trailerStatus.detail };
+      }));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

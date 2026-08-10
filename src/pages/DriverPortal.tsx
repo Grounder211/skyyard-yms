@@ -244,6 +244,11 @@ export default function DriverPortal() {
                       <p className="text-xs text-slate-500 flex items-center gap-1 mt-1">
                         <Clock size={12} /> {a.start_time ? new Date(a.start_time).toLocaleString() : "TBD"} {a.dock_name ? `· ${a.dock_name}` : ""}
                       </p>
+                      {a.trailer_status_detail && (
+                        <p className={`text-[11px] font-bold mt-1 ${a.trailer_status === "AT_DOCK" ? "text-indigo-600" : a.trailer_status === "IN_YARD" ? "text-teal-600" : a.trailer_status === "DEPARTED" ? "text-slate-400" : "text-amber-600"}`}>
+                          {a.trailer_status_detail}
+                        </p>
+                      )}
                     </div>
                     <QRCodeSVG value={`APT-${a.id}`} size={56} level="M" />
                   </div>
