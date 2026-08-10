@@ -36,6 +36,7 @@ import { deriveTrailerStatus } from "./server/services/trailerStatus.js";
 import { forecastOccupancy } from "./server/services/capacityForecast.js";
 import { rankHostlersByWorkload } from "./server/services/hostlerRecommendation.js";
 import { recommendParkingMoves } from "./server/services/smartParking.js";
+import { predictArrival } from "./server/services/arrivalPrediction.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3345,7 +3346,7 @@ async function startServer() {
 
   app.post("/api/book/:token", bookingLimiter, async (req: any, res) => {
     const { token } = req.params;
-    const { plate, driver_name, driver_phone, start_time, dock_id, load_type, temperature_requirement, load_weight_kg, special_instructions } = req.body;
+    const { plate, driver_name, driver_phone, start_time, dock_id, load_type, temperature_requirement, load_weight_kg, special_instructions, origin_address } = req.body;
     try {
       const { data: carrier } = await db.from("carriers").select("*").eq("booking_token", token).gt("booking_token_expires", new Date().toISOString()).maybeSingle();
       if (!carrier) return res.status(404).json({ error: "Invalid or expired booking link" });
@@ -3383,11 +3384,28 @@ async function startServer() {
       // Capped — this is a public, unauthenticated field on a rate-limited
       // but still open endpoint; no reason to accept unbounded text.
       const instructions = typeof special_instructions === "string" && special_instructions.trim() ? special_instructions.trim().slice(0, 500) : null;
+      const originAddress = typeof origin_address === "string" && origin_address.trim() ? origin_address.trim().slice(0, 300) : null;
+
+      // Priority 2: geocode the carrier-supplied origin so a real
+      // traffic-aware ETA can be computed later — best-effort, and never
+      // blocks the booking itself if the geocoder is down or the address
+      // doesn't resolve. No coordinate is ever guessed.
+      let originLat: number | null = null;
+      let originLng: number | null = null;
+      if (originAddress) {
+        try {
+          const point = await getTrafficProvider()?.geocodeAddress?.(originAddress);
+          if (point) { originLat = point.lat; originLng = point.lng; }
+        } catch (e: any) {
+          logger.warn("Origin address geocoding failed", { error: e.message, originAddress });
+        }
+      }
 
       const { data: newAppt, error } = await db.from("appointments").insert({
         plate, carrier: carrier.name, dock_id: dock_id || null, start_time, load_type: load_type || "standard",
         end_time: bookedEndTime, load_weight_kg: weightKg, special_instructions: instructions,
         temperature_requirement: load_type === "reefer" ? (temperature_requirement || null) : null,
+        origin_address: originAddress, origin_lat: originLat, origin_lng: originLng,
         status: "SCHEDULED", source: "self_book", driver_id: driverId, carrier_id: carrier.id, facility_id: 1,
       }).select().single();
       if (error) throw error;
@@ -4438,6 +4456,62 @@ async function startServer() {
     } catch (e: any) {
       logger.error("Traffic route fetch failed", { error: e.message });
       res.status(502).json({ error: "Traffic provider request failed" });
+    }
+  });
+
+  // Priority 2: Arrival Intelligence — real traffic-aware ETA + risk for
+  // today's scheduled appointments that have a geocoded origin. Never
+  // fabricates a route: appointments with no origin, or a facility with
+  // no coordinates configured, are reported as UNKNOWN with the real
+  // reason, not silently dropped or guessed.
+  app.get("/api/admin/arrivals-eta", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const facilityId = req.facilityId;
+    try {
+      const { data: facility } = await db.from("facilities").select("latitude, longitude").eq("id", facilityId).maybeSingle();
+      if (facility?.latitude == null || facility?.longitude == null) {
+        return res.json({ configured: false, reason: "Facility coordinates not set — configure them in Settings", arrivals: [] });
+      }
+      const provider = getTrafficProvider();
+      if (!provider) {
+        return res.json({ configured: false, reason: "Traffic provider not configured", arrivals: [] });
+      }
+
+      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+      const { data: appts } = await db
+        .from("appointments")
+        .select("id, plate, carrier, start_time, grace_period_minutes, origin_address, origin_lat, origin_lng")
+        .eq("facility_id", facilityId)
+        .eq("status", "SCHEDULED")
+        .not("origin_lat", "is", null)
+        .gte("start_time", todayStart.toISOString())
+        .lt("start_time", todayEnd.toISOString())
+        .order("start_time", { ascending: true });
+
+      const nowIso = new Date().toISOString();
+      const dest = { lat: facility.latitude, lng: facility.longitude };
+      const arrivals = await Promise.all((appts || []).map(async (a: any) => {
+        const route = await provider.getTrafficAwareRoute({ lat: a.origin_lat, lng: a.origin_lng }, dest);
+        const prediction = predictArrival({
+          appointmentStartIso: a.start_time,
+          gracePeriodMinutes: a.grace_period_minutes,
+          trafficDurationSeconds: route?.trafficDurationSeconds ?? null,
+          nowIso,
+        });
+        return {
+          id: a.id, plate: a.plate, carrier: a.carrier, startTime: a.start_time, originAddress: a.origin_address,
+          distanceMeters: route?.distanceMeters ?? null,
+          normalDurationSeconds: route?.normalDurationSeconds ?? null,
+          trafficDurationSeconds: route?.trafficDurationSeconds ?? null,
+          delaySeconds: route?.delaySeconds ?? null,
+          ...prediction,
+        };
+      }));
+
+      res.json({ configured: true, arrivals });
+    } catch (e: any) {
+      logger.error("Arrivals ETA fetch failed", { error: e.message });
+      res.status(500).json({ error: "Failed to compute arrivals ETA" });
     }
   });
 

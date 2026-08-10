@@ -338,6 +338,7 @@ function Dashboard() {
   const [equipment, setEquipment] = React.useState({ down: 0, total: 0 });
   const [forecast, setForecast] = React.useState<{ threshold: number; windows: { minutes: number; expectedOccupied: number; totalSpots: number; pct: number; atRisk: boolean }[] } | null>(null);
   const [unmanagedTrailers, setUnmanagedTrailers] = React.useState<{ spotId: number; spotName: string; plate: string; dwellHours: number }[]>([]);
+  const [arrivalsAtRisk, setArrivalsAtRisk] = React.useState<any[]>([]);
 
   React.useEffect(() => {
     fetch("/api/yard-status")
@@ -355,6 +356,9 @@ function Dashboard() {
         setUnmanagedTrailers(data.unmanagedTrailers || []);
       });
     fetch("/api/admin/capacity-forecast").then(r => r.ok ? r.json() : null).then(setForecast).catch(() => {});
+    fetch("/api/admin/arrivals-eta").then(r => r.ok ? r.json() : null)
+      .then(d => setArrivalsAtRisk((d?.arrivals || []).filter((a: any) => a.risk === "AT_RISK" || a.risk === "LATE")))
+      .catch(() => {});
     const loadAttention = () => fetch("/api/admin/needs-attention").then(r => r.ok ? r.json() : { critical: [], timeCritical: [], operations: [], upcoming: [] }).then(setAttention).catch(() => {});
     loadAttention();
     const t = setInterval(loadAttention, 60000);
@@ -439,6 +443,26 @@ function Dashboard() {
               <span key={t.spotId} className="text-sm font-bold px-3 py-2 rounded-xl bg-white border border-amber-200 text-amber-800">
                 {t.plate} <span className="text-amber-500 font-medium">· {t.spotName} · {t.dwellHours}h</span>
               </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {arrivalsAtRisk.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-[2rem] p-6 shadow-spatial">
+          <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
+            <AlertTriangle size={14} className="text-amber-500" /> Arrivals At Risk — real traffic-aware ETA vs. appointment
+          </p>
+          <div className="space-y-2">
+            {arrivalsAtRisk.map((a) => (
+              <div key={a.id} className={`flex items-center justify-between gap-4 rounded-xl px-4 py-3 border ${a.risk === "LATE" ? "bg-red-50 border-red-200" : "bg-amber-50 border-amber-200"}`}>
+                <div className="text-sm">
+                  <span className="font-bold text-slate-900">{a.plate}</span>
+                  <span className="text-slate-500"> · {a.carrier} · appointment {new Date(a.startTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                  <p className="text-xs text-slate-500 mt-0.5">{a.reason}</p>
+                </div>
+                <span className={`shrink-0 text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-lg ${a.risk === "LATE" ? "bg-red-600 text-white" : "bg-amber-500 text-white"}`}>{a.risk}</span>
+              </div>
             ))}
           </div>
         </div>

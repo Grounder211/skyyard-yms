@@ -24,7 +24,7 @@ export default function BookingPage() {
   const [selectedDock, setSelectedDock] = useState<number | null>(null);
   const [recommended, setRecommended] = useState<any[]>([]);
 
-  const [form, setForm] = useState({ plate: "", driver_name: "", driver_phone: "", load_type: "standard", temperature_requirement: "", load_weight_kg: "", special_instructions: "" });
+  const [form, setForm] = useState({ plate: "", driver_name: "", driver_phone: "", load_type: "standard", temperature_requirement: "", load_weight_kg: "", special_instructions: "", origin_address: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [confirmed, setConfirmed] = useState<any>(null);
@@ -151,6 +151,7 @@ export default function BookingPage() {
                 <TextField label="Driver name" value={form.driver_name} onChange={(v) => setForm({ ...form, driver_name: v })} />
                 <TextField label="Driver phone" value={form.driver_phone} onChange={(v) => setForm({ ...form, driver_phone: v })} placeholder="+46 70 123 4567" />
                 <TextField label="Load weight (kg, optional)" value={form.load_weight_kg} onChange={(v) => setForm({ ...form, load_weight_kg: v.replace(/[^0-9]/g, "") })} placeholder="e.g. 24000" />
+                <TextField label="Origin address (optional)" value={form.origin_address} onChange={(v) => setForm({ ...form, origin_address: v.slice(0, 300) })} placeholder="e.g. Kungsholmen, Stockholm" />
                 {form.load_type === "reefer" && (
                   <TextField label="Required temperature (°C)" value={form.temperature_requirement} onChange={(v) => setForm({ ...form, temperature_requirement: v })} placeholder="-18" />
                 )}

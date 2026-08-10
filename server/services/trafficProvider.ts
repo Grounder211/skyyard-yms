@@ -22,6 +22,10 @@ export interface TrafficAwareRoute {
 export interface TrafficProvider {
   readonly name: string;
   getTrafficAwareRoute(origin: RoutePoint, destination: RoutePoint): Promise<TrafficAwareRoute | null>;
+  // Optional: forward-geocode a free-text address into a route point, so a
+  // carrier-supplied origin address can feed getTrafficAwareRoute without
+  // ever inventing coordinates. Not every provider needs to implement this.
+  geocodeAddress?(address: string): Promise<RoutePoint | null>;
 }
 
 const cache = new Map<string, { at: number; value: TrafficAwareRoute | null }>();
@@ -44,7 +48,10 @@ export class MapboxTrafficProvider implements TrafficProvider {
   async getTrafficAwareRoute(origin: RoutePoint, destination: RoutePoint): Promise<TrafficAwareRoute | null> {
     return withCache(origin, destination, async () => {
       const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${origin.lng},${origin.lat};${destination.lng},${destination.lat}?access_token=${this.token}&overview=false`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      // Live-verified round trips to Mapbox from this deployment ran as
+      // high as ~13s under real network conditions — 5s was cutting off
+      // good responses as timeouts, not just failing fast on dead ones.
+      const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
       if (!res.ok) throw new Error(`Mapbox Directions API returned ${res.status}`);
       const data = await res.json();
       const route = data?.routes?.[0];
@@ -62,6 +69,16 @@ export class MapboxTrafficProvider implements TrafficProvider {
         fetchedAt: new Date().toISOString(),
       };
     });
+  }
+
+  async geocodeAddress(address: string): Promise<RoutePoint | null> {
+    const url = `https://api.mapbox.com/search/geocode/v6/forward?q=${encodeURIComponent(address)}&limit=1&access_token=${this.token}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new Error(`Mapbox Geocoding API returned ${res.status}`);
+    const data = await res.json();
+    const [lng, lat] = data?.features?.[0]?.geometry?.coordinates || [];
+    if (typeof lat !== "number" || typeof lng !== "number") return null;
+    return { lat, lng };
   }
 }
 
