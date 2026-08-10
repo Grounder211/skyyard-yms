@@ -925,9 +925,12 @@ async function startServer() {
       // carrier flagging, the blacklist check every gate flow already
       // reuses). No traffic/GPS dependency, no invented numbers.
       const carrierNames = Array.from(new Set((data || []).map((a: any) => a.carrier).filter(Boolean)));
-      const { data: flaggedCarriers } = carrierNames.length
-        ? await db.from("carriers").select("name").in("name", carrierNames).eq("flagged", true)
-        : { data: [] as any[] };
+      const [{ data: flaggedCarriers }, { count: gateQueueDepth }] = await Promise.all([
+        carrierNames.length
+          ? db.from("carriers").select("name").in("name", carrierNames).eq("flagged", true)
+          : Promise.resolve({ data: [] as any[] }),
+        db.from("walkin_registrations").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("status", "pending_approval"),
+      ]);
       const flaggedNameSet = new Set((flaggedCarriers || []).map((c: any) => c.name));
       const nowIso = new Date().toISOString();
       const rows = await Promise.all((data || []).map(async (a: any) => {
@@ -935,7 +938,8 @@ async function startServer() {
         const health = classifyAppointmentHealth(
           { status: a.status, start_time: a.start_time, no_show_flag: a.no_show_flag, grace_period_minutes: a.grace_period_minutes },
           { carrierFlagged: flaggedNameSet.has(a.carrier), carrierBlacklisted: !!blacklistHit },
-          nowIso
+          nowIso,
+          { gateQueueDepth: gateQueueDepth || 0 }
         );
         return { ...a, dock_name: a.spots?.name, health: health.status, health_reason: health.reason };
       }));

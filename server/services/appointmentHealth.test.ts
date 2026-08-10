@@ -68,4 +68,37 @@ describe("classifyAppointmentHealth", () => {
     );
     expect(r.status).toBe("AT_RISK");
   });
+
+  it("is AT_RISK ahead of time when the gate queue is heavy and the appointment is imminent", () => {
+    const r = classifyAppointmentHealth(
+      { status: "SCHEDULED", start_time: "2026-08-09T14:20:00.000Z", no_show_flag: false, grace_period_minutes: 30 },
+      noFlags, now, { gateQueueDepth: 6 }
+    );
+    expect(r.status).toBe("AT_RISK");
+    expect(r.reason).toContain("Gate queue");
+  });
+
+  it("is ON_TRACK when the gate queue is heavy but the appointment is not imminent", () => {
+    const r = classifyAppointmentHealth(
+      { status: "SCHEDULED", start_time: "2026-08-09T16:00:00.000Z", no_show_flag: false, grace_period_minutes: 30 },
+      noFlags, now, { gateQueueDepth: 6 }
+    );
+    expect(r.status).toBe("ON_TRACK");
+  });
+
+  it("is ON_TRACK when the appointment is imminent but the gate queue is light", () => {
+    const r = classifyAppointmentHealth(
+      { status: "SCHEDULED", start_time: "2026-08-09T14:20:00.000Z", no_show_flag: false, grace_period_minutes: 30 },
+      noFlags, now, { gateQueueDepth: 2 }
+    );
+    expect(r.status).toBe("ON_TRACK");
+  });
+
+  it("treats a missing context as zero queue depth", () => {
+    const r = classifyAppointmentHealth(
+      { status: "SCHEDULED", start_time: "2026-08-09T14:20:00.000Z", no_show_flag: false, grace_period_minutes: 30 },
+      noFlags, now
+    );
+    expect(r.status).toBe("ON_TRACK");
+  });
 });
