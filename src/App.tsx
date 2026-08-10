@@ -28,8 +28,9 @@ import {
   Users,
   Percent,
   MapPin,
+  X,
 } from "lucide-react";
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import { Routes, Route, Link, useLocation } from "react-router-dom";
 import { ToastProvider } from "./contexts/ToastContext";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
@@ -356,6 +357,7 @@ function Dashboard() {
   const [arrivalsAtRisk, setArrivalsAtRisk] = React.useState<any[]>([]);
   const [detentionRisk, setDetentionRisk] = React.useState<any[]>([]);
   const [facility, setFacility] = React.useState<any>(null);
+  const [selectedSpot, setSelectedSpot] = React.useState<any>(null);
 
   React.useEffect(() => {
     fetch("/api/yard-status")
@@ -454,15 +456,27 @@ function Dashboard() {
 
       {facility && (
         <div className="bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 rounded-sm shadow-sm p-6 hover:shadow-md transition-shadow">
-          <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
-            <MapPin size={14} className="text-indigo-500" /> Facility Map
-          </p>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2">
+              <MapPin size={14} className="text-indigo-500" /> Facility Map — click a spot for details
+            </p>
+            {zones.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {zones.map((z) => (
+                  <span key={z.zone} className="text-xs font-bold bg-[var(--surface-container-low)] border border-[var(--outline-variant)] text-[var(--on-surface-variant)] rounded-sm px-3 py-1.5">
+                    {z.zone}: {z.occupied}/{z.total}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
           <Suspense fallback={<div className="rounded-2xl bg-slate-50 animate-pulse" style={{ height: "440px" }} />}>
             <YardMap
               spots={spots}
               facility={facility}
               unresolvedSafetySpotIds={unresolvedSafetySpotIds}
               spotsWithOpenExceptions={spotsWithOpenExceptions}
+              onSelectSpot={(spot: any) => setSelectedSpot(spot)}
               height="440px"
             />
           </Suspense>
@@ -543,55 +557,7 @@ function Dashboard() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <Reveal preset="fade-up" delay={300} className="lg:col-span-2 shadow-spatial">
-          <div className="bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 rounded-sm shadow-sm p-8">
-            <div className="flex justify-between items-center mb-8">
-              <h3 className="font-bold text-[var(--on-surface)] text-lg" style={{ fontFamily: "var(--font-heading)" }}>Yard Status Map</h3>
-              <div className="flex gap-6">
-                <Legend label="Occupied" color="bg-indigo-500" />
-                <Legend label="Available" color="bg-slate-600" />
-              </div>
-            </div>
-            {zones.length > 0 && (
-              <div className="flex flex-wrap gap-2 mb-6">
-                {zones.map((z) => (
-                  <span key={z.zone} className="text-xs font-bold bg-[var(--surface-container-low)] border border-[var(--outline-variant)] text-[var(--on-surface-variant)] rounded-sm px-3 py-1.5">
-                    {z.zone}: {z.occupied}/{z.total}
-                  </span>
-                ))}
-              </div>
-            )}
-            <div className="flex flex-wrap gap-3">
-              {spots.map((spot: any) => {
-                const flagged = unresolvedSafetySpotIds.includes(spot.id) || spotsWithOpenExceptions.includes(spot.id);
-                const flagLabel = unresolvedSafetySpotIds.includes(spot.id) && spotsWithOpenExceptions.includes(spot.id)
-                  ? "Unresolved safety incident and open exception here"
-                  : unresolvedSafetySpotIds.includes(spot.id)
-                  ? "Unresolved safety incident here"
-                  : spotsWithOpenExceptions.includes(spot.id)
-                  ? "Open exception on this trailer"
-                  : undefined;
-                return (
-                <div
-                  key={spot.id}
-                  title={flagLabel}
-                  className={`relative w-14 h-12 rounded-xl border flex items-center justify-center text-[10px] font-bold transition-all duration-200 hover:scale-105 ${
-                    flagged
-                      ? 'bg-red-500/15 border-red-500/50 text-red-700 ring-2 ring-red-500/40'
-                      : (spot.status === 'OCCUPIED' || spot.plate)
-                      ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-700'
-                      : 'bg-[var(--surface-container-low)] border-[var(--outline-variant)]/30 text-slate-400'
-                  }`}
-                >
-                  {spot.name}
-                </div>
-                );
-              })}
-            </div>
-          </div>
-        </Reveal>
-
+      <div className="grid grid-cols-1 gap-8">
         <Reveal preset="fade-up" delay={350}>
           <div className="bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 rounded-sm shadow-sm p-8 hover:shadow-md transition-shadow">
             <h3 className="font-bold text-[var(--on-surface)] text-lg pb-6 flex items-center justify-between" style={{ fontFamily: "var(--font-heading)" }}>
@@ -649,7 +615,12 @@ function Dashboard() {
                   rejected: "bg-red-500/10 text-red-700 border-red-500/30",
                 };
                 return (
-                <div key={dock.id} className={`rounded-2xl border p-4 transition-all duration-200 hover:-translate-y-0.5 ${dock.plate ? "bg-indigo-500/10 border-indigo-500/30 hover:border-indigo-400/50" : "bg-[var(--surface-container-low)] border-[var(--outline-variant)]/30"}`}>
+                <button
+                  type="button"
+                  key={dock.id}
+                  onClick={() => dock.plate && setSelectedSpot(dock)}
+                  className={`text-left rounded-2xl border p-4 transition-all duration-200 hover:-translate-y-0.5 ${dock.plate ? "bg-indigo-500/10 border-indigo-500/30 hover:border-indigo-400/50 cursor-pointer" : "bg-[var(--surface-container-low)] border-[var(--outline-variant)]/30 cursor-default"}`}
+                >
                   <p className="text-xs font-bold uppercase tracking-widest text-slate-400">{dock.name}</p>
                   {dock.plate ? (
                     <>
@@ -661,13 +632,87 @@ function Dashboard() {
                   ) : (
                     <p className="text-sm text-[var(--on-surface-variant)] mt-1 flex items-center gap-1.5"><DoorOpen size={14} className="text-[var(--outline)]" /> Empty</p>
                   )}
-                </div>
+                </button>
                 );
               })}
             </div>
           </div>
         </Reveal>
       )}
+
+      <AnimatePresence>
+        {selectedSpot && (
+          <motion.div
+            className="fixed inset-0 z-[9998] bg-black/60 backdrop-blur-sm flex justify-end"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => setSelectedSpot(null)}
+          >
+            <motion.div
+              className="bg-white border-l border-[var(--outline-variant)]/30 p-8 max-w-md w-full h-full shadow-2xl overflow-y-auto custom-scrollbar"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-slate-400">{selectedSpot.name} · {selectedSpot.type === "DOCK" ? "Dock" : "Parking"}</p>
+                  <h3 className="font-bold text-lg text-[var(--on-surface)]" style={{ fontFamily: "var(--font-heading)" }}>{selectedSpot.plate || "Empty spot"}</h3>
+                </div>
+                <button onClick={() => setSelectedSpot(null)} className="text-[var(--on-surface-variant)] hover:text-black transition-colors">
+                  <X size={18} />
+                </button>
+              </div>
+              {selectedSpot.plate ? (
+                <div className="space-y-2 text-sm">
+                  <DetailRow label="Carrier" value={selectedSpot.carrier} />
+                  <DetailRow label="Zone" value={selectedSpot.zone_name} />
+                  <DetailRow label="Equipment" value={selectedSpot.equipment_type || "standard"} />
+                  <DetailRow label="Cargo status" value={selectedSpot.cargo_status || "expected"} />
+                  <DetailRow label="Seal" value={selectedSpot.seal_number} />
+                  <DetailRow label="PO number" value={selectedSpot.po_number} />
+                  <DetailRow label="Cargo / SKU" value={selectedSpot.sku_summary} />
+                  <DetailRow label="Hazmat class" value={selectedSpot.hazmat_class} />
+                  <DetailRow label="Tare weight" value={selectedSpot.tare_weight_kg ? `${selectedSpot.tare_weight_kg} kg` : undefined} />
+                  {(selectedSpot.checked_in_at || selectedSpot.check_in_time) && (
+                    <DetailRow label="On site since" value={timeAgo(selectedSpot.checked_in_at || selectedSpot.check_in_time)} />
+                  )}
+                  {(() => {
+                    const risk = detentionRisk.find((r: any) => r.plate === selectedSpot.plate);
+                    return risk ? (
+                      <div className="mt-3 pt-3 border-t border-[var(--outline-variant)]/30">
+                        <DetailRow label="Detention risk" value={risk.reason} />
+                        <DetailRow label="Time to threshold" value={`${risk.minutesUntilThreshold}m`} />
+                      </div>
+                    ) : null;
+                  })()}
+                  <div className="pt-4">
+                    <Link to="/tracking" onClick={() => setSelectedSpot(null)} className="block text-center bg-[var(--primary)] text-[var(--primary-foreground)] rounded-sm py-2.5 text-xs font-bold hover:bg-[var(--primary-container)] transition-all">
+                      Open in Live Tracking
+                    </Link>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-[var(--on-surface-variant)]">This spot is currently empty.</p>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value?: string | number | null }) {
+  if (value === undefined || value === null || value === "") return null;
+  return (
+    <div className="flex items-center justify-between py-1.5 border-b border-[var(--outline-variant)]/10 last:border-0">
+      <span className="text-[var(--on-surface-variant)]">{label}</span>
+      <span className="font-semibold text-[var(--on-surface)] text-right">{value}</span>
     </div>
   );
 }
@@ -723,15 +768,6 @@ function AlertItem({ severity, msg, time, actionLabel }: any) {
       {actionLabel && (
         <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-white bg-black group-hover:bg-indigo-700 border border-transparent rounded-sm px-2 py-1 transition-colors">{actionLabel}</span>
       )}
-    </div>
-  );
-}
-
-function Legend({ label, color }: { label: string; color: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      <div className={`w-2.5 h-2.5 rounded-full ${color}`} />
-      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{label}</span>
     </div>
   );
 }
