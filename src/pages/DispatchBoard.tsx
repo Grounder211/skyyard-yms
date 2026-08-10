@@ -311,7 +311,9 @@ export default function DispatchBoard() {
                   <select value={assignTo} onChange={(e) => setAssignTo(e.target.value ? Number(e.target.value) : "")} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
                     <option value="">Leave unassigned — claimable by any hostler</option>
                     {hostlers.map((h: any) => (
-                      <option key={h.id} value={h.id}>{h.name}</option>
+                      <option key={h.id} value={h.id}>
+                        {h.name}{h.recommended ? " — Recommended" : ""}{h.reason ? ` (${h.reason})` : ""}
+                      </option>
                     ))}
                   </select>
                 </div>

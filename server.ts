@@ -34,6 +34,7 @@ import { classifyAppointmentHealth } from "./server/services/appointmentHealth.j
 import { findDockConflict } from "./server/services/dockConflict.js";
 import { deriveTrailerStatus } from "./server/services/trailerStatus.js";
 import { forecastOccupancy } from "./server/services/capacityForecast.js";
+import { rankHostlersByWorkload } from "./server/services/hostlerRecommendation.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1343,9 +1344,19 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // Priority 46: Hostler Intelligence — was a bare alphabetical name list;
+  // now ranked by real on-shift status + active-move workload so the
+  // dispatch "Assign to" dropdown surfaces who's actually available first.
+  // Admin still picks by hand — nothing here auto-assigns.
   app.get("/api/admin/hostlers", requireRole("superadmin", "ADMIN", "HOSTLER"), async (req: any, res) => {
-    const { data } = await db.from("users").select("id, name").eq("facility_id", req.facilityId).eq("role", "HOSTLER").order("name", { ascending: true });
-    res.json(data || []);
+    const [{ data: hostlers }, { data: onShiftRows }, { data: activeMoves }] = await Promise.all([
+      db.from("users").select("id, name").eq("facility_id", req.facilityId).eq("role", "HOSTLER").order("name", { ascending: true }),
+      db.from("shifts").select("user_id").eq("facility_id", req.facilityId).is("ended_at", null),
+      db.from("move_orders").select("assigned_to").eq("facility_id", req.facilityId).eq("status", "IN_PROGRESS"),
+    ]);
+    const onShiftIds = new Set((onShiftRows || []).map((r: any) => r.user_id));
+    const candidates = (hostlers || []).map((h: any) => ({ id: h.id, name: h.name, onShift: onShiftIds.has(h.id) }));
+    res.json(rankHostlersByWorkload(candidates, activeMoves || []));
   });
 
   app.get("/api/admin/walkin/pending", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
