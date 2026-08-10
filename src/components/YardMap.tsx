@@ -135,6 +135,7 @@ export default function YardMap({ spots, facility, unresolvedSafetySpotIds, spot
   const [style, setStyle] = useState<"streets" | "satellite">("streets");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  const [tilesSlow, setTilesSlow] = useState(false);
 
   useEffect(() => {
     if (!MAPBOX_TOKEN || !containerRef.current) return;
@@ -154,6 +155,18 @@ export default function YardMap({ spots, facility, unresolvedSafetySpotIds, spot
     map.addControl(new mapboxgl.NavigationControl({ showCompass: true }), "top-right");
     map.on("error", (e: any) => setLoadError(e?.error?.message || "Map error"));
     map.on("load", () => setReady(true));
+    // mapbox-gl doesn't reliably surface individual failed tile fetches
+    // as a map-level 'error' (they're treated as retryable, not fatal) —
+    // a flaky network can leave the map visibly blank with no feedback at
+    // all. 'idle' fires once every tile the current view needs has
+    // resolved one way or another; if it hasn't within 8s of load, tiles
+    // are genuinely struggling and the user deserves to know why the map
+    // looks empty instead of it just looking frozen.
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    map.on("load", () => {
+      idleTimer = setTimeout(() => setTilesSlow(true), 8000);
+      map.once("idle", () => { if (idleTimer) clearTimeout(idleTimer); setTilesSlow(false); });
+    });
     mapRef.current = map;
 
     return () => {
@@ -294,6 +307,17 @@ export default function YardMap({ spots, facility, unresolvedSafetySpotIds, spot
       {!facility.configured && (
         <div className="absolute bottom-3 left-3 z-10 bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold px-2.5 py-1.5 rounded-lg shadow-sm max-w-[70%]">
           Approximate location — set real facility coordinates in Settings
+        </div>
+      )}
+      {!ready && !loadError && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-slate-50 text-slate-400 pointer-events-none">
+          <div className="w-6 h-6 border-2 border-indigo-600/20 border-t-indigo-600 rounded-full animate-spin" />
+          <span className="text-xs font-bold uppercase tracking-widest">Loading map…</span>
+        </div>
+      )}
+      {ready && tilesSlow && !loadError && (
+        <div className="absolute bottom-3 right-3 z-10 bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold px-2.5 py-1.5 rounded-lg shadow-sm">
+          Map tiles are slow to load — check your network
         </div>
       )}
       {loadError && (

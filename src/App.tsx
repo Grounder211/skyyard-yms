@@ -392,31 +392,31 @@ function Dashboard() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <Reveal preset="fade-up" delay={100}>
-          <StatItem icon={<Truck />} label="In-Yard" value={stats.totalTrailers ?? stats.active_trailers ?? 0} sub="Currently on site" color="indigo" />
+          <StatItem icon={<Truck />} label="In-Yard" value={stats.totalTrailers ?? stats.active_trailers ?? 0} sub="Currently on site" color="indigo" to="/tracking" />
         </Reveal>
         <Reveal preset="fade-up" delay={150}>
-          <StatItem icon={<DoorOpen />} label="Available Docks" value={spots.filter((s:any) => s.type === 'DOCK' && s.status === 'EMPTY').length} sub="Ready for arrivals" color="teal" />
+          <StatItem icon={<DoorOpen />} label="Available Docks" value={spots.filter((s:any) => s.type === 'DOCK' && s.status === 'EMPTY').length} sub="Ready for arrivals" color="teal" to="/dispatch" />
         </Reveal>
         <Reveal preset="fade-up" delay={200}>
-          <StatItem icon={<Clock />} label="Avg. Dwell" value={avgDwellMinutes ?? "—"} suffix={avgDwellMinutes != null ? "m" : ""} sub={avgDwellMinutes != null ? "Today's departures" : "No departures yet today"} color="amber" />
+          <StatItem icon={<Clock />} label="Avg. Dwell" value={avgDwellMinutes ?? "—"} suffix={avgDwellMinutes != null ? "m" : ""} sub={avgDwellMinutes != null ? "Today's departures" : "No departures yet today"} color="amber" to="/tracking" />
         </Reveal>
         <Reveal preset="fade-up" delay={250}>
-          <StatItem icon={<Activity />} label="Daily Velocity" value={dailyVelocity} sub="Departed today" color="indigo" />
+          <StatItem icon={<Activity />} label="Daily Velocity" value={dailyVelocity} sub="Departed today" color="indigo" to="/analytics" />
         </Reveal>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <Reveal preset="fade-up" delay={275}>
-          <StatItem icon={<Calendar />} label="Expected Arrivals Today" value={today.expectedArrivals} sub="Scheduled, not yet checked in" color="indigo" />
+          <StatItem icon={<Calendar />} label="Expected Arrivals Today" value={today.expectedArrivals} sub="Scheduled, not yet checked in" color="indigo" to="/calendar" />
         </Reveal>
         <Reveal preset="fade-up" delay={300}>
-          <StatItem icon={<AlertTriangle />} label="No-Shows Today" value={today.noShows} sub="Missed their grace period" color="amber" />
+          <StatItem icon={<AlertTriangle />} label="No-Shows Today" value={today.noShows} sub="Missed their grace period" color="amber" to="/calendar" />
         </Reveal>
         <Reveal preset="fade-up" delay={325}>
-          <StatItem icon={<ArrowRightLeft />} label="Active Moves" value={today.activeMoves} sub="In the dispatch queue" color="indigo" />
+          <StatItem icon={<ArrowRightLeft />} label="Active Moves" value={today.activeMoves} sub="In the dispatch queue" color="indigo" to="/dispatch" />
         </Reveal>
         <Reveal preset="fade-up" delay={350}>
-          <StatItem icon={<Users />} label="Hostlers Available" value={today.hostlersAvailable} sub={`${today.hostlersBusy} busy right now`} color="teal" />
+          <StatItem icon={<Users />} label="Hostlers Available" value={today.hostlersAvailable} sub={`${today.hostlersBusy} busy right now`} color="teal" to="/dispatch" />
         </Reveal>
       </div>
 
@@ -424,19 +424,19 @@ function Dashboard() {
         <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3">Live Yard Status — Next 60 Minutes</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
           <Reveal preset="fade-up" delay={375}>
-            <StatItem icon={<DoorOpen />} label="Gate Queue" value={today.gateQueue} sub="Waiting for approval" color={today.gateQueue > 0 ? "amber" : "teal"} />
+            <StatItem icon={<DoorOpen />} label="Gate Queue" value={today.gateQueue} sub="Waiting for approval" color={today.gateQueue > 0 ? "amber" : "teal"} to="/gate" />
           </Reveal>
           <Reveal preset="fade-up" delay={400}>
-            <StatItem icon={<Percent />} label="Dock Utilization" value={spots.filter((s: any) => s.type === "DOCK").length ? Math.round((spots.filter((s: any) => s.type === "DOCK" && s.status === "OCCUPIED").length / spots.filter((s: any) => s.type === "DOCK").length) * 100) : 0} suffix="%" sub="Docks occupied" color="indigo" />
+            <StatItem icon={<Percent />} label="Dock Utilization" value={spots.filter((s: any) => s.type === "DOCK").length ? Math.round((spots.filter((s: any) => s.type === "DOCK" && s.status === "OCCUPIED").length / spots.filter((s: any) => s.type === "DOCK").length) * 100) : 0} suffix="%" sub="Docks occupied" color="indigo" to="/dispatch" />
           </Reveal>
           <Reveal preset="fade-up" delay={425}>
-            <StatItem icon={<Calendar />} label="Arrivals Next 60m" value={today.arrivalsNext60m} sub="Scheduled to arrive soon" color="indigo" />
+            <StatItem icon={<Calendar />} label="Arrivals Next 60m" value={today.arrivalsNext60m} sub="Scheduled to arrive soon" color="indigo" to="/calendar" />
           </Reveal>
           <Reveal preset="fade-up" delay={450}>
-            <StatItem icon={<LogOut />} label="Departures Imminent" value={today.departuresImminent} sub="Out-pass issued, not yet exited" color="teal" />
+            <StatItem icon={<LogOut />} label="Departures Imminent" value={today.departuresImminent} sub="Out-pass issued, not yet exited" color="teal" to="/gate" />
           </Reveal>
           <Reveal preset="fade-up" delay={475}>
-            <StatItem icon={<ShieldAlert />} label="Critical Exceptions" value={today.criticalExceptions} sub="Unresolved right now" color={today.criticalExceptions > 0 ? "amber" : "teal"} />
+            <StatItem icon={<ShieldAlert />} label="Critical Exceptions" value={today.criticalExceptions} sub="Unresolved right now" color={today.criticalExceptions > 0 ? "amber" : "teal"} to="/exceptions" />
           </Reveal>
         </div>
       </div>
@@ -661,19 +661,24 @@ function Dashboard() {
   );
 }
 
-function StatItem({ icon, label, value, suffix = "", sub, color }: any) {
+function StatItem({ icon, label, value, suffix = "", sub, color, to }: any) {
   const tilt = use3DTilt(5);
   const colors: any = {
     indigo: 'bg-indigo-50 text-indigo-600',
     teal: 'bg-teal-50 text-teal-600',
     amber: 'bg-amber-50 text-amber-600'
   };
+  // Command Center spec: "each KPI must be clickable" — drills into the
+  // page that actually explains the number, instead of a dead-end card.
+  const Wrapper: any = to ? Link : "div";
+  const wrapperProps = to ? { to } : {};
   return (
-    <div
+    <Wrapper
+      {...wrapperProps}
       ref={tilt.ref}
       onMouseMove={tilt.onMouseMove}
       onMouseLeave={tilt.onMouseLeave}
-      className="bg-white border border-slate-200 p-8 rounded-[2rem] shadow-sm hover:shadow-xl transition-all duration-300 flex flex-col gap-4 group"
+      className={`bg-white border border-slate-200 p-8 rounded-[2rem] shadow-sm hover:shadow-xl transition-all duration-300 flex flex-col gap-4 group ${to ? "cursor-pointer" : ""}`}
       style={{ transformStyle: "preserve-3d" }}
     >
       <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${colors[color]} group-hover:scale-110 transition-transform`} style={{ transform: "translateZ(20px)" }}>
@@ -686,7 +691,7 @@ function StatItem({ icon, label, value, suffix = "", sub, color }: any) {
         <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mt-2">{label}</p>
       </div>
       <p className="text-[11px] font-semibold text-slate-400 mt-2">{sub}</p>
-    </div>
+    </Wrapper>
   );
 }
 
