@@ -339,6 +339,7 @@ function Dashboard() {
   const [forecast, setForecast] = React.useState<{ threshold: number; windows: { minutes: number; expectedOccupied: number; totalSpots: number; pct: number; atRisk: boolean }[] } | null>(null);
   const [unmanagedTrailers, setUnmanagedTrailers] = React.useState<{ spotId: number; spotName: string; plate: string; dwellHours: number }[]>([]);
   const [arrivalsAtRisk, setArrivalsAtRisk] = React.useState<any[]>([]);
+  const [detentionRisk, setDetentionRisk] = React.useState<any[]>([]);
 
   React.useEffect(() => {
     fetch("/api/yard-status")
@@ -359,6 +360,7 @@ function Dashboard() {
     fetch("/api/admin/arrivals-eta").then(r => r.ok ? r.json() : null)
       .then(d => setArrivalsAtRisk((d?.arrivals || []).filter((a: any) => a.risk === "AT_RISK" || a.risk === "LATE")))
       .catch(() => {});
+    fetch("/api/admin/detention-risk").then(r => r.ok ? r.json() : []).then(setDetentionRisk).catch(() => {});
     const loadAttention = () => fetch("/api/admin/needs-attention").then(r => r.ok ? r.json() : { critical: [], timeCritical: [], operations: [], upcoming: [] }).then(setAttention).catch(() => {});
     loadAttention();
     const t = setInterval(loadAttention, 60000);
@@ -462,6 +464,26 @@ function Dashboard() {
                   <p className="text-xs text-slate-500 mt-0.5">{a.reason}</p>
                 </div>
                 <span className={`shrink-0 text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-lg ${a.risk === "LATE" ? "bg-red-600 text-white" : "bg-amber-500 text-white"}`}>{a.risk}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {detentionRisk.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-[2rem] p-6 shadow-spatial">
+          <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
+            <AlertTriangle size={14} className="text-amber-500" /> Detention Risk — real cost projection, not yet accruing
+          </p>
+          <div className="space-y-2">
+            {detentionRisk.map((r) => (
+              <div key={r.plate} className="flex items-center justify-between gap-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+                <div className="text-sm">
+                  <span className="font-bold text-slate-900">{r.plate}</span>
+                  <span className="text-slate-500"> · {r.dwellMinutes} min dwell so far</span>
+                  <p className="text-xs text-slate-500 mt-0.5">{r.reason}</p>
+                </div>
+                <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-lg bg-amber-500 text-white">{r.minutesUntilThreshold}m to threshold</span>
               </div>
             ))}
           </div>

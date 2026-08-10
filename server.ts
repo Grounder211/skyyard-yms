@@ -37,6 +37,7 @@ import { forecastOccupancy } from "./server/services/capacityForecast.js";
 import { rankHostlersByWorkload } from "./server/services/hostlerRecommendation.js";
 import { recommendParkingMoves } from "./server/services/smartParking.js";
 import { predictArrival } from "./server/services/arrivalPrediction.js";
+import { assessDetentionRisk } from "./server/services/detentionRisk.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3808,6 +3809,35 @@ async function startServer() {
       const paid = rows.filter((r: any) => r.invoice_status === "paid").length;
       const totalOutstanding = rows.filter((r: any) => r.invoice_status !== "paid" && r.dispute_status !== "waived").reduce((s: number, r: any) => s + Number(r.amount_owed || 0), 0);
       res.json({ accruing, disputed, invoiced, paid, totalOutstanding: Math.round(totalOutstanding * 100) / 100 });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Priority 14: Operational Cost Connection — trailers still IN_YARD,
+  // not yet in an ACTIVE detention_records row, approaching the real
+  // facility detention threshold within the warning window. Excludes
+  // anything already accruing (that's /api/admin/detention/summary's
+  // job) so a trailer is never double-counted across both views.
+  app.get("/api/admin/detention-risk", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
+    const facilityId = req.facilityId;
+    try {
+      const [{ data: trailers }, { data: fSettings }, { data: activeDetentions }] = await Promise.all([
+        db.from("trailers").select("id, plate, checked_in_at").eq("facility_id", facilityId).eq("status", "IN_YARD").not("checked_in_at", "is", null),
+        db.from("facility_settings").select("detention_threshold_hours, detention_rate_per_hour").eq("facility_id", facilityId).maybeSingle(),
+        db.from("detention_records").select("trailer_id, status").eq("facility_id", facilityId).eq("status", "ACTIVE"),
+      ]);
+      const rules = { thresholdMinutes: (fSettings?.detention_threshold_hours || 24) * 60, ratePerHour: fSettings?.detention_rate_per_hour || 50 };
+      const alreadyAccruingTrailerIds = new Set((activeDetentions || []).map((d: any) => d.trailer_id));
+      const nowIso = new Date().toISOString();
+
+      const atRisk = (trailers || [])
+        .filter((t: any) => !alreadyAccruingTrailerIds.has(t.id))
+        .map((t: any) => assessDetentionRisk({ plate: t.plate, checkedInAtIso: t.checked_in_at }, rules, nowIso))
+        .filter((r) => r.atRisk)
+        .sort((a, b) => a.minutesUntilThreshold - b.minutesUntilThreshold);
+
+      res.json(atRisk);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
