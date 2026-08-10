@@ -176,6 +176,7 @@ async function startServer() {
       .sort((a: any, b: any) => (priorityWeight[b.priority] ?? 1) - (priorityWeight[a.priority] ?? 1) || new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
     const { data: fSettings } = await db.from("facility_settings").select("detention_threshold_hours").eq("facility_id", facilityId).maybeSingle();
+    const { data: facilityRow } = await db.from("facilities").select("name, latitude, longitude").eq("id", facilityId).maybeSingle();
 
     // Dashboard's "Avg. Dwell" and "Daily Velocity" were literal hardcoded
     // constants (42 and 128) — never computed from anything, displayed as
@@ -248,7 +249,21 @@ async function startServer() {
     // fetched above, no new query.
     const unmanagedTrailers = findUnmanagedTrailers(flatSpots, moves, (openTrailerExceptions || []).map((e: any) => e.entity_id), new Date().toISOString());
 
-    return { stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24, avgDwellMinutes, dailyVelocity, today, zones, unresolvedSafetySpotIds, equipmentDown, equipmentTotal: (equipmentRows || []).length, spotsWithOpenExceptions, unmanagedTrailers };
+    // Priority 1 (map): the yard map needs a real center point even before
+    // a facility's true coordinates are configured. Falls back to the same
+    // Stockholm-Bromma anchor smhiWeather.ts already uses for the same
+    // reason — never invents a different guess per feature. `configured`
+    // tells the frontend which case it's in so it can say so, not hide it.
+    const facilityCoords = facilityRow?.latitude != null && facilityRow?.longitude != null
+      ? { latitude: facilityRow.latitude, longitude: facilityRow.longitude, configured: true }
+      : { latitude: 59.3556, longitude: 17.9422, configured: false };
+
+    return {
+      stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24,
+      avgDwellMinutes, dailyVelocity, today, zones, unresolvedSafetySpotIds, equipmentDown,
+      equipmentTotal: (equipmentRows || []).length, spotsWithOpenExceptions, unmanagedTrailers,
+      facility: { name: facilityRow?.name || "Facility", ...facilityCoords },
+    };
   };
 
   const emitUpdate = async (event = "yard_update", payload: any = null) => {

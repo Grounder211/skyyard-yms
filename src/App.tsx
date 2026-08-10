@@ -27,6 +27,7 @@ import {
   AlertTriangle,
   Users,
   Percent,
+  MapPin,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { Routes, Route, Link, useLocation } from "react-router-dom";
@@ -42,6 +43,9 @@ import Login from "./pages/Login";
 import { canAccess, ROLE_LABELS } from "./lib/permissions";
 
 import AppointmentCalendar from "./components/AppointmentCalendar";
+// mapbox-gl is large — lazy-loaded so it only ships to users who load a
+// page with a map, not folded into the main entry chunk every page pays for.
+const YardMap = React.lazy(() => import("./components/YardMap"));
 const ExecutiveDashboard = React.lazy(() => import("./pages/ExecutiveDashboard"));
 const TVDisplay = React.lazy(() => import("./pages/TVDisplay"));
 const DockRules = React.lazy(() => import("./pages/DockRules"));
@@ -340,6 +344,7 @@ function Dashboard() {
   const [unmanagedTrailers, setUnmanagedTrailers] = React.useState<{ spotId: number; spotName: string; plate: string; dwellHours: number }[]>([]);
   const [arrivalsAtRisk, setArrivalsAtRisk] = React.useState<any[]>([]);
   const [detentionRisk, setDetentionRisk] = React.useState<any[]>([]);
+  const [facility, setFacility] = React.useState<any>(null);
 
   React.useEffect(() => {
     fetch("/api/yard-status")
@@ -355,6 +360,7 @@ function Dashboard() {
         setSpotsWithOpenExceptions(data.spotsWithOpenExceptions || []);
         setEquipment({ down: data.equipmentDown || 0, total: data.equipmentTotal || 0 });
         setUnmanagedTrailers(data.unmanagedTrailers || []);
+        setFacility(data.facility || null);
       });
     fetch("/api/admin/capacity-forecast").then(r => r.ok ? r.json() : null).then(setForecast).catch(() => {});
     fetch("/api/admin/arrivals-eta").then(r => r.ok ? r.json() : null)
@@ -434,6 +440,23 @@ function Dashboard() {
           </Reveal>
         </div>
       </div>
+
+      {facility && (
+        <div className="bg-white border border-slate-200 rounded-[2rem] p-6 shadow-spatial">
+          <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
+            <MapPin size={14} className="text-indigo-500" /> Facility Map
+          </p>
+          <Suspense fallback={<div className="rounded-2xl bg-slate-50 animate-pulse" style={{ height: "440px" }} />}>
+            <YardMap
+              spots={spots}
+              facility={facility}
+              unresolvedSafetySpotIds={unresolvedSafetySpotIds}
+              spotsWithOpenExceptions={spotsWithOpenExceptions}
+              height="440px"
+            />
+          </Suspense>
+        </div>
+      )}
 
       {unmanagedTrailers.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-[2rem] p-6">

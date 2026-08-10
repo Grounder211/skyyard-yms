@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Radar, Truck, Clock, AlertTriangle, Activity, DoorOpen, LogIn, LogOut, ArrowRightLeft, X, History, Search, Thermometer, Fuel, Loader2, Building2, ShieldAlert, Weight, Camera } from "lucide-react";
+import { Radar, Truck, Clock, AlertTriangle, Activity, DoorOpen, LogIn, LogOut, ArrowRightLeft, X, History, Search, Thermometer, Fuel, Loader2, Building2, ShieldAlert, Weight, Camera, Map as MapIcon, LayoutGrid } from "lucide-react";
 import { io } from "socket.io-client";
 import { motion, AnimatePresence } from "motion/react";
 import { useToast } from "../contexts/ToastContext";
 import { useAuth } from "../contexts/AuthContext";
+import YardMap from "../components/YardMap";
 
 function elapsed(since: string) {
   const ms = Date.now() - new Date(since).getTime();
@@ -36,6 +37,7 @@ export default function LiveTracking() {
   const [query, setQuery] = useState("");
   const [dragOverSpotId, setDragOverSpotId] = useState<number | null>(null);
   const [moving, setMoving] = useState(false);
+  const [viewMode, setViewMode] = useState<"grid" | "map">("map");
 
   // Tracks which spot each plate last occupied, so a move between fetches
   // can be detected and animated (shared layoutId "flies" the trailer card
@@ -311,13 +313,46 @@ export default function LiveTracking() {
         <div className="lg:col-span-2 bg-white border border-slate-200 rounded-[2rem] p-8 shadow-spatial">
           <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
             <h3 className="font-bold text-slate-900 text-lg">Yard digital twin</h3>
-            <div className="flex gap-4">
-              <Legend color="bg-slate-200" label="Empty" />
-              <Legend color="bg-teal-500" label="On time" />
-              <Legend color="bg-amber-500" label="Approaching limit" />
-              <Legend color="bg-red-500" label="Detention" />
+            <div className="flex items-center gap-4">
+              {viewMode === "grid" ? (
+                <div className="flex gap-4">
+                  <Legend color="bg-slate-200" label="Empty" />
+                  <Legend color="bg-teal-500" label="On time" />
+                  <Legend color="bg-amber-500" label="Approaching limit" />
+                  <Legend color="bg-red-500" label="Detention" />
+                </div>
+              ) : (
+                <div className="flex gap-4">
+                  <Legend color="bg-slate-400" label="Available" />
+                  <Legend color="bg-indigo-600" label="Occupied" />
+                  <Legend color="bg-amber-500" label="Delayed" />
+                  <Legend color="bg-red-600" label="Alert" />
+                </div>
+              )}
+              <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
+                <button type="button" onClick={() => setViewMode("map")} title="Map view" className={`p-1.5 rounded-md transition-colors ${viewMode === "map" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-400 hover:text-slate-600"}`}>
+                  <MapIcon size={14} />
+                </button>
+                <button type="button" onClick={() => setViewMode("grid")} title="Grid view" className={`p-1.5 rounded-md transition-colors ${viewMode === "grid" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-400 hover:text-slate-600"}`}>
+                  <LayoutGrid size={14} />
+                </button>
+              </div>
             </div>
           </div>
+
+          {viewMode === "map" && yard.facility && (
+            <YardMap
+              spots={yard.spots || []}
+              facility={yard.facility}
+              unresolvedSafetySpotIds={yard.unresolvedSafetySpotIds}
+              spotsWithOpenExceptions={yard.spotsWithOpenExceptions}
+              onSelectSpot={(spot: any) => spot.plate && setSelected(spot)}
+              height="560px"
+            />
+          )}
+
+          {viewMode === "grid" && (
+          <>
           <div className="relative mb-6">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
@@ -392,6 +427,8 @@ export default function LiveTracking() {
               );
             })}
           </div>
+          </>
+          )}
         </div>
 
         <div className="bg-white border border-slate-200 rounded-[2rem] p-8 shadow-spatial">

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "skyyard-dev",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "PORT=4090 npm run dev"],
+      "port": 4090
+    }
+  ]
+}
