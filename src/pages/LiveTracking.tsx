@@ -296,8 +296,8 @@ export default function LiveTracking() {
   return (
     <div className="space-y-8 max-w-7xl mx-auto pb-20">
       <div>
-        <h1 className="text-3xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-          <Radar className="text-indigo-600" size={26} /> Live Tracking
+        <h1 className="text-3xl font-bold text-white tracking-tight flex items-center gap-2" style={{ fontFamily: "var(--font-heading)" }}>
+          <Radar className="text-indigo-400" size={26} /> Live Tracking
         </h1>
         <p className="text-slate-500 font-medium">Digital twin of the yard — live positions, time-on-site, and gate activity as it happens.</p>
       </div>
@@ -310,30 +310,30 @@ export default function LiveTracking() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 bg-white border border-slate-200 rounded-[2rem] p-8 shadow-spatial">
+        <div className="lg:col-span-2 bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-8">
           <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
-            <h3 className="font-bold text-slate-900 text-lg">Yard digital twin</h3>
+            <h3 className="font-bold text-white text-lg" style={{ fontFamily: "var(--font-heading)" }}>Yard digital twin</h3>
             <div className="flex items-center gap-4">
               {viewMode === "grid" ? (
                 <div className="flex gap-4">
-                  <Legend color="bg-slate-200" label="Empty" />
+                  <Legend color="bg-slate-600" label="Empty" />
                   <Legend color="bg-teal-500" label="On time" />
                   <Legend color="bg-amber-500" label="Approaching limit" />
                   <Legend color="bg-red-500" label="Detention" />
                 </div>
               ) : (
                 <div className="flex gap-4">
-                  <Legend color="bg-slate-400" label="Available" />
-                  <Legend color="bg-indigo-600" label="Occupied" />
+                  <Legend color="bg-slate-500" label="Available" />
+                  <Legend color="bg-indigo-500" label="Occupied" />
                   <Legend color="bg-amber-500" label="Delayed" />
-                  <Legend color="bg-red-600" label="Alert" />
+                  <Legend color="bg-red-500" label="Alert" />
                 </div>
               )}
-              <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
-                <button type="button" onClick={() => setViewMode("map")} title="Map view" className={`p-1.5 rounded-md transition-colors ${viewMode === "map" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-400 hover:text-slate-600"}`}>
+              <div className="flex gap-1 bg-slate-800/70 rounded-lg p-1">
+                <button type="button" onClick={() => setViewMode("map")} title="Map view" className={`p-1.5 rounded-md transition-colors ${viewMode === "map" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"}`}>
                   <MapIcon size={14} />
                 </button>
-                <button type="button" onClick={() => setViewMode("grid")} title="Grid view" className={`p-1.5 rounded-md transition-colors ${viewMode === "grid" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-400 hover:text-slate-600"}`}>
+                <button type="button" onClick={() => setViewMode("grid")} title="Grid view" className={`p-1.5 rounded-md transition-colors ${viewMode === "grid" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"}`}>
                   <LayoutGrid size={14} />
                 </button>
               </div>
@@ -359,17 +359,17 @@ export default function LiveTracking() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search by plate, carrier, or PO — drag an occupied spot onto an empty one to request a move"
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              className="w-full bg-slate-800/70 border border-slate-700 text-slate-200 placeholder:text-slate-500 rounded-xl py-2.5 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
             />
           </div>
           <div className="flex flex-wrap gap-3">
             {(yard.spots || []).map((spot: any) => {
               const status = spot.plate ? statusOf(spot) : "empty";
               const bg =
-                status === "breach" ? "bg-red-50 border-red-300 text-red-700" :
-                status === "warning" ? "bg-amber-50 border-amber-300 text-amber-700" :
-                status === "normal" ? "bg-teal-50 border-teal-300 text-teal-700" :
-                "bg-slate-50 border-slate-100 text-slate-400";
+                status === "breach" ? "bg-red-500/10 border-red-500/40 text-red-300" :
+                status === "warning" ? "bg-amber-500/10 border-amber-500/40 text-amber-300" :
+                status === "normal" ? "bg-teal-500/10 border-teal-500/40 text-teal-300" :
+                "bg-slate-800/50 border-slate-700/50 text-slate-500";
               const movedAt = spot.plate ? justMoved[spot.plate] : undefined;
               const dimmed = query.trim() && !matchesQuery(spot);
               const isDropTarget = !spot.plate && dragOverSpotId === spot.id;
@@ -431,22 +431,22 @@ export default function LiveTracking() {
           )}
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-[2rem] p-8 shadow-spatial">
-          <h3 className="font-bold text-slate-900 text-lg mb-6 flex items-center gap-2">
-            <Activity size={18} className="text-indigo-600" /> Live activity feed
+        <div className="bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-8">
+          <h3 className="font-bold text-white text-lg mb-6 flex items-center gap-2" style={{ fontFamily: "var(--font-heading)" }}>
+            <Activity size={18} className="text-indigo-400" /> Live activity feed
           </h3>
           <div className="space-y-4 max-h-[480px] overflow-y-auto pr-1">
-            {logs.length === 0 && <p className="text-sm text-slate-400 py-8 text-center">No recent gate activity.</p>}
+            {logs.length === 0 && <p className="text-sm text-slate-500 py-8 text-center">No recent gate activity.</p>}
             {logs.map((l) => (
               <div key={l.id} className="flex items-start gap-3">
-                <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${l.event_type === "denied" ? "bg-red-100 text-red-600" : l.event_type === "exit" ? "bg-slate-100 text-slate-500" : "bg-teal-100 text-teal-600"}`}>
+                <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${l.event_type === "denied" ? "bg-red-500/15 text-red-300" : l.event_type === "exit" ? "bg-slate-800 text-slate-400" : "bg-teal-500/15 text-teal-300"}`}>
                   {EVENT_ICON[l.event_type] || <ArrowRightLeft size={12} />}
                 </div>
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-slate-800 truncate">
+                  <p className="text-sm font-semibold text-slate-200 truncate">
                     {l.truck_plate || "Trailer"} — {l.event_type}
                   </p>
-                  <p className="text-[11px] text-slate-400">{new Date(l.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} {l.guard_name ? `· ${l.guard_name}` : ""}</p>
+                  <p className="text-[11px] text-slate-500">{new Date(l.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} {l.guard_name ? `· ${l.guard_name}` : ""}</p>
                   {l.notes && <p className="text-[11px] text-slate-500 mt-0.5 truncate">{l.notes}</p>}
                 </div>
               </div>
@@ -455,12 +455,27 @@ export default function LiveTracking() {
         </div>
       </div>
 
-      {selected && (
-        <div className="fixed inset-0 z-[9998] bg-black/50 flex items-center justify-center p-6" onClick={() => setSelected(null)}>
-          <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <AnimatePresence>
+        {selected && (
+          <motion.div
+            className="fixed inset-0 z-[9998] bg-black/60 backdrop-blur-sm flex justify-end"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => setSelected(null)}
+          >
+            <motion.div
+              className="bg-slate-900 border-l border-slate-800 p-8 max-w-md w-full h-full shadow-2xl overflow-y-auto custom-scrollbar"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+              onClick={(e) => e.stopPropagation()}
+            >
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-bold text-lg text-slate-900">{selected.plate}</h3>
-              <button onClick={() => setSelected(null)} className="text-slate-400 hover:text-slate-900">
+              <h3 className="font-bold text-lg text-white" style={{ fontFamily: "var(--font-heading)" }}>{selected.plate}</h3>
+              <button onClick={() => setSelected(null)} className="text-slate-500 hover:text-white transition-colors">
                 <X size={18} />
               </button>
             </div>
@@ -482,7 +497,7 @@ export default function LiveTracking() {
                     });
                     if (res.ok) setSelected({ ...selected, cargo_status: status });
                   }}
-                  className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs font-semibold"
+                  className="bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2 py-1 text-xs font-semibold"
                 >
                   {["expected", "arrived", "checked", "loading", "loaded", "unloading", "unloaded", "short", "over", "damaged", "rejected", "completed"].map((s) => (
                     <option key={s} value={s}>{s}</option>
@@ -492,15 +507,15 @@ export default function LiveTracking() {
               <Row label="Time on site" value={elapsed(selected.checked_in_at || selected.check_in_time || new Date().toISOString())} mono />
             </div>
 
-            <div className="mt-6 pt-4 border-t border-slate-100">
+            <div className="mt-6 pt-4 border-t border-slate-800">
               <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">
                 <ShieldAlert size={13} /> Trailer inspection
               </h4>
-              {selected.hazmat_class && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mb-2 inline-block font-semibold">Hazmat class {selected.hazmat_class}</p>}
+              {selected.hazmat_class && <p className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-1.5 mb-2 inline-block font-semibold">Hazmat class {selected.hazmat_class}</p>}
               {Array.isArray(selected.damage_photos) && selected.damage_photos.length > 0 && (
                 <div className="space-y-1.5 mb-3">
                   {selected.damage_photos.map((d: any, i: number) => (
-                    <div key={i} className="text-xs bg-red-50 border border-red-100 text-red-700 rounded-lg px-2.5 py-1.5">
+                    <div key={i} className="text-xs bg-red-500/10 border border-red-500/30 text-red-300 rounded-lg px-2.5 py-1.5">
                       <p className="font-semibold flex items-center gap-1"><Camera size={11} /> {d.note}</p>
                       <p className="opacity-70 mt-0.5">{new Date(d.reported_at).toLocaleString()}</p>
                     </div>
@@ -511,17 +526,17 @@ export default function LiveTracking() {
                 <div className="grid grid-cols-2 gap-2">
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Hazmat class</label>
-                    <input value={inspectionForm.hazmat_class} onChange={(e) => setInspectionForm({ ...inspectionForm, hazmat_class: e.target.value })} placeholder="e.g. 3" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                    <input value={inspectionForm.hazmat_class} onChange={(e) => setInspectionForm({ ...inspectionForm, hazmat_class: e.target.value })} placeholder="e.g. 3" className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1"><Weight size={10} /> Tare weight (kg)</label>
-                    <input type="number" value={inspectionForm.tare_weight_kg} onChange={(e) => setInspectionForm({ ...inspectionForm, tare_weight_kg: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                    <input type="number" value={inspectionForm.tare_weight_kg} onChange={(e) => setInspectionForm({ ...inspectionForm, tare_weight_kg: e.target.value })} className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
                   </div>
                 </div>
                 <div className="flex items-end gap-2">
                   <div className="flex-1 space-y-1">
                     <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Report damage</label>
-                    <input value={inspectionForm.damage_note} onChange={(e) => setInspectionForm({ ...inspectionForm, damage_note: e.target.value })} placeholder="Describe any damage found" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                    <input value={inspectionForm.damage_note} onChange={(e) => setInspectionForm({ ...inspectionForm, damage_note: e.target.value })} placeholder="Describe any damage found" className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
                   </div>
                   <button type="submit" disabled={inspectionBusy} className="bg-slate-900 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-slate-800 disabled:opacity-50 flex items-center gap-1.5">
                     {inspectionBusy && <Loader2 size={12} className="animate-spin" />} Save
@@ -531,13 +546,13 @@ export default function LiveTracking() {
             </div>
 
             {selected.equipment_type === "reefer" && (
-              <div className="mt-6 pt-4 border-t border-slate-100">
+              <div className="mt-6 pt-4 border-t border-slate-800">
                 <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">
                   <Thermometer size={13} /> Reefer monitoring
                 </h4>
                 {selected.reefer_temp_setpoint != null && <p className="text-xs text-slate-500 mb-2">Setpoint: {selected.reefer_temp_setpoint}°C</p>}
                 {reeferReadings[0] ? (
-                  <div className={`rounded-xl px-3 py-2.5 mb-3 text-xs font-semibold border ${reeferReadings[0].status === "critical" ? "bg-red-50 border-red-200 text-red-700" : reeferReadings[0].status === "warning" ? "bg-amber-50 border-amber-200 text-amber-700" : "bg-teal-50 border-teal-200 text-teal-700"}`}>
+                  <div className={`rounded-xl px-3 py-2.5 mb-3 text-xs font-semibold border ${reeferReadings[0].status === "critical" ? "bg-red-500/10 border-red-500/30 text-red-300" : reeferReadings[0].status === "warning" ? "bg-amber-500/10 border-amber-500/30 text-amber-300" : "bg-teal-500/10 border-teal-500/30 text-teal-300"}`}>
                     <div className="flex items-center gap-3">
                       <span className="flex items-center gap-1"><Thermometer size={12} /> {reeferReadings[0].temperature_c}°C</span>
                       {reeferReadings[0].fuel_level_pct != null && <span className="flex items-center gap-1"><Fuel size={12} /> {reeferReadings[0].fuel_level_pct}%</span>}
@@ -551,11 +566,11 @@ export default function LiveTracking() {
                 <form onSubmit={submitReeferReading} className="flex items-end gap-2">
                   <div className="flex-1 space-y-1">
                     <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Temp °C</label>
-                    <input required type="number" step="0.1" value={reeferForm.temperature_c} onChange={(e) => setReeferForm({ ...reeferForm, temperature_c: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                    <input required type="number" step="0.1" value={reeferForm.temperature_c} onChange={(e) => setReeferForm({ ...reeferForm, temperature_c: e.target.value })} className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
                   </div>
                   <div className="flex-1 space-y-1">
                     <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Fuel %</label>
-                    <input type="number" min="0" max="100" value={reeferForm.fuel_level_pct} onChange={(e) => setReeferForm({ ...reeferForm, fuel_level_pct: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                    <input type="number" min="0" max="100" value={reeferForm.fuel_level_pct} onChange={(e) => setReeferForm({ ...reeferForm, fuel_level_pct: e.target.value })} className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
                   </div>
                   <button type="submit" disabled={reeferBusy} className="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-1.5">
                     {reeferBusy && <Loader2 size={12} className="animate-spin" />} Log
@@ -565,26 +580,26 @@ export default function LiveTracking() {
             )}
 
             {user?.role === "superadmin" && (
-              <div className="mt-6 pt-4 border-t border-slate-100">
+              <div className="mt-6 pt-4 border-t border-slate-800">
                 <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">
                   <Building2 size={13} /> Facility transfer
                 </h4>
                 {!transferOpen ? (
-                  <button type="button" onClick={() => setTransferOpen(true)} className="w-full text-xs font-bold bg-slate-100 text-slate-600 rounded-lg py-2 hover:bg-slate-200 transition-all">
+                  <button type="button" onClick={() => setTransferOpen(true)} className="w-full text-xs font-bold bg-slate-800 text-slate-300 rounded-lg py-2 hover:bg-slate-700 transition-all">
                     Transfer to another facility
                   </button>
                 ) : (
                   <form onSubmit={submitTransfer} className="space-y-2.5">
-                    <select required value={transferForm.destination_facility_id} onChange={(e) => setTransferForm({ ...transferForm, destination_facility_id: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs">
+                    <select required value={transferForm.destination_facility_id} onChange={(e) => setTransferForm({ ...transferForm, destination_facility_id: e.target.value })} className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs">
                       <option value="">Destination facility...</option>
                       {facilities.map((f: any) => (
                         <option key={f.id} value={f.id}>{f.name}</option>
                       ))}
                     </select>
-                    <input type="datetime-local" value={transferForm.eta} onChange={(e) => setTransferForm({ ...transferForm, eta: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" placeholder="ETA" />
-                    <input value={transferForm.notes} onChange={(e) => setTransferForm({ ...transferForm, notes: e.target.value })} placeholder="Notes (optional)" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                    <input type="datetime-local" value={transferForm.eta} onChange={(e) => setTransferForm({ ...transferForm, eta: e.target.value })} className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs" placeholder="ETA" />
+                    <input value={transferForm.notes} onChange={(e) => setTransferForm({ ...transferForm, notes: e.target.value })} placeholder="Notes (optional)" className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
                     <div className="flex gap-2">
-                      <button type="button" onClick={() => setTransferOpen(false)} className="flex-1 text-xs font-bold bg-slate-100 text-slate-500 rounded-lg py-1.5 hover:bg-slate-200">Cancel</button>
+                      <button type="button" onClick={() => setTransferOpen(false)} className="flex-1 text-xs font-bold bg-slate-800 text-slate-300 rounded-lg py-1.5 hover:bg-slate-700">Cancel</button>
                       <button type="submit" disabled={transferBusy} className="flex-1 bg-indigo-600 text-white text-xs font-bold rounded-lg py-1.5 hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-1.5">
                         {transferBusy && <Loader2 size={12} className="animate-spin" />} Initiate transfer
                       </button>
@@ -594,7 +609,7 @@ export default function LiveTracking() {
               </div>
             )}
 
-            <div className="mt-6 pt-4 border-t border-slate-100">
+            <div className="mt-6 pt-4 border-t border-slate-800">
               <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">
                 <History size={13} /> Movement timeline
               </h4>
@@ -607,33 +622,34 @@ export default function LiveTracking() {
                       {new Date(ev.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                     </span>
                     <div className="min-w-0">
-                      <p className="font-semibold text-slate-800">{ev.label}</p>
+                      <p className="font-semibold text-slate-200">{ev.label}</p>
                       {ev.detail && <p className="text-slate-400 truncate">{typeof ev.detail === "string" ? ev.detail : JSON.stringify(ev.detail)}</p>}
                     </div>
                   </div>
                 ))}
               </div>
             </div>
-          </div>
-        </div>
-      )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
 function KPI({ icon, label, value, color }: any) {
   const colors: any = {
-    indigo: "bg-indigo-50 text-indigo-600",
-    teal: "bg-teal-50 text-teal-600",
-    amber: "bg-amber-50 text-amber-600",
-    red: "bg-red-50 text-red-600",
+    indigo: "bg-indigo-500/10 text-indigo-300",
+    teal: "bg-teal-500/10 text-teal-300",
+    amber: "bg-amber-500/10 text-amber-300",
+    red: "bg-red-500/10 text-red-300",
   };
   return (
-    <div className="bg-white border border-slate-200 rounded-2xl p-5 flex items-center gap-3">
+    <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 flex items-center gap-3 hover:border-slate-700 hover:-translate-y-0.5 transition-all duration-200">
       <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${colors[color]}`}>{icon}</div>
       <div>
-        <p className="text-xl font-bold text-slate-900 leading-none">{value}</p>
-        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">{label}</p>
+        <p className="text-xl font-bold text-white leading-none" style={{ fontFamily: "var(--font-heading)" }}>{value}</p>
+        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mt-1">{label}</p>
       </div>
     </div>
   );
@@ -650,9 +666,9 @@ function Legend({ label, color }: { label: string; color: string }) {
 
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="flex justify-between items-center py-1.5 border-b border-slate-50">
-      <span className="text-slate-400 font-medium">{label}</span>
-      <span className={`font-bold text-slate-800 ${mono ? "font-mono" : ""}`}>{value}</span>
+    <div className="flex justify-between items-center py-1.5 border-b border-slate-800/60">
+      <span className="text-slate-500 font-medium">{label}</span>
+      <span className={`font-bold text-slate-200 ${mono ? "font-mono" : ""}`}>{value}</span>
     </div>
   );
 }

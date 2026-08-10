@@ -209,16 +209,16 @@ function AppLayout({ children, user }: any) {
   const navItems = allNavItems.filter((item) => canAccess(user.role, item.to));
 
   return (
-    <div className="flex h-screen bg-[var(--background)] overflow-hidden font-sans">
+    <div className="dark flex h-screen bg-slate-950 overflow-hidden font-sans">
       <CommandPalette />
       {/* Sidebar */}
       <aside className={`
         ${sidebarOpen ? 'w-64' : 'w-20'}
-        bg-white border-r border-slate-200 transition-all duration-300 flex flex-col z-50
+        bg-slate-900 border-r border-slate-800 transition-[width] duration-300 flex flex-col z-50
       `}>
-        <div className="h-16 flex items-center px-6 border-b border-slate-100">
-          <Warehouse className="text-indigo-600 w-8 h-8 shrink-0" />
-          {sidebarOpen && <span className="ml-3 font-bold text-xl tracking-tight text-slate-900">SkyYard</span>}
+        <div className="h-16 flex items-center px-6 border-b border-slate-800/80">
+          <Warehouse className="text-indigo-400 w-8 h-8 shrink-0" />
+          {sidebarOpen && <span className="ml-3 font-bold text-xl tracking-tight text-white" style={{ fontFamily: "var(--font-heading)" }}>SkyYard</span>}
         </div>
 
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
@@ -227,12 +227,15 @@ function AppLayout({ children, user }: any) {
               key={item.to}
               to={item.to}
               className={`
-                flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all
+                group relative flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-150
                 ${location.pathname === item.to
-                  ? 'bg-indigo-50 text-indigo-700 shadow-sm'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}
+                  ? 'bg-indigo-500/15 text-indigo-300'
+                  : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 hover:translate-x-0.5'}
               `}
             >
+              {location.pathname === item.to && (
+                <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-full bg-indigo-400" />
+              )}
               <span className="shrink-0">{item.icon}</span>
               {sidebarOpen && <span className="font-medium text-sm">{item.label}</span>}
             </Link>
@@ -240,7 +243,7 @@ function AppLayout({ children, user }: any) {
 
           {sidebarOpen && onlineUsers.length > 0 && (
             <div className="mt-10 px-3">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4">Online Now</p>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4">Online Now</p>
               <div className="space-y-3">
                 {onlineUsers.map(u => (
                   <div key={u.id} className="flex items-center gap-3">
@@ -251,10 +254,10 @@ function AppLayout({ children, user }: any) {
                       {u.initials}
                     </div>
                     <div className="flex-1 min-w-0">
-                       <p className="text-[11px] font-bold text-slate-700 truncate">{u.name}</p>
-                       <p className="text-[9px] font-medium text-slate-400 truncate tracking-tight uppercase">{u.page.split('/').pop() || 'HOME'}</p>
+                       <p className="text-[11px] font-bold text-slate-300 truncate">{u.name}</p>
+                       <p className="text-[9px] font-medium text-slate-500 truncate tracking-tight uppercase">{u.page.split('/').pop() || 'HOME'}</p>
                     </div>
-                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                   </div>
                 ))}
               </div>
@@ -262,14 +265,14 @@ function AppLayout({ children, user }: any) {
           )}
         </nav>
 
-        <div className="p-4 border-t border-slate-100 space-y-1">
+        <div className="p-4 border-t border-slate-800/80 space-y-1">
           {canAccess(user.role, "/settings") && (
-          <Link to="/settings" className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-600 hover:bg-slate-50 transition-all">
+          <Link to="/settings" className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 transition-all">
             <SettingsIcon size={20} />
             {sidebarOpen && <span className="font-medium text-sm">{t("nav.settings")}</span>}
           </Link>
           )}
-          <button onClick={logout} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-red-600 hover:bg-red-50 transition-all">
+          <button onClick={logout} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-red-400 hover:bg-red-500/10 transition-all">
             <LogOut size={20} />
             {sidebarOpen && <span className="font-medium text-sm">{t("nav.logout")}</span>}
           </button>
@@ -278,39 +281,46 @@ function AppLayout({ children, user }: any) {
 
       {/* Main Container */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 shadow-sm">
+        <header className="h-16 bg-slate-900/95 backdrop-blur border-b border-slate-800 flex items-center justify-between px-8">
           <div className="flex items-center gap-4">
-            <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-md xl:hidden">
+            <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-2 text-slate-500 hover:text-slate-200 hover:bg-slate-800 rounded-md xl:hidden">
               <Menu size={20} />
             </button>
             <div className="relative group hidden sm:block">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
               <input
                 placeholder="Search yard (Cmd+K)..."
                 readOnly
                 onClick={() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }))}
-                className="bg-slate-50 border border-slate-200 rounded-lg py-1.5 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all w-64 cursor-pointer"
+                className="bg-slate-800/70 border border-slate-700 text-slate-200 placeholder:text-slate-500 rounded-lg py-1.5 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition-all w-64 cursor-pointer"
               />
             </div>
           </div>
 
           <div className="flex items-center gap-4">
             <NotificationBell />
-            <div className="h-8 w-px bg-slate-200" />
+            <div className="h-8 w-px bg-slate-800" />
             <div className="flex items-center gap-3">
               <div className="text-right hidden md:block">
-                <p className="text-sm font-semibold text-slate-900 leading-tight">{user.name || user.email}</p>
+                <p className="text-sm font-semibold text-slate-100 leading-tight">{user.name || user.email}</p>
                 <p className="text-[11px] text-slate-500 font-medium">{user.role} · Terminal Active</p>
               </div>
-              <div className="w-9 h-9 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-sm">
+              <div className="w-9 h-9 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-300 font-bold text-sm ring-1 ring-indigo-500/30">
                 {(user.name || user.email)?.charAt(0)?.toUpperCase()}
               </div>
             </div>
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-8 bg-[var(--background)] custom-scrollbar">
-          {children}
+        <main className="flex-1 overflow-y-auto p-8 bg-slate-950 custom-scrollbar">
+          <motion.div
+            key={location.pathname}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+          >
+            {children}
+          </motion.div>
         </main>
       </div>
     </div>
@@ -380,12 +390,12 @@ function Dashboard() {
       <Reveal preset="fade-up" delay={0}>
         <div className="flex justify-between items-end">
           <div>
-            <h2 className="text-4xl font-bold text-slate-900 tracking-tight">Overview</h2>
+            <h2 className="text-4xl font-bold text-white tracking-tight" style={{ fontFamily: "var(--font-heading)" }}>Overview</h2>
             <p className="text-slate-500 font-medium mt-1">Terminal activities for the current cycle.</p>
           </div>
           <div className="flex gap-3">
-            <Link to="/gate" className="bg-white border border-slate-200 text-slate-600 px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-50 transition-all">Gate Console</Link>
-            <Link to="/gate" className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100">Add Entry</Link>
+            <Link to="/gate" className="bg-slate-900 border border-slate-800 text-slate-300 px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-800 hover:border-slate-700 transition-all">Gate Console</Link>
+            <Link to="/gate" className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-500 active:scale-[0.98] transition-all shadow-lg shadow-indigo-950/50">Add Entry</Link>
           </div>
         </div>
       </Reveal>
@@ -442,7 +452,7 @@ function Dashboard() {
       </div>
 
       {facility && (
-        <div className="bg-white border border-slate-200 rounded-[2rem] p-6 shadow-spatial">
+        <div className="bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-6 hover:border-slate-700 transition-colors">
           <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
             <MapPin size={14} className="text-indigo-500" /> Facility Map
           </p>
@@ -459,14 +469,14 @@ function Dashboard() {
       )}
 
       {unmanagedTrailers.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-[2rem] p-6">
-          <p className="text-xs font-bold uppercase tracking-widest text-amber-700 mb-3 flex items-center gap-2">
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-[1.75rem] p-6">
+          <p className="text-xs font-bold uppercase tracking-widest text-amber-400 mb-3 flex items-center gap-2">
             <AlertTriangle size={14} /> Unmanaged Trailers — sitting with no active move, not yet flagged
           </p>
           <div className="flex flex-wrap gap-3">
             {unmanagedTrailers.map((t) => (
-              <span key={t.spotId} className="text-sm font-bold px-3 py-2 rounded-xl bg-white border border-amber-200 text-amber-800">
-                {t.plate} <span className="text-amber-500 font-medium">· {t.spotName} · {t.dwellHours}h</span>
+              <span key={t.spotId} className="text-sm font-bold px-3 py-2 rounded-xl bg-slate-900/70 border border-amber-500/30 text-amber-300">
+                {t.plate} <span className="text-amber-500/80 font-medium">· {t.spotName} · {t.dwellHours}h</span>
               </span>
             ))}
           </div>
@@ -474,15 +484,15 @@ function Dashboard() {
       )}
 
       {arrivalsAtRisk.length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-[2rem] p-6 shadow-spatial">
+        <div className="bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-6 hover:border-slate-700 transition-colors">
           <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
             <AlertTriangle size={14} className="text-amber-500" /> Arrivals At Risk — real traffic-aware ETA vs. appointment
           </p>
           <div className="space-y-2">
             {arrivalsAtRisk.map((a) => (
-              <div key={a.id} className={`flex items-center justify-between gap-4 rounded-xl px-4 py-3 border ${a.risk === "LATE" ? "bg-red-50 border-red-200" : "bg-amber-50 border-amber-200"}`}>
+              <div key={a.id} className={`flex items-center justify-between gap-4 rounded-xl px-4 py-3 border ${a.risk === "LATE" ? "bg-red-500/10 border-red-500/30" : "bg-amber-500/10 border-amber-500/30"}`}>
                 <div className="text-sm">
-                  <span className="font-bold text-slate-900">{a.plate}</span>
+                  <span className="font-bold text-white">{a.plate}</span>
                   <span className="text-slate-500"> · {a.carrier} · appointment {new Date(a.startTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                   <p className="text-xs text-slate-500 mt-0.5">{a.reason}</p>
                 </div>
@@ -494,7 +504,7 @@ function Dashboard() {
       )}
 
       {detentionRisk.length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-[2rem] p-6 shadow-spatial">
+        <div className="bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-6 hover:border-slate-700 transition-colors">
           <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
             <AlertTriangle size={14} className="text-amber-500" /> Detention Risk — real cost projection, not yet accruing
           </p>
@@ -502,7 +512,7 @@ function Dashboard() {
             {detentionRisk.map((r) => (
               <div key={r.plate} className="flex items-center justify-between gap-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
                 <div className="text-sm">
-                  <span className="font-bold text-slate-900">{r.plate}</span>
+                  <span className="font-bold text-white">{r.plate}</span>
                   <span className="text-slate-500"> · {r.dwellMinutes} min dwell so far</span>
                   <p className="text-xs text-slate-500 mt-0.5">{r.reason}</p>
                 </div>
@@ -514,18 +524,18 @@ function Dashboard() {
       )}
 
       {forecast && forecast.windows.length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-[2rem] p-6">
+        <div className="bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-6">
           <div className="flex items-baseline justify-between mb-4">
             <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Capacity Forecast</p>
             <p className="text-[11px] font-semibold text-slate-400">Risk threshold {forecast.threshold}% · from real scheduled arrivals/departures</p>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             {forecast.windows.map((w) => (
-              <div key={w.minutes} className={`rounded-2xl border p-4 ${w.atRisk ? "bg-amber-50 border-amber-200" : "bg-slate-50 border-slate-100"}`}>
+              <div key={w.minutes} className={`rounded-2xl border p-4 ${w.atRisk ? "bg-amber-500/10 border-amber-500/30" : "bg-slate-800/50 border-slate-700/50"}`}>
                 <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">In {w.minutes < 60 ? `${w.minutes}m` : `${w.minutes / 60}h`}</p>
-                <p className={`text-2xl font-bold mt-1 ${w.atRisk ? "text-amber-700" : "text-slate-900"}`}>{w.pct}%</p>
+                <p className={`text-2xl font-bold mt-1 ${w.atRisk ? "text-amber-400" : "text-white"}`}>{w.pct}%</p>
                 <p className="text-[11px] font-semibold text-slate-400">{w.expectedOccupied} / {w.totalSpots} spots</p>
-                {w.atRisk && <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700 mt-1">Capacity risk</p>}
+                {w.atRisk && <p className="text-[10px] font-bold uppercase tracking-widest text-amber-400 mt-1">Capacity risk</p>}
               </div>
             ))}
           </div>
@@ -534,18 +544,18 @@ function Dashboard() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <Reveal preset="fade-up" delay={300} className="lg:col-span-2 shadow-spatial">
-          <div className="bg-white border border-slate-200 rounded-[2rem] p-8">
+          <div className="bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-8">
             <div className="flex justify-between items-center mb-8">
-              <h3 className="font-bold text-slate-900 text-lg">Yard Status Map</h3>
+              <h3 className="font-bold text-white text-lg" style={{ fontFamily: "var(--font-heading)" }}>Yard Status Map</h3>
               <div className="flex gap-6">
                 <Legend label="Occupied" color="bg-indigo-500" />
-                <Legend label="Available" color="bg-slate-200" />
+                <Legend label="Available" color="bg-slate-600" />
               </div>
             </div>
             {zones.length > 0 && (
               <div className="flex flex-wrap gap-2 mb-6">
                 {zones.map((z) => (
-                  <span key={z.zone} className="text-xs font-bold bg-slate-50 border border-slate-200 text-slate-600 rounded-lg px-3 py-1.5">
+                  <span key={z.zone} className="text-xs font-bold bg-slate-800/60 border border-slate-700 text-slate-300 rounded-lg px-3 py-1.5">
                     {z.zone}: {z.occupied}/{z.total}
                   </span>
                 ))}
@@ -565,12 +575,12 @@ function Dashboard() {
                 <div
                   key={spot.id}
                   title={flagLabel}
-                  className={`relative w-14 h-12 rounded-xl border flex items-center justify-center text-[10px] font-bold transition-all shadow-sm ${
+                  className={`relative w-14 h-12 rounded-xl border flex items-center justify-center text-[10px] font-bold transition-all duration-200 hover:scale-105 ${
                     flagged
-                      ? 'bg-red-50 border-red-400 text-red-700 ring-2 ring-red-300'
+                      ? 'bg-red-500/15 border-red-500/50 text-red-300 ring-2 ring-red-500/40'
                       : (spot.status === 'OCCUPIED' || spot.plate)
-                      ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
-                      : 'bg-slate-50 border-slate-100 text-slate-400'
+                      ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-300'
+                      : 'bg-slate-800/50 border-slate-700/50 text-slate-400'
                   }`}
                 >
                   {spot.name}
@@ -582,10 +592,10 @@ function Dashboard() {
         </Reveal>
 
         <Reveal preset="fade-up" delay={350}>
-          <div className="bg-white border border-slate-200 rounded-[2rem] p-8 shadow-spatial">
-            <h3 className="font-bold text-slate-900 text-lg pb-6 flex items-center justify-between">
+          <div className="bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-8 hover:border-slate-700 transition-colors">
+            <h3 className="font-bold text-white text-lg pb-6 flex items-center justify-between" style={{ fontFamily: "var(--font-heading)" }}>
               Action Center
-              {actionCenterTotal > 0 && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">{actionCenterTotal}</span>}
+              {actionCenterTotal > 0 && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-500/15 text-red-300">{actionCenterTotal}</span>}
             </h3>
             <div className="space-y-6 max-h-[420px] overflow-y-auto pr-1">
               {actionCenterTotal === 0 && <p className="text-sm text-slate-400 text-center py-8">Nothing needs attention right now.</p>}
@@ -600,7 +610,7 @@ function Dashboard() {
                 return (
                   <div key={key} className="space-y-3">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{label} · {list.length}</p>
-                    <div className="space-y-4 divide-y divide-slate-50">
+                    <div className="space-y-4 divide-y divide-slate-800/60">
                       {list.slice(0, 6).map((a: any, i: number) => (
                         <Link key={i} to={a.action?.link || "/"} className="block pt-4 first:pt-0">
                           <AlertItem severity={a.severity} msg={`${a.title} — ${a.description}`} time={timeAgo(a.timestamp)} actionLabel={a.action?.label} />
@@ -617,11 +627,11 @@ function Dashboard() {
 
       {spots.some((s: any) => s.type === "DOCK") && (
         <Reveal preset="fade-up" delay={375}>
-          <div className="bg-white border border-slate-200 rounded-[2rem] p-8 shadow-spatial">
+          <div className="bg-slate-900/70 border border-slate-800 rounded-[1.75rem] p-8 hover:border-slate-700 transition-colors">
             <div className="flex items-center justify-between pb-6">
-              <h3 className="font-bold text-slate-900 text-lg">Dock Board</h3>
+              <h3 className="font-bold text-white text-lg" style={{ fontFamily: "var(--font-heading)" }}>Dock Board</h3>
               {equipment.total > 0 && (
-                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${equipment.down > 0 ? "bg-amber-100 text-amber-700" : "bg-teal-100 text-teal-700"}`}>
+                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${equipment.down > 0 ? "bg-amber-500/10 text-amber-400" : "bg-teal-500/10 text-teal-400"}`}>
                   Equipment: {equipment.total - equipment.down}/{equipment.total} available
                 </span>
               )}
@@ -629,21 +639,21 @@ function Dashboard() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {spots.filter((s: any) => s.type === "DOCK").map((dock: any) => {
                 const cargoColor: Record<string, string> = {
-                  loaded: "bg-teal-50 text-teal-700 border-teal-200",
-                  unloaded: "bg-teal-50 text-teal-700 border-teal-200",
-                  completed: "bg-teal-50 text-teal-700 border-teal-200",
-                  short: "bg-red-50 text-red-700 border-red-200",
-                  over: "bg-red-50 text-red-700 border-red-200",
-                  damaged: "bg-red-50 text-red-700 border-red-200",
-                  rejected: "bg-red-50 text-red-700 border-red-200",
+                  loaded: "bg-teal-500/10 text-teal-300 border-teal-500/30",
+                  unloaded: "bg-teal-500/10 text-teal-300 border-teal-500/30",
+                  completed: "bg-teal-500/10 text-teal-300 border-teal-500/30",
+                  short: "bg-red-500/10 text-red-300 border-red-500/30",
+                  over: "bg-red-500/10 text-red-300 border-red-500/30",
+                  damaged: "bg-red-500/10 text-red-300 border-red-500/30",
+                  rejected: "bg-red-500/10 text-red-300 border-red-500/30",
                 };
                 return (
-                <div key={dock.id} className={`rounded-2xl border p-4 transition-all ${dock.plate ? "bg-indigo-50 border-indigo-200 hover:border-indigo-300" : "bg-slate-50 border-slate-100"}`}>
+                <div key={dock.id} className={`rounded-2xl border p-4 transition-all duration-200 hover:-translate-y-0.5 ${dock.plate ? "bg-indigo-500/10 border-indigo-500/30 hover:border-indigo-400/50" : "bg-slate-800/50 border-slate-700/50"}`}>
                   <p className="text-xs font-bold uppercase tracking-widest text-slate-400">{dock.name}</p>
                   {dock.plate ? (
                     <>
-                      <p className="font-bold text-slate-900 mt-1">{dock.plate}</p>
-                      <span className={`inline-block mt-2 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${cargoColor[dock.cargo_status] || "bg-white text-indigo-700 border-indigo-200"}`}>
+                      <p className="font-bold text-white mt-1">{dock.plate}</p>
+                      <span className={`inline-block mt-2 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${cargoColor[dock.cargo_status] || "bg-slate-800 text-indigo-300 border-indigo-500/30"}`}>
                         {dock.cargo_status || "expected"}
                       </span>
                     </>
@@ -664,9 +674,9 @@ function Dashboard() {
 function StatItem({ icon, label, value, suffix = "", sub, color, to }: any) {
   const tilt = use3DTilt(5);
   const colors: any = {
-    indigo: 'bg-indigo-50 text-indigo-600',
-    teal: 'bg-teal-50 text-teal-600',
-    amber: 'bg-amber-50 text-amber-600'
+    indigo: 'bg-indigo-500/10 text-indigo-300',
+    teal: 'bg-teal-500/10 text-teal-300',
+    amber: 'bg-amber-500/10 text-amber-300'
   };
   // Command Center spec: "each KPI must be clickable" — drills into the
   // page that actually explains the number, instead of a dead-end card.
@@ -678,19 +688,19 @@ function StatItem({ icon, label, value, suffix = "", sub, color, to }: any) {
       ref={tilt.ref}
       onMouseMove={tilt.onMouseMove}
       onMouseLeave={tilt.onMouseLeave}
-      className={`bg-white border border-slate-200 p-8 rounded-[2rem] shadow-sm hover:shadow-xl transition-all duration-300 flex flex-col gap-4 group ${to ? "cursor-pointer" : ""}`}
+      className={`bg-slate-900/70 border border-slate-800 p-8 rounded-[1.75rem] hover:border-slate-700 hover:bg-slate-900 hover:-translate-y-0.5 shadow-none hover:shadow-2xl hover:shadow-black/20 transition-all duration-300 flex flex-col gap-4 group ${to ? "cursor-pointer" : ""}`}
       style={{ transformStyle: "preserve-3d" }}
     >
       <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${colors[color]} group-hover:scale-110 transition-transform`} style={{ transform: "translateZ(20px)" }}>
         {React.cloneElement(icon, { size: 24 })}
       </div>
       <div style={{ transform: "translateZ(10px)" }}>
-        <h4 className="text-4xl font-bold text-slate-900 tracking-tight">
+        <h4 className="text-4xl font-bold text-white tracking-tight" style={{ fontFamily: "var(--font-heading)" }}>
           {typeof value === "number" ? <><CountUp value={value} />{suffix}</> : value}
         </h4>
-        <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mt-2">{label}</p>
+        <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mt-2">{label}</p>
       </div>
-      <p className="text-[11px] font-semibold text-slate-400 mt-2">{sub}</p>
+      <p className="text-[11px] font-semibold text-slate-500 mt-2">{sub}</p>
     </Wrapper>
   );
 }
@@ -703,11 +713,11 @@ function AlertItem({ severity, msg, time, actionLabel }: any) {
         severity === 'warning' ? 'bg-amber-500' : 'bg-indigo-400'
       }`} />
       <div className="space-y-0.5 flex-1 min-w-0">
-        <p className="text-sm font-bold text-slate-800 leading-tight group-hover:text-indigo-600 transition-colors">{msg}</p>
-        <p className="text-[11px] font-medium text-slate-400">{time}</p>
+        <p className="text-sm font-bold text-slate-200 leading-tight group-hover:text-indigo-300 transition-colors">{msg}</p>
+        <p className="text-[11px] font-medium text-slate-500">{time}</p>
       </div>
       {actionLabel && (
-        <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-indigo-600 group-hover:text-indigo-700 border border-indigo-100 group-hover:border-indigo-300 rounded-lg px-2 py-1 transition-colors">{actionLabel}</span>
+        <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-indigo-300 group-hover:text-indigo-200 border border-indigo-500/30 group-hover:border-indigo-400/50 rounded-lg px-2 py-1 transition-colors">{actionLabel}</span>
       )}
     </div>
   );

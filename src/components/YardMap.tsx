@@ -4,6 +4,49 @@ import "mapbox-gl/dist/mapbox-gl.css";
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN as string | undefined;
 
+// "SkyYard Command Center" — built with the Mapbox DevKit style_builder_tool
+// (Standard style, monochrome theme, night light preset, indigo-tinted
+// roads) and validated with validate_style_tool. Publishing it as a hosted
+// style needs styles:write scope this account's token doesn't have — that's
+// an account permission, not something fixable from code — so it's embedded
+// inline instead. mapbox-gl accepts a full style object anywhere it accepts
+// a style URL; the visual result is identical either way.
+const COMMAND_CENTER_STYLE: mapboxgl.StyleSpecification = {
+  version: 8,
+  name: "SkyYard Command Center",
+  metadata: { "mapbox:autocomposite": true, "mapbox:uiParadigm": "imports" },
+  center: [0, 0],
+  zoom: 2,
+  imports: [
+    {
+      id: "basemap",
+      url: "mapbox://styles/mapbox/standard",
+      config: {
+        showPedestrianRoads: false,
+        showTransitLabels: false,
+        show3dObjects: true,
+        theme: "monochrome",
+        lightPreset: "night",
+        densityPointOfInterestLabels: 1,
+        colorPlaceLabels: "#cbd5e1",
+        colorRoadLabels: "#94a3b8",
+        colorGreenspace: "#111a2e",
+        colorWater: "#0f1729",
+        colorAdminBoundaries: "#334155",
+        colorPointOfInterestLabels: "#64748b",
+        colorMotorways: "#4f46e5",
+        colorTrunks: "#6366f1",
+        colorRoads: "#3f4a63",
+      },
+    },
+  ] as any,
+  sources: { composite: { url: "mapbox://mapbox.mapbox-streets-v8", type: "vector" } },
+  sprite: "mapbox://sprites/mapbox/streets-v12",
+  glyphs: "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
+  projection: { name: "mercator" } as any,
+  layers: [],
+};
+
 export interface YardMapSpot {
   id: number;
   name: string;
@@ -132,10 +175,11 @@ export default function YardMap({ spots, facility, unresolvedSafetySpotIds, spot
   // that's what lets the *same* DOM element animate from its old spot's
   // coordinates to its new one instead of being torn down and recreated.
   const truckMarkersRef = useRef<Map<string, { marker: mapboxgl.Marker; el: HTMLDivElement; spotId: number }>>(new Map());
-  const [style, setStyle] = useState<"streets" | "satellite">("streets");
+  const [style, setStyle] = useState<"command" | "satellite">("command");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [tilesSlow, setTilesSlow] = useState(false);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
   useEffect(() => {
     if (!MAPBOX_TOKEN || !containerRef.current) return;
@@ -144,7 +188,7 @@ export default function YardMap({ spots, facility, unresolvedSafetySpotIds, spot
     try {
       map = new mapboxgl.Map({
         container: containerRef.current,
-        style: "mapbox://styles/mapbox/streets-v12",
+        style: COMMAND_CENTER_STYLE,
         center: [facility.longitude, facility.latitude],
         zoom: 17,
       });
@@ -182,7 +226,7 @@ export default function YardMap({ spots, facility, unresolvedSafetySpotIds, spot
 
   useEffect(() => {
     if (!mapRef.current || !ready) return;
-    mapRef.current.setStyle(style === "streets" ? "mapbox://styles/mapbox/streets-v12" : "mapbox://styles/mapbox/satellite-streets-v12");
+    mapRef.current.setStyle(style === "command" ? COMMAND_CENTER_STYLE : "mapbox://styles/mapbox/satellite-streets-v12");
   }, [style, ready]);
 
   useEffect(() => {
@@ -216,7 +260,9 @@ export default function YardMap({ spots, facility, unresolvedSafetySpotIds, spot
       if (spot.latitude == null || spot.longitude == null) continue;
       seenSpotIds.add(spot.id);
       const state = markerState(spot, alertIds);
-      const style = `width:16px;height:16px;border-radius:${spot.type === "DOCK" ? "4px" : "50%"};background:${STATE_COLOR[state]};border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,.4);cursor:pointer;${state === "alert" ? "animation:yard-map-pulse 1.4s infinite;" : ""}`;
+      const isSelected = selectedKey === `spot-${spot.id}`;
+      const ring = isSelected ? "0 0 0 3px #818cf8," : "";
+      const style = `width:${isSelected ? 20 : 16}px;height:${isSelected ? 20 : 16}px;border-radius:${spot.type === "DOCK" ? "4px" : "50%"};background:${STATE_COLOR[state]};border:2px solid white;box-shadow:${ring}0 1px 3px rgba(0,0,0,.4);cursor:pointer;transition:width .15s,height .15s;${state === "alert" ? "animation:yard-map-pulse 1.4s infinite;" : ""}`;
 
       let existing = spotMarkersRef.current.get(spot.id);
       if (!existing) {
@@ -224,7 +270,7 @@ export default function YardMap({ spots, facility, unresolvedSafetySpotIds, spot
         el.type = "button";
         el.setAttribute("aria-label", spot.name);
         el.style.cssText = style;
-        el.addEventListener("click", () => onSelectSpot?.((el as any)._spot));
+        el.addEventListener("click", () => { setSelectedKey(`spot-${(el as any)._spot.id}`); onSelectSpot?.((el as any)._spot); });
         (el as any)._spot = spot;
         existing = new mapboxgl.Marker({ element: el }).setLngLat([spot.longitude, spot.latitude]).addTo(map);
         spotMarkersRef.current.set(spot.id, existing);
@@ -252,13 +298,16 @@ export default function YardMap({ spots, facility, unresolvedSafetySpotIds, spot
       const to: [number, number] = [spot.longitude as number, spot.latitude as number];
       const existing = truckMarkersRef.current.get(plate);
 
+      const isSelected = selectedKey === `truck-${plate}`;
+      const truckShadow = isSelected ? "0 0 0 3px #818cf8, 0 2px 5px rgba(0,0,0,.45)" : "0 2px 5px rgba(0,0,0,.45)";
+
       if (!existing) {
         const el = document.createElement("div");
-        el.style.cssText = "width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:13px;background:#1e1b4b;border-radius:6px;border:2px solid white;box-shadow:0 2px 5px rgba(0,0,0,.45);cursor:pointer;";
+        el.style.cssText = `width:${isSelected ? 26 : 22}px;height:${isSelected ? 26 : 22}px;display:flex;align-items:center;justify-content:center;font-size:13px;background:#1e1b4b;border-radius:6px;border:2px solid white;box-shadow:${truckShadow};cursor:pointer;transition:width .15s,height .15s;`;
         el.textContent = "🚚";
         el.setAttribute("aria-label", `Trailer ${plate}`);
         const marker = new mapboxgl.Marker({ element: el }).setLngLat(to).setPopup(new mapboxgl.Popup({ offset: 14 }).setDOMContent(buildPopupNode(spot))).addTo(map);
-        el.addEventListener("click", () => onSelectSpot?.(spot));
+        el.addEventListener("click", () => { setSelectedKey(`truck-${plate}`); onSelectSpot?.(spot); });
         truckMarkersRef.current.set(plate, { marker, el, spotId: spot.id });
       } else if (existing.spotId !== spot.id) {
         // Real movement: this plate's spot changed since the last render —
@@ -268,10 +317,13 @@ export default function YardMap({ spots, facility, unresolvedSafetySpotIds, spot
         const from = existing.marker.getLngLat();
         animateMarkerTo(existing.marker, [from.lng, from.lat], to, 1200);
         existing.el.style.boxShadow = "0 0 0 3px rgba(79,70,229,.6), 0 2px 5px rgba(0,0,0,.45)";
-        setTimeout(() => { existing.el.style.boxShadow = "0 2px 5px rgba(0,0,0,.45)"; }, 3000);
+        setTimeout(() => { existing.el.style.boxShadow = truckShadow; }, 3000);
         existing.marker.setPopup(new mapboxgl.Popup({ offset: 14 }).setDOMContent(buildPopupNode(spot)));
         existing.spotId = spot.id;
       } else {
+        existing.el.style.width = isSelected ? "26px" : "22px";
+        existing.el.style.height = isSelected ? "26px" : "22px";
+        existing.el.style.boxShadow = truckShadow;
         existing.marker.setPopup(new mapboxgl.Popup({ offset: 14 }).setDOMContent(buildPopupNode(spot)));
       }
     }
@@ -281,47 +333,47 @@ export default function YardMap({ spots, facility, unresolvedSafetySpotIds, spot
         truckMarkersRef.current.delete(plate);
       }
     }
-  }, [spots, ready, unresolvedSafetySpotIds, spotsWithOpenExceptions, onSelectSpot, facility]);
+  }, [spots, ready, unresolvedSafetySpotIds, spotsWithOpenExceptions, onSelectSpot, facility, selectedKey]);
 
   if (!MAPBOX_TOKEN) {
     return (
-      <div className={`flex flex-col items-center justify-center gap-2 bg-slate-50 border border-slate-200 rounded-2xl text-slate-400 ${className}`} style={{ height }}>
-        <span className="text-sm font-bold">Map unavailable</span>
+      <div className={`flex flex-col items-center justify-center gap-2 bg-slate-900/60 border border-slate-800 rounded-2xl text-slate-500 ${className}`} style={{ height }}>
+        <span className="text-sm font-bold text-slate-300">Map unavailable</span>
         <span className="text-xs">VITE_MAPBOX_ACCESS_TOKEN not configured</span>
       </div>
     );
   }
 
   return (
-    <div className={`relative rounded-2xl overflow-hidden border border-slate-200 ${className}`} style={{ height }}>
+    <div className={`relative rounded-2xl overflow-hidden border border-slate-800 ${className}`} style={{ height }}>
       <style>{`@keyframes yard-map-pulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.7); opacity: .5; } }`}</style>
       {/* mapbox-gl.css ships its own `.mapboxgl-map { position: relative }`,
           which wins the cascade over Tailwind's `.absolute` class (same
           specificity, loaded later) and collapses this container to 0
           height. Inline style always wins over any stylesheet class. */}
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
-      <div className="absolute top-3 left-3 z-10 flex gap-1 bg-white/95 backdrop-blur rounded-lg p-1 shadow-sm border border-slate-200">
-        <button type="button" onClick={() => setStyle("streets")} className={`text-[10px] font-bold uppercase tracking-wide px-2.5 py-1.5 rounded-md transition-colors ${style === "streets" ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-100"}`}>Map</button>
-        <button type="button" onClick={() => setStyle("satellite")} className={`text-[10px] font-bold uppercase tracking-wide px-2.5 py-1.5 rounded-md transition-colors ${style === "satellite" ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-100"}`}>Satellite</button>
+      <div className="absolute top-3 left-3 z-10 flex gap-1 bg-slate-900/90 backdrop-blur rounded-lg p-1 shadow-lg border border-slate-700/60">
+        <button type="button" onClick={() => setStyle("command")} className={`text-[10px] font-bold uppercase tracking-wide px-2.5 py-1.5 rounded-md transition-all duration-150 ${style === "command" ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"}`}>Map</button>
+        <button type="button" onClick={() => setStyle("satellite")} className={`text-[10px] font-bold uppercase tracking-wide px-2.5 py-1.5 rounded-md transition-all duration-150 ${style === "satellite" ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"}`}>Satellite</button>
       </div>
       {!facility.configured && (
-        <div className="absolute bottom-3 left-3 z-10 bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold px-2.5 py-1.5 rounded-lg shadow-sm max-w-[70%]">
+        <div className="absolute bottom-3 left-3 z-10 bg-amber-500/15 backdrop-blur border border-amber-500/30 text-amber-300 text-[10px] font-bold px-2.5 py-1.5 rounded-lg shadow-lg max-w-[70%]">
           Approximate location — set real facility coordinates in Settings
         </div>
       )}
       {!ready && !loadError && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-slate-50 text-slate-400 pointer-events-none">
-          <div className="w-6 h-6 border-2 border-indigo-600/20 border-t-indigo-600 rounded-full animate-spin" />
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-slate-900 text-slate-500 pointer-events-none">
+          <div className="w-6 h-6 border-2 border-indigo-500/20 border-t-indigo-400 rounded-full animate-spin" />
           <span className="text-xs font-bold uppercase tracking-widest">Loading map…</span>
         </div>
       )}
       {ready && tilesSlow && !loadError && (
-        <div className="absolute bottom-3 right-3 z-10 bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold px-2.5 py-1.5 rounded-lg shadow-sm">
+        <div className="absolute bottom-3 right-3 z-10 bg-amber-500/15 backdrop-blur border border-amber-500/30 text-amber-300 text-[10px] font-bold px-2.5 py-1.5 rounded-lg shadow-lg">
           Map tiles are slow to load — check your network
         </div>
       )}
       {loadError && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/90 text-red-600 text-sm font-bold px-4 text-center">
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-900/95 text-red-400 text-sm font-bold px-4 text-center">
           Map error: {loadError}
         </div>
       )}
