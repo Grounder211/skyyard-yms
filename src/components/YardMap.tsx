@@ -64,6 +64,24 @@ function dwellLabel(spot: YardMapSpot): string | null {
   return mins < 60 ? `${mins}m on site` : `${Math.floor(mins / 60)}h ${mins % 60}m on site`;
 }
 
+// Real GPS is out of scope (no provider — see /api/admin/integrations).
+// But a trailer's spot DOES really change the moment a move order
+// completes, and that arrives over the same Socket.io "yard_update" /
+// "move_update" events every page already listens to and re-fetches
+// /api/yard-status on. This animates the truck marker from its last known
+// spot to its new one over `durationMs` — an honest visualization of a
+// real, already-happened state change, not a simulated live trajectory.
+function animateMarkerTo(marker: mapboxgl.Marker, from: [number, number], to: [number, number], durationMs = 1200) {
+  const start = performance.now();
+  function tick(now: number) {
+    const t = Math.min(1, (now - start) / durationMs);
+    const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+    marker.setLngLat([from[0] + (to[0] - from[0]) * eased, from[1] + (to[1] - from[1]) * eased]);
+    if (t < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
 function buildPopupNode(spot: YardMapSpot): HTMLElement {
   const el = document.createElement("div");
   el.className = "yard-map-popup";
@@ -109,7 +127,11 @@ function buildPopupNode(spot: YardMapSpot): HTMLElement {
 export default function YardMap({ spots, facility, unresolvedSafetySpotIds, spotsWithOpenExceptions, onSelectSpot, height = "520px", className = "" }: YardMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
-  const markersRef = useRef<mapboxgl.Marker[]>([]);
+  const spotMarkersRef = useRef<Map<number, mapboxgl.Marker>>(new Map());
+  // Truck markers persist across renders keyed by plate (not spot id) —
+  // that's what lets the *same* DOM element animate from its old spot's
+  // coordinates to its new one instead of being torn down and recreated.
+  const truckMarkersRef = useRef<Map<string, { marker: mapboxgl.Marker; el: HTMLDivElement; spotId: number }>>(new Map());
   const [style, setStyle] = useState<"streets" | "satellite">("streets");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -135,8 +157,10 @@ export default function YardMap({ spots, facility, unresolvedSafetySpotIds, spot
     mapRef.current = map;
 
     return () => {
-      markersRef.current.forEach((m) => m.remove());
-      markersRef.current = [];
+      spotMarkersRef.current.forEach((m) => m.remove());
+      spotMarkersRef.current.clear();
+      truckMarkersRef.current.forEach((t) => t.marker.remove());
+      truckMarkersRef.current.clear();
       map.remove();
       mapRef.current = null;
     };
@@ -155,37 +179,94 @@ export default function YardMap({ spots, facility, unresolvedSafetySpotIds, spot
     return () => ro.disconnect();
   }, [ready]);
 
+  const facilityMarkerRef = useRef<mapboxgl.Marker | null>(null);
+
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
 
-    markersRef.current.forEach((m) => m.remove());
-    markersRef.current = [];
+    if (!facilityMarkerRef.current) {
+      const facilityEl = document.createElement("div");
+      facilityEl.style.cssText = "width:14px;height:14px;border-radius:3px;background:#0f172a;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,.35);";
+      facilityMarkerRef.current = new mapboxgl.Marker({ element: facilityEl }).setLngLat([facility.longitude, facility.latitude]).addTo(map);
+    } else {
+      facilityMarkerRef.current.setLngLat([facility.longitude, facility.latitude]);
+    }
+    facilityMarkerRef.current.setPopup(new mapboxgl.Popup({ offset: 12 }).setText(facility.configured ? facility.name : `${facility.name} (approximate — set real coordinates in Settings)`));
 
     const alertIds = new Set([...(unresolvedSafetySpotIds || []), ...(spotsWithOpenExceptions || [])]);
 
-    const facilityEl = document.createElement("div");
-    facilityEl.style.cssText = "width:14px;height:14px;border-radius:3px;background:#0f172a;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,.35);";
-    new mapboxgl.Marker({ element: facilityEl })
-      .setLngLat([facility.longitude, facility.latitude])
-      .setPopup(new mapboxgl.Popup({ offset: 12 }).setText(facility.configured ? facility.name : `${facility.name} (approximate — set real coordinates in Settings)`))
-      .addTo(map);
-
+    // --- Infrastructure markers (docks/parking spots): fixed position,
+    // persistent by spot id, only their color/popup ever changes. ---
+    const seenSpotIds = new Set<number>();
     for (const spot of spots) {
       if (spot.latitude == null || spot.longitude == null) continue;
+      seenSpotIds.add(spot.id);
       const state = markerState(spot, alertIds);
-      const el = document.createElement("button");
-      el.type = "button";
-      el.setAttribute("aria-label", spot.name);
-      el.style.cssText = `width:16px;height:16px;border-radius:${spot.type === "DOCK" ? "4px" : "50%"};background:${STATE_COLOR[state]};border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,.4);cursor:pointer;${state === "alert" ? "animation:yard-map-pulse 1.4s infinite;" : ""}`;
+      const style = `width:16px;height:16px;border-radius:${spot.type === "DOCK" ? "4px" : "50%"};background:${STATE_COLOR[state]};border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,.4);cursor:pointer;${state === "alert" ? "animation:yard-map-pulse 1.4s infinite;" : ""}`;
 
-      const marker = new mapboxgl.Marker({ element: el })
-        .setLngLat([spot.longitude, spot.latitude])
-        .setPopup(new mapboxgl.Popup({ offset: 12 }).setDOMContent(buildPopupNode(spot)))
-        .addTo(map);
+      let existing = spotMarkersRef.current.get(spot.id);
+      if (!existing) {
+        const el = document.createElement("button");
+        el.type = "button";
+        el.setAttribute("aria-label", spot.name);
+        el.style.cssText = style;
+        el.addEventListener("click", () => onSelectSpot?.((el as any)._spot));
+        (el as any)._spot = spot;
+        existing = new mapboxgl.Marker({ element: el }).setLngLat([spot.longitude, spot.latitude]).addTo(map);
+        spotMarkersRef.current.set(spot.id, existing);
+      } else {
+        const el = existing.getElement() as any;
+        el.style.cssText = style;
+        el._spot = spot;
+      }
+      existing.setPopup(new mapboxgl.Popup({ offset: 12 }).setDOMContent(buildPopupNode(spot)));
+    }
+    for (const [id, marker] of spotMarkersRef.current) {
+      if (!seenSpotIds.has(id)) {
+        marker.remove();
+        spotMarkersRef.current.delete(id);
+      }
+    }
 
-      el.addEventListener("click", () => onSelectSpot?.(spot));
-      markersRef.current.push(marker);
+    // --- Truck markers: one per occupied spot, keyed by plate so the same
+    // element survives a move and can animate to its new position. ---
+    const occupied = spots.filter((s) => s.plate && s.latitude != null && s.longitude != null);
+    const seenPlates = new Set<string>();
+    for (const spot of occupied) {
+      const plate = spot.plate as string;
+      seenPlates.add(plate);
+      const to: [number, number] = [spot.longitude as number, spot.latitude as number];
+      const existing = truckMarkersRef.current.get(plate);
+
+      if (!existing) {
+        const el = document.createElement("div");
+        el.style.cssText = "width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:13px;background:#1e1b4b;border-radius:6px;border:2px solid white;box-shadow:0 2px 5px rgba(0,0,0,.45);cursor:pointer;";
+        el.textContent = "🚚";
+        el.setAttribute("aria-label", `Trailer ${plate}`);
+        const marker = new mapboxgl.Marker({ element: el }).setLngLat(to).setPopup(new mapboxgl.Popup({ offset: 14 }).setDOMContent(buildPopupNode(spot))).addTo(map);
+        el.addEventListener("click", () => onSelectSpot?.(spot));
+        truckMarkersRef.current.set(plate, { marker, el, spotId: spot.id });
+      } else if (existing.spotId !== spot.id) {
+        // Real movement: this plate's spot changed since the last render —
+        // animate from the last known position to the new one instead of
+        // teleporting, and flag it visually for a few seconds like the
+        // grid view's "moved" indicator does.
+        const from = existing.marker.getLngLat();
+        animateMarkerTo(existing.marker, [from.lng, from.lat], to, 1200);
+        existing.el.style.boxShadow = "0 0 0 3px rgba(79,70,229,.6), 0 2px 5px rgba(0,0,0,.45)";
+        setTimeout(() => { existing.el.style.boxShadow = "0 2px 5px rgba(0,0,0,.45)"; }, 3000);
+        existing.marker.setPopup(new mapboxgl.Popup({ offset: 14 }).setDOMContent(buildPopupNode(spot)));
+        existing.spotId = spot.id;
+      } else {
+        existing.marker.setPopup(new mapboxgl.Popup({ offset: 14 }).setDOMContent(buildPopupNode(spot)));
+      }
+    }
+    for (const [plate, t] of truckMarkersRef.current) {
+      if (!seenPlates.has(plate)) {
+        t.marker.remove();
+        truckMarkersRef.current.delete(plate);
+      }
     }
   }, [spots, ready, unresolvedSafetySpotIds, spotsWithOpenExceptions, onSelectSpot, facility]);
 
