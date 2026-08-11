@@ -39,6 +39,7 @@ import { rankHostlersByWorkload } from "./server/services/hostlerRecommendation.
 import { recommendParkingMoves } from "./server/services/smartParking.js";
 import { predictArrival } from "./server/services/arrivalPrediction.js";
 import { assessDetentionRisk } from "./server/services/detentionRisk.js";
+import { SupabaseSessionStore } from "./server/supabaseSessionStore.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -100,6 +101,7 @@ async function startServer() {
   if (isProd) app.set("trust proxy", 1);
 
   app.use(session({
+    store: new SupabaseSessionStore(db),
     secret: process.env.SESSION_SECRET || "skyyard-secret-v4-quantum",
     resave: false,
     saveUninitialized: false,
