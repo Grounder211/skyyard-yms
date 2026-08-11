@@ -103,11 +103,12 @@ export default function ExecutiveDashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
         <KPIItem label="Total Movements" value={metrics?.current?.totalTrucks} trend={pctChange(metrics?.current?.totalTrucks, metrics?.previous?.totalTrucks)} icon={<Activity />} />
         <KPIItem label="Avg Dwell Time" value={`${Math.round(metrics?.current?.avgTat || 0)}m`} trend={pctChange(metrics?.current?.avgTat, metrics?.previous?.avgTat)} invert icon={<Clock />} />
         <KPIItem label="On-Time Rate" value={metrics?.current?.onTimeRate != null ? `${Math.round(metrics.current.onTimeRate)}%` : "—"} trend={pctChange(metrics?.current?.onTimeRate, metrics?.previous?.onTimeRate)} icon={<Target />} />
         <KPIItem label="SLA Breaches" value={metrics?.current?.detentionEvents} trend={pctChange(metrics?.current?.detentionEvents, metrics?.previous?.detentionEvents)} invert icon={<AlertCircle />} />
+        <KPIItem label="Cancelled Bookings" value={metrics?.current?.cancelledAppointments} trend={pctChange(metrics?.current?.cancelledAppointments, metrics?.previous?.cancelledAppointments)} invert icon={<Calendar />} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

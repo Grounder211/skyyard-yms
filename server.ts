@@ -934,7 +934,7 @@ async function startServer() {
     const { start, end } = req.query;
     const facilityId = req.facilityId || 1;
     try {
-      let query = db.from("appointments").select("*, spots(name)").eq("facility_id", facilityId);
+      let query = db.from("appointments").select("*, spots(name)").eq("facility_id", facilityId).neq("status", "CANCELLED");
       if (start && end) {
         query = query.gte("start_time", String(start)).lte("start_time", String(end));
       } else {
@@ -1099,11 +1099,18 @@ async function startServer() {
     const { id } = req.params;
     const facilityId = req.facilityId || 1;
     try {
-      // Fetched before delete — a webhook subscriber needs to know which
-      // appointment was cancelled (plate/carrier/time), not just an id
-      // that no longer resolves to anything by the time they receive it.
+      // Fetched before the update — a webhook subscriber needs to know
+      // which appointment was cancelled (plate/carrier/time), not just an
+      // id that no longer resolves to anything by the time they receive it.
       const { data: existing } = await db.from("appointments").select("*").eq("id", id).eq("facility_id", facilityId).maybeSingle();
-      await db.from("appointments").delete().eq("id", id).eq("facility_id", facilityId);
+      // This used to hard-delete the row — "cancel" left no trace at all,
+      // so there was no way to ever see how many bookings got cancelled,
+      // and a re-booked slot looked identical to one that was never
+      // touched. Soft-delete instead: the slot frees up exactly the same
+      // way (every other query already filters status='CANCELLED' out),
+      // but the record — and who cancelled it, and when — survives for
+      // analytics.
+      await db.from("appointments").update({ status: "CANCELLED", cancelled_at: new Date().toISOString(), cancelled_by: req.session?.user?.id || null }).eq("id", id).eq("facility_id", facilityId);
       emitUpdate("appointment_deleted", { id });
       if (existing) enqueueWebhook("APPOINTMENT_CANCELLED", existing, facilityId);
       res.json({ success: true });
@@ -2377,7 +2384,12 @@ async function startServer() {
 
     const { count: detentionEvents } = await db.from("detention_records").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).gte("created_at", start).lte("created_at", end);
 
-    return { totalTrucks: countRes.count || 0, avgTat, onTimeRate, detentionEvents: detentionEvents || 0 };
+    // Cancelling a booking used to hard-delete the row — no way to ever
+    // see how many got cancelled. Now that cancel is a soft-delete
+    // (status='CANCELLED', cancelled_at stamped), this is a real count.
+    const { count: cancelledAppointments } = await db.from("appointments").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("status", "CANCELLED").gte("cancelled_at", start).lte("cancelled_at", end);
+
+    return { totalTrucks: countRes.count || 0, avgTat, onTimeRate, detentionEvents: detentionEvents || 0, cancelledAppointments: cancelledAppointments || 0 };
   };
 
   // Phase 41: Daily Yard Report — the manager-facing report every yard
