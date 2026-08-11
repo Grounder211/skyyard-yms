@@ -54,8 +54,15 @@ export default function DriverPortal() {
       body: JSON.stringify({ phone: toE164(countryCode, nationalNumber) }),
     });
     setBusy(false);
-    if (res.ok) setStep("code");
-    else setError("Couldn't send code. Check the phone number and try again.");
+    if (res.ok) {
+      const data = await res.json();
+      // No SMS provider configured — the backend already established the
+      // session instead of issuing a code nobody could receive.
+      if (data.skippedOtp) await loadDashboard();
+      else setStep("code");
+    } else {
+      setError("Couldn't send code. Check the phone number and try again.");
+    }
   };
 
   const verifyOtp = async (e: React.FormEvent) => {

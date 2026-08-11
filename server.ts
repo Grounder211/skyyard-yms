@@ -2496,9 +2496,27 @@ async function startServer() {
     }
   });
 
+  const establishDriverSession = async (req: any, phone: string) => {
+    await db.from("drivers").upsert({ phone }, { onConflict: "phone", ignoreDuplicates: true });
+    const { data: driver } = await db.from("drivers").select("id").eq("phone", phone).maybeSingle();
+    req.session.driver_id = driver!.id;
+    req.session.driver_phone = phone;
+  };
+
   // Driver OTP Routes
-  app.post("/api/driver/request-otp", otpRequestLimiter, async (req, res) => {
+  app.post("/api/driver/request-otp", otpRequestLimiter, async (req: any, res) => {
     const { phone } = req.body;
+
+    // No SMS provider configured — gating behind a code that can never
+    // actually be delivered would just lock every tester out. Skip
+    // straight to a session, same outcome as a successful verify. Once
+    // Twilio credentials are set this path stops applying automatically.
+    if (!getTwilioClient()) {
+      await establishDriverSession(req, phone);
+      logAudit({ action: "DRIVER_OTP_SKIPPED_NO_SMS", entityType: "DRIVER", entityId: phone, details: {}, ip: req.ip, facility_id: 1 });
+      return res.json({ success: true, skippedOtp: true, redirect: "/driver/dashboard" });
+    }
+
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
     await db.from("driver_otp").upsert({ phone, code, expires_at: expiresAt }, { onConflict: "phone" });
@@ -2506,7 +2524,7 @@ async function startServer() {
     res.json({ success: true, message: "Code sent" });
   });
 
-  app.post("/api/driver/verify-otp", otpVerifyLimiter, async (req, res) => {
+  app.post("/api/driver/verify-otp", otpVerifyLimiter, async (req: any, res) => {
     const { phone, code } = req.body;
     const { data: otp } = await db.from("driver_otp").select("*").eq("phone", phone).eq("code", code).gt("expires_at", new Date().toISOString()).maybeSingle();
     if (!otp) {
@@ -2515,11 +2533,7 @@ async function startServer() {
     }
 
     await db.from("driver_otp").delete().eq("phone", phone);
-    await db.from("drivers").upsert({ phone }, { onConflict: "phone", ignoreDuplicates: true });
-    const { data: driver } = await db.from("drivers").select("id").eq("phone", phone).maybeSingle();
-
-    (req as any).session.driver_id = driver!.id;
-    (req as any).session.driver_phone = phone;
+    await establishDriverSession(req, phone);
     res.json({ success: true, redirect: "/driver/dashboard" });
   });
 

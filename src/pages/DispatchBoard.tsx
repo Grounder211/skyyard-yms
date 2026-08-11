@@ -1,10 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowRight, Truck, DoorOpen, LogOut, CheckCircle2, X, Loader2, MapPin, UserCheck, UserX, Hand, Map as MapIcon, LayoutGrid } from "lucide-react";
+import { ArrowRight, Truck, DoorOpen, LogOut, CheckCircle2, X, Loader2, MapPin, UserCheck, UserX, Hand, LayoutGrid } from "lucide-react";
 import { io } from "socket.io-client";
 import { motion, AnimatePresence } from "motion/react";
 import { useToast } from "../contexts/ToastContext";
 import { useAuth } from "../contexts/AuthContext";
-import YardMap from "../components/YardMap";
 
 export default function DispatchBoard() {
   const { toast } = useToast();
@@ -20,7 +19,6 @@ export default function DispatchBoard() {
   const [myTasksOnly, setMyTasksOnly] = useState(false);
   const [claimBusyId, setClaimBusyId] = useState<number | null>(null);
   const [parkingRecs, setParkingRecs] = useState<any[]>([]);
-  const [viewMode, setViewMode] = useState<"grid" | "map">("map");
   const [applyingRecId, setApplyingRecId] = useState<number | null>(null);
 
   const load = async () => {
@@ -242,51 +240,30 @@ export default function DispatchBoard() {
         <div className="lg:col-span-2 bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 rounded-sm shadow-sm p-8">
           <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
             <h3 className="font-bold text-[var(--on-surface)] text-lg flex items-center gap-2" style={{ fontFamily: "var(--font-heading)" }}>
-              <MapPin size={18} className="text-indigo-400" /> Yard map
+              <LayoutGrid size={18} className="text-indigo-400" /> Yard spots — click an occupied one to move it
             </h3>
-            <div className="flex gap-1 bg-[var(--surface-container-low)] rounded-sm p-1">
-              <button type="button" onClick={() => setViewMode("map")} title="Map view" className={`p-1.5 rounded-md transition-colors ${viewMode === "map" ? "bg-[var(--primary)] text-white" : "text-[var(--on-surface-variant)] hover:text-black"}`}>
-                <MapIcon size={14} />
-              </button>
-              <button type="button" onClick={() => setViewMode("grid")} title="Grid view" className={`p-1.5 rounded-md transition-colors ${viewMode === "grid" ? "bg-[var(--primary)] text-white" : "text-[var(--on-surface-variant)] hover:text-black"}`}>
-                <LayoutGrid size={14} />
-              </button>
-            </div>
           </div>
 
-          {viewMode === "map" && yard.facility ? (
-            <YardMap
-              spots={spots}
-              facility={yard.facility}
-              unresolvedSafetySpotIds={yard.unresolvedSafetySpotIds}
-              spotsWithOpenExceptions={yard.spotsWithOpenExceptions}
-              onSelectSpot={(spot: any) => openSpot(spot)}
-              height="480px"
-            />
-          ) : (
-            <>
-              <div className="flex flex-wrap gap-3">
-                {spots.map((spot: any) => (
-                  <button
-                    key={spot.id}
-                    onClick={() => openSpot(spot)}
-                    className={`w-20 h-16 rounded-xl border flex flex-col items-center justify-center text-[10px] font-bold transition-all shadow-sm ${
-                      spot.plate
-                        ? "bg-indigo-50 border-indigo-200 text-indigo-700 hover:border-indigo-500 cursor-pointer"
-                        : "bg-[var(--surface-container-low)] border-[var(--outline-variant)]/30 text-[var(--on-surface-variant)] cursor-default"
-                    }`}
-                  >
-                    <span>{spot.name}</span>
-                    {spot.plate && <span className="truncate max-w-[70px] text-[9px] font-medium mt-0.5">{spot.plate}</span>}
-                  </button>
-                ))}
-              </div>
-              <div className="flex gap-6 mt-6">
-                <Legend label="Occupied (click to move)" color="bg-indigo-500" />
-                <Legend label="Empty" color="bg-slate-200" />
-              </div>
-            </>
-          )}
+          <div className="flex flex-wrap gap-3">
+            {spots.map((spot: any) => (
+              <button
+                key={spot.id}
+                onClick={() => openSpot(spot)}
+                className={`w-20 h-16 rounded-xl border flex flex-col items-center justify-center text-[10px] font-bold transition-all shadow-sm ${
+                  spot.plate
+                    ? "bg-indigo-50 border-indigo-200 text-indigo-700 hover:border-indigo-500 cursor-pointer"
+                    : "bg-[var(--surface-container-low)] border-[var(--outline-variant)]/30 text-[var(--on-surface-variant)] cursor-default"
+                }`}
+              >
+                <span>{spot.name}</span>
+                {spot.plate && <span className="truncate max-w-[70px] text-[9px] font-medium mt-0.5">{spot.plate}</span>}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-6 mt-6">
+            <Legend label="Occupied (click to move)" color="bg-indigo-500" />
+            <Legend label="Empty" color="bg-slate-200" />
+          </div>
         </div>
 
         <div className="bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 rounded-sm shadow-sm p-8">
