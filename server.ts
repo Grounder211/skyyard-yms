@@ -1,6 +1,5 @@
 import "dotenv/config";
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import path from "path";
 import cors from "cors";
 import { fileURLToPath } from "url";
@@ -4839,6 +4838,12 @@ async function startServer() {
   });
 
   if (process.env.NODE_ENV !== "production") {
+    // Dynamic, not top-level: a static `import ... from "vite"` runs at
+    // module load regardless of NODE_ENV, which pulled vite's rollup
+    // dependency (and its Linux-native binary) into the Vercel function
+    // and crashed every request there — even though this branch never
+    // executes in production. Loaded only when actually reached.
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
