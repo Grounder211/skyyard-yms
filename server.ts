@@ -4852,13 +4852,24 @@ async function startServer() {
     });
   }
 
-  httpServer.listen(PORT, "0.0.0.0", () => {
-    logger.info(`SkyYard YMS v4.0 [Supabase + Real-time] running on http://localhost:${PORT}`);
-    const traffic = getTrafficProvider();
-    if (traffic) logger.info(`Traffic provider configured: ${traffic.name}`);
-    else logger.warn("TRAFFIC PROVIDER NOT CONFIGURED — set TRAFFIC_PROVIDER=mapbox and MAPBOX_ACCESS_TOKEN to enable real traffic-aware ETAs");
-  });
+  // On Vercel, the platform owns the HTTP layer and calls the exported
+  // handler per-request — a real .listen() would just bind a port nobody
+  // routes to. Everything above (routes, cron.schedule registrations,
+  // Socket.io wiring) stays identical either way; cron jobs simply never
+  // fire in serverless since no process stays alive between requests, and
+  // Socket.io never gets a live connection to push through — both accepted
+  // trade-offs for a serverless demo, not crashes.
+  if (!process.env.VERCEL) {
+    httpServer.listen(PORT, "0.0.0.0", () => {
+      logger.info(`SkyYard YMS v4.0 [Supabase + Real-time] running on http://localhost:${PORT}`);
+      const traffic = getTrafficProvider();
+      if (traffic) logger.info(`Traffic provider configured: ${traffic.name}`);
+      else logger.warn("TRAFFIC PROVIDER NOT CONFIGURED — set TRAFFIC_PROVIDER=mapbox and MAPBOX_ACCESS_TOKEN to enable real traffic-aware ETAs");
+    });
+  }
+
+  return app;
 }
 
-startServer();
+export const appPromise = startServer();
 
