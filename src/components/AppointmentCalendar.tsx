@@ -13,8 +13,11 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { io } from "socket.io-client";
+import { DndContext, useDroppable, useDraggable, type DragEndEvent } from "@dnd-kit/core";
 import { useToast } from "../contexts/ToastContext";
 import VehicleLog from "./VehicleLog";
+import BookingRequestsSidebar from "./BookingRequestsSidebar";
+import BookingAssignPopover from "./BookingAssignPopover";
 
 type ViewType = "day" | "week" | "month" | "list";
 
@@ -34,7 +37,31 @@ export default function AppointmentCalendar() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingAppointment, setEditingAppointment] = useState<any>(null);
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
+  const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
+  const [pendingDrop, setPendingDrop] = useState<{
+    mode: "assign" | "reschedule"; plate: string; loadType: string;
+    requestId?: number; appointmentId?: number; dropTime: string; position: { x: number; y: number };
+  } | null>(null);
   const { toast } = useToast();
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over, activatorEvent } = event;
+    if (!over) return;
+    const dropData = over.data.current as { day: Date; hour: number } | undefined;
+    if (!dropData) return;
+    const dropTime = new Date(dropData.day);
+    dropTime.setHours(dropData.hour, 0, 0, 0);
+
+    const dragData = active.data.current as { type: "request"; request: any } | { type: "appointment"; appointment: any };
+    const clientEvent = activatorEvent as MouseEvent;
+    const position = { x: clientEvent?.clientX ?? 400, y: clientEvent?.clientY ?? 300 };
+
+    if (dragData.type === "request") {
+      setPendingDrop({ mode: "assign", plate: dragData.request.plate, loadType: dragData.request.load_type, requestId: dragData.request.id, dropTime: dropTime.toISOString(), position });
+    } else {
+      setPendingDrop({ mode: "reschedule", plate: dragData.appointment.plate, loadType: dragData.appointment.load_type, appointmentId: dragData.appointment.id, dropTime: dropTime.toISOString(), position });
+    }
+  };
 
   const socketRef = useRef<any>(null);
 
@@ -106,6 +133,7 @@ export default function AppointmentCalendar() {
   const hours = Array.from({ length: 24 }, (_, i) => i);
 
   return (
+    <DndContext onDragEnd={handleDragEnd}>
     <div className="min-h-full flex flex-col gap-6 max-w-[1600px] mx-auto px-4 lg:px-8 pb-8">
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
@@ -174,7 +202,9 @@ export default function AppointmentCalendar() {
       </div>
 
       {/* Main Calendar Content */}
-      <div className="h-[70vh] shrink-0 bg-white border border-slate-200 rounded-[2.5rem] shadow-xl shadow-slate-200/50 overflow-hidden flex flex-col">
+      <div className="flex gap-6 items-start">
+      {(view === "day" || view === "week") && <BookingRequestsSidebar refreshKey={sidebarRefreshKey} />}
+      <div className="h-[70vh] shrink-0 flex-1 bg-white border border-slate-200 rounded-[2.5rem] shadow-xl shadow-slate-200/50 overflow-hidden flex flex-col">
         {loading ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-4 text-slate-300">
             <div className="w-12 h-12 border-4 border-indigo-600/10 border-t-indigo-600 rounded-full animate-spin" />
@@ -189,21 +219,41 @@ export default function AppointmentCalendar() {
           </div>
         )}
       </div>
+      </div>
 
       <VehicleLog />
 
       {/* Add Appointment Modal */}
       <AnimatePresence>
         {isModalOpen && (
-          <CreateAppointmentModal 
-            onClose={() => { setIsModalOpen(false); setEditingAppointment(null); }} 
+          <CreateAppointmentModal
+            onClose={() => { setIsModalOpen(false); setEditingAppointment(null); }}
             onSuccess={() => { fetchAppointments(); setIsModalOpen(false); setEditingAppointment(null); }}
             initialDate={currentDate}
             editingAppointment={editingAppointment}
           />
         )}
       </AnimatePresence>
+
+      {pendingDrop && (
+        <BookingAssignPopover
+          mode={pendingDrop.mode}
+          plate={pendingDrop.plate}
+          loadType={pendingDrop.loadType}
+          requestId={pendingDrop.requestId}
+          appointmentId={pendingDrop.appointmentId}
+          dropTime={pendingDrop.dropTime}
+          position={pendingDrop.position}
+          onCancel={() => setPendingDrop(null)}
+          onConfirm={() => {
+            setPendingDrop(null);
+            setSidebarRefreshKey((k) => k + 1);
+            fetchAppointments();
+          }}
+        />
+      )}
     </div>
+    </DndContext>
   );
 }
 
@@ -322,6 +372,27 @@ function MonthView({ currentDate, appointments, onEdit }: any) {
   );
 }
 
+// ponytail: this repo has no @types/react installed, so JSX's normal "key
+// isn't a real prop" exclusion doesn't apply to strictly-typed components —
+// any typed component used with key={} in a .map() hits TS2322. Declaring
+// key here (out of the component's real prop type) satisfies tsc without
+// loosening it. Real fix: add @types/react + @types/react-dom repo-wide.
+function DraggableAppointmentBlock({ appt, children }: { appt: any; children: React.ReactNode; key?: React.Key }) {
+  const { attributes, listeners, setNodeRef } = useDraggable({ id: `appt-${appt.id}`, data: { type: "appointment", appointment: appt } });
+  return <div ref={setNodeRef} {...listeners} {...attributes} className="touch-none">{children}</div>;
+}
+
+function DroppableHourCell({ day, hour }: { day: Date; hour: number; key?: React.Key }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `${day.toISOString()}_${hour}`, data: { day, hour } });
+  return (
+    <div ref={setNodeRef} className={`h-20 border-b border-slate-50 relative group transition-colors ${isOver ? "bg-indigo-100" : ""}`}>
+      <div className="absolute inset-0 bg-indigo-50/50 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center pointer-events-none">
+        <Plus size={16} className="text-indigo-400" />
+      </div>
+    </div>
+  );
+}
+
 function WeekView({ currentDate, appointments, hours, onEdit, onDelete }: any) {
   const start = startOfWeek(currentDate);
   const days = Array.from({ length: 7 }, (_, i) => addDays(start, i));
@@ -350,13 +421,7 @@ function WeekView({ currentDate, appointments, hours, onEdit, onDelete }: any) {
             
             {/* Time Slots */}
             <div className="relative">
-              {hours.map((hour: number) => (
-                <div key={hour} className="h-20 border-b border-slate-50 relative group">
-                  <div className="absolute inset-0 bg-indigo-50/50 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center">
-                    <Plus size={16} className="text-indigo-400" />
-                  </div>
-                </div>
-              ))}
+              {hours.map((hour: number) => <DroppableHourCell key={hour} day={day} hour={hour} />)}
 
               {/* Appointments */}
               {appointments
@@ -367,8 +432,8 @@ function WeekView({ currentDate, appointments, hours, onEdit, onDelete }: any) {
                   const height = (appt.actual_duration_minutes / 60) * 80;
 
                   return (
-                    <motion.div 
-                      key={appt.id}
+                    <DraggableAppointmentBlock key={appt.id} appt={appt}>
+                    <motion.div
                       initial={{ scale: 0.9, opacity: 0 }}
                       animate={{ scale: 1, opacity: 1 }}
                       onClick={() => onEdit(appt)}
@@ -395,6 +460,7 @@ function WeekView({ currentDate, appointments, hours, onEdit, onDelete }: any) {
                         </div>
                       )}
                     </motion.div>
+                    </DraggableAppointmentBlock>
                   );
                 })
               }
@@ -402,6 +468,15 @@ function WeekView({ currentDate, appointments, hours, onEdit, onDelete }: any) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function DroppableDayRow({ day, hour, children }: { day: Date; hour: number; children: React.ReactNode; key?: React.Key }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `${day.toISOString()}_${hour}`, data: { day, hour } });
+  return (
+    <div ref={setNodeRef} className={`flex gap-6 min-h-[96px] border-b border-slate-50 last:border-0 py-4 group transition-colors ${isOver ? "bg-indigo-100" : ""}`}>
+      {children}
     </div>
   );
 }
@@ -435,14 +510,15 @@ function DayView({ currentDate, appointments, hours, onEdit, onDelete }: any) {
            {hours.map((hour: number) => {
              const hourAppts = dayAppts.filter((a: any) => parseISO(a.start_time).getHours() === hour);
              return (
-               <div key={hour} className="flex gap-6 min-h-[96px] border-b border-slate-50 last:border-0 py-4 group">
+               <DroppableDayRow key={hour} day={currentDate} hour={hour}>
                  <div className="w-32 flex flex-col pt-1">
                     <span className="text-[10px] font-black text-slate-300 group-hover:text-indigo-400 transition-colors uppercase tracking-[0.2em]">{format(new Date().setHours(hour, 0), "ha")}</span>
                     <div className="w-8 h-0.5 bg-slate-100 mt-2" />
                  </div>
                  <div className="flex-1 flex gap-4 overflow-x-auto pb-2 custom-scrollbar-hidden">
                     {hourAppts.length > 0 ? hourAppts.map((appt: any) => (
-                      <div key={appt.id} className="min-w-[280px] bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:shadow-md hover:border-indigo-200 transition-all flex flex-col justify-between">
+                      <DraggableAppointmentBlock key={appt.id} appt={appt}>
+                      <div className="min-w-[280px] bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:shadow-md hover:border-indigo-200 transition-all flex flex-col justify-between">
                          <div className="flex justify-between items-start">
                             <div>
                                <p className="text-lg font-black text-slate-900 leading-none">{appt.plate}</p>
@@ -466,6 +542,7 @@ function DayView({ currentDate, appointments, hours, onEdit, onDelete }: any) {
                             <button className="text-[10px] font-black text-indigo-600 uppercase tracking-widest hover:bg-indigo-50 px-3 py-1 rounded-lg transition-colors">Manifest</button>
                          </div>
                       </div>
+                      </DraggableAppointmentBlock>
                     )) : (
                       <div className="flex-1 border-2 border-dashed border-slate-100 rounded-3xl flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                          <button className="text-[10px] font-black text-slate-300 uppercase tracking-widest flex items-center gap-2">
@@ -474,7 +551,7 @@ function DayView({ currentDate, appointments, hours, onEdit, onDelete }: any) {
                       </div>
                     )}
                  </div>
-               </div>
+               </DroppableDayRow>
              );
            })}
         </div>
