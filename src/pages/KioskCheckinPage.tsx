@@ -31,7 +31,11 @@ export default function KioskCheckinPage() {
   const [form, setForm] = useState({
     truck_plate: "", carrier_name: "", trailer_number: "", load_type: "standard",
     direction: "INBOUND", consent: false, website: "", po_number: "", sku_summary: "",
+    personal_id_number: "", terms_accepted: false,
   });
+  // Accepting is gated on actually reaching the bottom of the terms — a
+  // checkbox alone is trivially tapped past, especially on a kiosk.
+  const [termsScrolled, setTermsScrolled] = useState(false);
 
   const stopCamera = () => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -49,7 +53,8 @@ export default function KioskCheckinPage() {
     setError("");
     setStatusToken(null);
     setStatus(null);
-    setForm({ truck_plate: "", carrier_name: "", trailer_number: "", load_type: "standard", direction: "INBOUND", consent: false, website: "", po_number: "", sku_summary: "" });
+    setForm({ truck_plate: "", carrier_name: "", trailer_number: "", load_type: "standard", direction: "INBOUND", consent: false, website: "", po_number: "", sku_summary: "", personal_id_number: "", terms_accepted: false });
+    setTermsScrolled(false);
   };
 
   // Camera only — never a file picker, so there's no path for a driver to
@@ -135,6 +140,10 @@ export default function KioskCheckinPage() {
     e.preventDefault();
     if (!form.consent) {
       setError("Please confirm you consent to data processing to continue.");
+      return;
+    }
+    if (!form.terms_accepted) {
+      setError("Please read and accept the terms and safety guidelines to continue.");
       return;
     }
     setError("");
@@ -273,6 +282,7 @@ export default function KioskCheckinPage() {
 
                 <KioskField label="Truck / trailer plate" value={form.truck_plate} onChange={(v) => setForm({ ...form, truck_plate: v.toUpperCase() })} required />
                 <KioskField label="Carrier / company" value={form.carrier_name} onChange={(v) => setForm({ ...form, carrier_name: v })} required />
+                <KioskField label="Personal identity number" value={form.personal_id_number} onChange={(v) => setForm({ ...form, personal_id_number: v })} required />
                 <KioskField label="Trailer number (optional)" value={form.trailer_number} onChange={(v) => setForm({ ...form, trailer_number: v })} />
                 <KioskField label="PO number (optional)" value={form.po_number} onChange={(v) => setForm({ ...form, po_number: v })} />
 
@@ -291,14 +301,45 @@ export default function KioskCheckinPage() {
                   </div>
                 </div>
 
-                <label className="flex items-start gap-3 text-sm text-slate-500 pt-2">
+                <div className="pt-2 space-y-3">
+                  <label className="text-sm font-bold uppercase tracking-widest text-slate-400">Terms &amp; safety guidelines</label>
+                  <div
+                    onScroll={(e) => {
+                      const el = e.currentTarget;
+                      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 8) setTermsScrolled(true);
+                    }}
+                    className="h-52 overflow-y-auto bg-slate-50 border-2 border-slate-200 rounded-2xl p-5 text-base text-slate-600 leading-relaxed space-y-3"
+                  >
+                    {/* PLACEHOLDER — replace with this facility's real terms and
+                        safety guidelines before going live. Deliberately not
+                        invented here: this text is what drivers legally accept. */}
+                    <p className="font-bold text-slate-700">[PLACEHOLDER — facility terms and safety guidelines go here]</p>
+                    <p>This facility has not yet published its terms and safety guidelines in the system. An administrator must replace this text with the real policy before this form is used for live gate entry.</p>
+                    <p>What normally belongs here: site speed limits, required personal protective equipment, permitted walking routes, trailer coupling/uncoupling rules, incident and near-miss reporting, emergency assembly points, and the facility's data retention terms.</p>
+                    <p>Scroll to the end to enable acceptance.</p>
+                    <p className="text-slate-400">— end of document —</p>
+                  </div>
+                  {!termsScrolled && <p className="text-sm text-slate-400">Scroll to the bottom of the document to continue.</p>}
+                  <label className={`flex items-start gap-3 text-sm ${termsScrolled ? "text-slate-600" : "text-slate-300"}`}>
+                    <input
+                      type="checkbox"
+                      disabled={!termsScrolled}
+                      checked={form.terms_accepted}
+                      onChange={(e) => setForm({ ...form, terms_accepted: e.target.checked })}
+                      className="mt-0.5 w-5 h-5"
+                    />
+                    <span>I have read and accept the terms and safety guidelines for entering this yard.</span>
+                  </label>
+                </div>
+
+                <label className="flex items-start gap-3 text-sm text-slate-500">
                   <input type="checkbox" checked={form.consent} onChange={(e) => setForm({ ...form, consent: e.target.checked })} className="mt-0.5 w-5 h-5" />
-                  <span>I consent to my name, phone number, and vehicle details being processed for gate access purposes.</span>
+                  <span>I consent to my name, phone number, identity number, and vehicle details being processed for gate access purposes.</span>
                 </label>
 
                 <div className="flex gap-3">
                   <KioskBackButton onClick={() => setStep("photo")} />
-                  <button type="submit" disabled={busy} className="flex-1 bg-indigo-600 text-white py-5 rounded-2xl text-xl font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                  <button type="submit" disabled={busy || !form.terms_accepted || !form.consent} className="flex-1 bg-indigo-600 text-white py-5 rounded-2xl text-xl font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                     {busy && <Loader2 size={20} className="animate-spin" />} Request entry
                   </button>
                 </div>
