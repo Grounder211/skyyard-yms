@@ -346,8 +346,6 @@ function Dashboard() {
   const [spots, setSpots] = React.useState<any[]>([]);
   const [attention, setAttention] = React.useState<any>({ critical: [], timeCritical: [], operations: [], upcoming: [] });
   const [avgDwellMinutes, setAvgDwellMinutes] = React.useState<number | null>(null);
-  const [dailyVelocity, setDailyVelocity] = React.useState(0);
-  const [today, setToday] = React.useState<{ expectedArrivals: number; noShows: number; activeMoves: number; hostlersAvailable: number; hostlersBusy: number; arrivalsNext60m: number; gateQueue: number; departuresImminent: number; criticalExceptions: number }>({ expectedArrivals: 0, noShows: 0, activeMoves: 0, hostlersAvailable: 0, hostlersBusy: 0, arrivalsNext60m: 0, gateQueue: 0, departuresImminent: 0, criticalExceptions: 0 });
   const [zones, setZones] = React.useState<{ zone: string; total: number; occupied: number }[]>([]);
   const [unresolvedSafetySpotIds, setUnresolvedSafetySpotIds] = React.useState<number[]>([]);
   const [spotsWithOpenExceptions, setSpotsWithOpenExceptions] = React.useState<number[]>([]);
@@ -357,6 +355,33 @@ function Dashboard() {
   const [detentionRisk, setDetentionRisk] = React.useState<any[]>([]);
   const [facility, setFacility] = React.useState<any>(null);
   const [selectedSpot, setSelectedSpot] = React.useState<any>(null);
+  const [bookingsToday, setBookingsToday] = React.useState(0);
+  const [activeVisitors, setActiveVisitors] = React.useState(0);
+  const [detailPanel, setDetailPanel] = React.useState<"vehicles" | "docks" | "productivity" | "bookings" | "visitors" | null>(null);
+  const [departuresToday, setDeparturesToday] = React.useState<any[] | null>(null);
+  const [bookingsList, setBookingsList] = React.useState<any[] | null>(null);
+  const [visitorsList, setVisitorsList] = React.useState<any[] | null>(null);
+  const [detailLoading, setDetailLoading] = React.useState(false);
+
+  const openDetail = async (panel: "vehicles" | "docks" | "productivity" | "bookings" | "visitors") => {
+    setDetailPanel(panel);
+    if (panel === "productivity" && departuresToday === null) {
+      setDetailLoading(true);
+      const r = await fetch("/api/admin/departures-today");
+      setDeparturesToday(r.ok ? await r.json() : []);
+      setDetailLoading(false);
+    } else if (panel === "bookings" && bookingsList === null) {
+      setDetailLoading(true);
+      const r = await fetch("/api/appointments");
+      setBookingsList(r.ok ? await r.json() : []);
+      setDetailLoading(false);
+    } else if (panel === "visitors" && visitorsList === null) {
+      setDetailLoading(true);
+      const r = await fetch("/api/visitors/active");
+      setVisitorsList(r.ok ? await r.json() : []);
+      setDetailLoading(false);
+    }
+  };
 
   React.useEffect(() => {
     fetch("/api/yard-status")
@@ -365,14 +390,14 @@ function Dashboard() {
         setStats(data.stats);
         setSpots(data.spots);
         setAvgDwellMinutes(data.avgDwellMinutes);
-        setDailyVelocity(data.dailyVelocity ?? 0);
-        setToday(data.today || { expectedArrivals: 0, noShows: 0, activeMoves: 0, hostlersAvailable: 0, hostlersBusy: 0, arrivalsNext60m: 0, gateQueue: 0, departuresImminent: 0, criticalExceptions: 0 });
         setZones(data.zones || []);
         setUnresolvedSafetySpotIds(data.unresolvedSafetySpotIds || []);
         setSpotsWithOpenExceptions(data.spotsWithOpenExceptions || []);
         setEquipment({ down: data.equipmentDown || 0, total: data.equipmentTotal || 0 });
         setUnmanagedTrailers(data.unmanagedTrailers || []);
         setFacility(data.facility || null);
+        setBookingsToday(data.bookingsToday || 0);
+        setActiveVisitors(data.activeVisitors || 0);
       });
     fetch("/api/admin/arrivals-eta").then(r => r.ok ? r.json() : null)
       .then(d => setArrivalsAtRisk((d?.arrivals || []).filter((a: any) => a.risk === "AT_RISK" || a.risk === "LATE")))
@@ -401,55 +426,22 @@ function Dashboard() {
         </div>
       </Reveal>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
         <Reveal preset="fade-up" delay={100}>
-          <StatItem icon={<Truck />} label="In-Yard" value={stats.totalTrailers ?? stats.active_trailers ?? 0} sub="Currently on site" color="indigo" to="/tracking" />
+          <StatItem icon={<Truck />} label="Vehicles in Yard" value={stats.totalTrailers ?? stats.active_trailers ?? 0} sub="Click for the list" color="indigo" onClick={() => openDetail("vehicles")} />
         </Reveal>
         <Reveal preset="fade-up" delay={150}>
-          <StatItem icon={<DoorOpen />} label="Available Docks" value={spots.filter((s:any) => s.type === 'DOCK' && s.status === 'EMPTY').length} sub="Ready for arrivals" color="teal" to="/dispatch" />
+          <StatItem icon={<DoorOpen />} label="Available Docks" value={spots.filter((s:any) => s.type === 'DOCK' && s.status === 'EMPTY').length} sub="Click for dock detail" color="teal" onClick={() => openDetail("docks")} />
         </Reveal>
         <Reveal preset="fade-up" delay={200}>
-          <StatItem icon={<Clock />} label="Avg. Dwell" value={avgDwellMinutes ?? "—"} suffix={avgDwellMinutes != null ? "m" : ""} sub={avgDwellMinutes != null ? "Today's departures" : "No departures yet today"} color="amber" to="/tracking" />
+          <StatItem icon={<Clock />} label="Productivity (Avg. Dwell)" value={avgDwellMinutes ?? "—"} suffix={avgDwellMinutes != null ? "m" : ""} sub="Arrival to departure — click for detail" color="amber" onClick={() => openDetail("productivity")} />
         </Reveal>
         <Reveal preset="fade-up" delay={250}>
-          <StatItem icon={<Activity />} label="Daily Velocity" value={dailyVelocity} sub="Departed today" color="indigo" to="/analytics" />
-        </Reveal>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        <Reveal preset="fade-up" delay={275}>
-          <StatItem icon={<Calendar />} label="Expected Arrivals Today" value={today.expectedArrivals} sub="Scheduled, not yet checked in" color="indigo" to="/calendar" />
+          <StatItem icon={<Calendar />} label="Bookings" value={bookingsToday} sub="Click for booking detail" color="indigo" onClick={() => openDetail("bookings")} />
         </Reveal>
         <Reveal preset="fade-up" delay={300}>
-          <StatItem icon={<AlertTriangle />} label="No-Shows Today" value={today.noShows} sub="Missed their grace period" color="amber" to="/calendar" />
+          <StatItem icon={<Users />} label="Visitors" value={activeVisitors} sub="Currently on site — click for detail" color="teal" onClick={() => openDetail("visitors")} />
         </Reveal>
-        <Reveal preset="fade-up" delay={325}>
-          <StatItem icon={<ArrowRightLeft />} label="Active Moves" value={today.activeMoves} sub="In the dispatch queue" color="indigo" to="/dispatch" />
-        </Reveal>
-        <Reveal preset="fade-up" delay={350}>
-          <StatItem icon={<Users />} label="Hostlers Available" value={today.hostlersAvailable} sub={`${today.hostlersBusy} busy right now`} color="teal" to="/dispatch" />
-        </Reveal>
-      </div>
-
-      <div>
-        <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3">Live Yard Status — Next 60 Minutes</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
-          <Reveal preset="fade-up" delay={375}>
-            <StatItem icon={<DoorOpen />} label="Gate Queue" value={today.gateQueue} sub="Waiting for approval" color={today.gateQueue > 0 ? "amber" : "teal"} to="/gate" />
-          </Reveal>
-          <Reveal preset="fade-up" delay={400}>
-            <StatItem icon={<Percent />} label="Dock Utilization" value={spots.filter((s: any) => s.type === "DOCK").length ? Math.round((spots.filter((s: any) => s.type === "DOCK" && s.status === "OCCUPIED").length / spots.filter((s: any) => s.type === "DOCK").length) * 100) : 0} suffix="%" sub="Docks occupied" color="indigo" to="/dispatch" />
-          </Reveal>
-          <Reveal preset="fade-up" delay={425}>
-            <StatItem icon={<Calendar />} label="Arrivals Next 60m" value={today.arrivalsNext60m} sub="Scheduled to arrive soon" color="indigo" to="/calendar" />
-          </Reveal>
-          <Reveal preset="fade-up" delay={450}>
-            <StatItem icon={<LogOut />} label="Departures Imminent" value={today.departuresImminent} sub="Out-pass issued, not yet exited" color="teal" to="/gate" />
-          </Reveal>
-          <Reveal preset="fade-up" delay={475}>
-            <StatItem icon={<ShieldAlert />} label="Critical Exceptions" value={today.criticalExceptions} sub="Unresolved right now" color={today.criticalExceptions > 0 ? "amber" : "teal"} to="/exceptions" />
-          </Reveal>
-        </div>
       </div>
 
       {facility && (
@@ -682,6 +674,128 @@ function Dashboard() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <AnimatePresence>
+        {detailPanel && (
+          <motion.div
+            className="fixed inset-0 z-[9998] bg-black/60 backdrop-blur-sm flex justify-end"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => setDetailPanel(null)}
+          >
+            <motion.div
+              className="bg-white border-l border-[var(--outline-variant)]/30 p-8 max-w-2xl w-full h-full shadow-2xl overflow-y-auto custom-scrollbar"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="font-bold text-xl text-[var(--on-surface)]" style={{ fontFamily: "var(--font-heading)" }}>
+                  {detailPanel === "vehicles" && "Vehicles in the yard"}
+                  {detailPanel === "docks" && "Docks"}
+                  {detailPanel === "productivity" && "Productivity — today's completed visits"}
+                  {detailPanel === "bookings" && "Bookings"}
+                  {detailPanel === "visitors" && "Visitors on site"}
+                </h3>
+                <button onClick={() => setDetailPanel(null)} className="text-[var(--on-surface-variant)] hover:text-black transition-colors">
+                  <X size={20} />
+                </button>
+              </div>
+
+              {detailLoading && <p className="text-sm text-slate-400 py-8 text-center">Loading...</p>}
+
+              {!detailLoading && detailPanel === "vehicles" && (
+                <DetailTable
+                  columns={["Plate", "Carrier", "Spot", "Equipment", "Cargo status", "On site"]}
+                  rows={spots.filter((s: any) => s.plate).map((s: any) => [
+                    s.plate, s.carrier || "—", s.name, s.equipment_type || "standard", s.cargo_status || "expected",
+                    s.checked_in_at || s.check_in_time ? timeAgo(s.checked_in_at || s.check_in_time) : "—",
+                  ])}
+                  empty="No vehicles in the yard right now."
+                />
+              )}
+
+              {!detailLoading && detailPanel === "docks" && (
+                <DetailTable
+                  columns={["Dock", "Zone", "Status", "Vehicle", "Carrier", "Cargo status"]}
+                  rows={spots.filter((s: any) => s.type === "DOCK").map((s: any) => [
+                    s.name, s.zone_name || "—", s.plate ? "Occupied" : "Available",
+                    s.plate || "—", s.carrier || "—", s.plate ? (s.cargo_status || "expected") : "—",
+                  ])}
+                  empty="No docks configured."
+                />
+              )}
+
+              {!detailLoading && detailPanel === "productivity" && (
+                <DetailTable
+                  columns={["Plate", "Carrier", "Load type", "Driver", "Phone", "Arrived", "Departed", "Dwell"]}
+                  rows={(departuresToday || []).map((d: any) => [
+                    d.plate, d.carrier || "—", d.loadType || "—", d.driverName || "—", d.driverPhone || "—",
+                    d.arrivedAt ? new Date(d.arrivedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—",
+                    d.departedAt ? new Date(d.departedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—",
+                    d.dwellMinutes != null ? `${d.dwellMinutes}m` : "—",
+                  ])}
+                  empty="No completed visits yet today — productivity is measured from arrival to departure."
+                />
+              )}
+
+              {!detailLoading && detailPanel === "bookings" && (
+                <DetailTable
+                  columns={["Plate", "Carrier", "Driver", "Phone", "Arriving", "Dock", "Load type", "Status"]}
+                  rows={(bookingsList || []).map((b: any) => [
+                    b.plate || "—", b.carrier || "—", b.driver_name || "—", b.driver_phone || "—",
+                    b.start_time ? new Date(b.start_time).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—",
+                    b.dock_name || "Unassigned", b.load_type || "—", b.health || b.status || "—",
+                  ])}
+                  empty="No bookings scheduled for today."
+                />
+              )}
+
+              {!detailLoading && detailPanel === "visitors" && (
+                <DetailTable
+                  columns={["Name", "Company", "Host", "Purpose", "Checked in", "Expected duration"]}
+                  rows={(visitorsList || []).map((v: any) => [
+                    v.name, v.company || "—", v.host_name || "—", v.purpose || "—",
+                    v.checked_in_at ? new Date(v.checked_in_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—",
+                    v.expected_duration_minutes ? `${v.expected_duration_minutes}m` : "—",
+                  ])}
+                  empty="No visitors on site right now."
+                />
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function DetailTable({ columns, rows, empty }: { columns: string[]; rows: (string | number)[][]; empty: string }) {
+  if (rows.length === 0) return <p className="text-sm text-slate-400 py-8 text-center">{empty}</p>;
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="border-b border-[var(--outline-variant)]/40">
+            {columns.map((c) => (
+              <th key={c} className="text-left text-[10px] font-bold uppercase tracking-widest text-slate-400 pb-2 pr-4 whitespace-nowrap">{c}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} className="border-b border-[var(--outline-variant)]/15 last:border-0">
+              {r.map((cell, j) => (
+                <td key={j} className={`py-2.5 pr-4 whitespace-nowrap ${j === 0 ? "font-bold text-[var(--on-surface)]" : "text-[var(--on-surface-variant)]"}`}>{cell}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -696,7 +810,7 @@ function DetailRow({ label, value }: { label: string; value?: string | number | 
   );
 }
 
-function StatItem({ icon, label, value, suffix = "", sub, color, to }: any) {
+function StatItem({ icon, label, value, suffix = "", sub, color, to, onClick }: any) {
   const tilt = use3DTilt(5);
   // Mapped to the Stitch reference's metric-card language: colored
   // left border + a matching soft icon chip, not a full-tint card.
@@ -707,16 +821,17 @@ function StatItem({ icon, label, value, suffix = "", sub, color, to }: any) {
   };
   const c = colors[color] || colors.indigo;
   // Command Center spec: "each KPI must be clickable" — drills into the
-  // page that actually explains the number, instead of a dead-end card.
-  const Wrapper: any = to ? Link : "div";
-  const wrapperProps = to ? { to } : {};
+  // page (or, for onClick, a detail panel) that actually explains the
+  // number, instead of a dead-end card.
+  const Wrapper: any = to ? Link : onClick ? "button" : "div";
+  const wrapperProps = to ? { to } : onClick ? { onClick, type: "button" } : {};
   return (
     <Wrapper
       {...wrapperProps}
       ref={tilt.ref}
       onMouseMove={tilt.onMouseMove}
       onMouseLeave={tilt.onMouseLeave}
-      className={`bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 border-l-4 ${c.border} p-6 rounded-sm shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 flex flex-col gap-3 group ${to ? "cursor-pointer" : ""}`}
+      className={`bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 border-l-4 ${c.border} p-6 rounded-sm shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 flex flex-col gap-3 group text-left w-full ${to || onClick ? "cursor-pointer" : ""}`}
       style={{ transformStyle: "preserve-3d" }}
     >
       <div className={`w-10 h-10 rounded-sm flex items-center justify-center ${c.chip} group-hover:scale-105 transition-transform`} style={{ transform: "translateZ(20px)" }}>

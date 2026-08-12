@@ -191,10 +191,15 @@ async function startServer() {
     // constants (42 and 128) — never computed from anything, displayed as
     // if real on the very first screen a manager sees. Real numbers,
     // computed from today's actual departures.
+    // Sourced from gate_passes (issued_at -> exited_at), the same rows the
+    // Productivity drill-down lists. Previously this read trailers'
+    // checked_in_at/checked_out_at instead, so the headline average and
+    // its own detail table could disagree — a visit visible in the
+    // breakdown wasn't counted in the number above it.
     const todayStart = new Date();
     todayStart.setUTCHours(0, 0, 0, 0);
-    const { data: departedToday } = await db.from("trailers").select("checked_in_at, checked_out_at").eq("facility_id", facilityId).not("checked_out_at", "is", null).gte("checked_out_at", todayStart.toISOString());
-    const dwellSamples = (departedToday || []).filter((t: any) => t.checked_in_at).map((t: any) => (new Date(t.checked_out_at).getTime() - new Date(t.checked_in_at).getTime()) / 60000);
+    const { data: departedToday } = await db.from("gate_passes").select("issued_at, exited_at").eq("facility_id", facilityId).eq("stage", "EXITED").not("exited_at", "is", null).gte("exited_at", todayStart.toISOString());
+    const dwellSamples = (departedToday || []).filter((p: any) => p.issued_at).map((p: any) => (new Date(p.exited_at).getTime() - new Date(p.issued_at).getTime()) / 60000);
     const avgDwellMinutes = dwellSamples.length ? Math.round(dwellSamples.reduce((a, b) => a + b, 0) / dwellSamples.length) : null;
     const dailyVelocity = (departedToday || []).length;
 
@@ -219,11 +224,15 @@ async function startServer() {
     const nowIso = new Date().toISOString();
     const in60Iso = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     const arrivalsNext60m = countExpectedArrivalsToday(todaysAppointments || [], nowIso, in60Iso);
-    const [{ count: gateQueue }, { count: departuresImminent }, { count: criticalExceptions }] = await Promise.all([
+    const [{ count: gateQueue }, { count: departuresImminent }, { count: criticalExceptions }, { count: activeVisitors }] = await Promise.all([
       db.from("walkin_registrations").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("status", "pending_approval"),
       db.from("gate_passes").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("stage", "OUT_PASS"),
       db.from("exceptions").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("severity", "critical").neq("status", "resolved"),
+      db.from("visitors").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).is("checked_out_at", null),
     ]);
+    // A cancelled slot isn't "a booking we have" anymore — same status
+    // filter the Calendar's own listing query already uses.
+    const bookingsToday = (todaysAppointments || []).filter((a: any) => a.status !== "CANCELLED").length;
     const today = {
       expectedArrivals: countExpectedArrivalsToday(todaysAppointments || [], todayStart.toISOString(), todayEnd),
       noShows: countTodayNoShows(todaysAppointments || [], todayStart.toISOString()),
@@ -271,6 +280,7 @@ async function startServer() {
       stats: statsData, spots: flatSpots, moves, detentionThresholdHours: fSettings?.detention_threshold_hours || 24,
       avgDwellMinutes, dailyVelocity, today, zones, unresolvedSafetySpotIds, equipmentDown,
       equipmentTotal: (equipmentRows || []).length, spotsWithOpenExceptions, unmanagedTrailers,
+      bookingsToday, activeVisitors: activeVisitors || 0,
       facility: { name: facilityRow?.name || "Facility", ...facilityCoords },
     };
   };
@@ -950,13 +960,16 @@ async function startServer() {
       // carrier flagging, the blacklist check every gate flow already
       // reuses). No traffic/GPS dependency, no invented numbers.
       const carrierNames = Array.from(new Set((data || []).map((a: any) => a.carrier).filter(Boolean)));
-      const [{ data: flaggedCarriers }, { count: gateQueueDepth }] = await Promise.all([
+      const driverIds = Array.from(new Set((data || []).map((a: any) => a.driver_id).filter(Boolean)));
+      const [{ data: flaggedCarriers }, { count: gateQueueDepth }, { data: driverRows }] = await Promise.all([
         carrierNames.length
           ? db.from("carriers").select("name").in("name", carrierNames).eq("flagged", true)
           : Promise.resolve({ data: [] as any[] }),
         db.from("walkin_registrations").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("status", "pending_approval"),
+        driverIds.length ? db.from("drivers").select("id, name, phone").in("id", driverIds) : Promise.resolve({ data: [] as any[] }),
       ]);
       const flaggedNameSet = new Set((flaggedCarriers || []).map((c: any) => c.name));
+      const driverMap = new Map((driverRows || []).map((d: any) => [d.id, d]));
       const nowIso = new Date().toISOString();
       const rows = await Promise.all((data || []).map(async (a: any) => {
         const blacklistHit = await checkBlacklist(facilityId, a.plate, a.carrier);
@@ -966,7 +979,8 @@ async function startServer() {
           nowIso,
           { gateQueueDepth: gateQueueDepth || 0 }
         );
-        return { ...a, dock_name: a.spots?.name, health: health.status, health_reason: health.reason };
+        const driver = a.driver_id ? driverMap.get(a.driver_id) : null;
+        return { ...a, dock_name: a.spots?.name, health: health.status, health_reason: health.reason, driver_name: driver?.name || null, driver_phone: driver?.phone || null };
       }));
       res.json(rows);
     } catch (e: any) {
@@ -2421,6 +2435,48 @@ async function startServer() {
         safetyIncidents: safetyIncidents || 0,
         exceptions: exceptions || 0,
       });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Dashboard's Productivity KPI is one number (avg dwell). Clicking through
+  // needs the actual per-vehicle breakdown behind it — gate_passes already
+  // tracks the full visit (issued_at -> exited_at) plus driver_id, so this
+  // is a join, not a new data model.
+  app.get("/api/admin/departures-today", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
+    const facilityId = req.facilityId;
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+    try {
+      const { data: passes } = await db
+        .from("gate_passes")
+        .select("plate, carrier_name, issued_at, exited_at, driver_id, trailer_id")
+        .eq("facility_id", facilityId)
+        .eq("stage", "EXITED")
+        .gte("exited_at", todayStart.toISOString())
+        .order("exited_at", { ascending: false });
+
+      const driverIds = [...new Set((passes || []).map((p: any) => p.driver_id).filter(Boolean))];
+      const trailerIds = [...new Set((passes || []).map((p: any) => p.trailer_id).filter(Boolean))];
+      const [{ data: drivers }, { data: trailers }] = await Promise.all([
+        driverIds.length ? db.from("drivers").select("id, name, phone").in("id", driverIds) : Promise.resolve({ data: [] as any[] }),
+        trailerIds.length ? db.from("trailers").select("id, equipment_type").in("id", trailerIds) : Promise.resolve({ data: [] as any[] }),
+      ]);
+      const driverMap = new Map((drivers || []).map((d: any) => [d.id, d]));
+      const trailerMap = new Map((trailers || []).map((t: any) => [t.id, t]));
+
+      const rows = (passes || []).map((p: any) => {
+        const driver = p.driver_id ? driverMap.get(p.driver_id) : null;
+        const trailer = p.trailer_id ? trailerMap.get(p.trailer_id) : null;
+        const dwellMinutes = p.issued_at && p.exited_at ? Math.round((new Date(p.exited_at).getTime() - new Date(p.issued_at).getTime()) / 60000) : null;
+        return {
+          plate: p.plate, carrier: p.carrier_name, arrivedAt: p.issued_at, departedAt: p.exited_at,
+          dwellMinutes, loadType: trailer?.equipment_type || null,
+          driverName: driver?.name || null, driverPhone: driver?.phone || null,
+        };
+      });
+      res.json(rows);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
