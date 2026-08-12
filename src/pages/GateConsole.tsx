@@ -112,6 +112,7 @@ export default function GateConsole() {
 
   const [pendingApprovals, setPendingApprovals] = useState<any[]>([]);
   const [approvalBusy, setApprovalBusy] = useState<number | null>(null);
+  const [manualSpotFor, setManualSpotFor] = useState<number | null>(null);
 
   const loadPendingApprovals = async () => {
     try {
@@ -120,16 +121,24 @@ export default function GateConsole() {
     } catch {}
   };
 
-  const approveEntry = async (id: number) => {
+  // spotId omitted = let the backend pick (free dock first, parking only
+  // if every dock is busy). Passing one is the manual override.
+  const approveEntry = async (id: number, spotId?: number) => {
     setApprovalBusy(id);
-    const res = await fetch(`/api/admin/walkin/${id}/approve`, { method: "POST" });
+    const res = await fetch(`/api/admin/walkin/${id}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(spotId != null ? { spotId } : {}),
+    });
     setApprovalBusy(null);
     if (res.ok) {
       const data = await res.json();
       toast(data.spotName ? `Approved — assigned to ${data.spotName}` : "Approved — queued, yard full", "success");
+      setManualSpotFor(null);
       loadPendingApprovals();
     } else {
-      toast("Failed to approve", "error");
+      const d = await res.json().catch(() => ({}));
+      toast(d.error || "Failed to approve", "error");
     }
   };
 
@@ -446,6 +455,7 @@ export default function GateConsole() {
                   <div className="min-w-0">
                     <p className="font-bold text-slate-900 text-sm truncate">{w.truck_plate} — {w.carrier_name}</p>
                     <p className="text-xs text-slate-400">{w.driver_name} · {w.load_type} · WK-{w.id} · {new Date(w.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
+                    {w.personal_id_number && <p className="text-xs text-slate-400">ID: {w.personal_id_number}{w.terms_accepted_at ? " · terms accepted" : ""}</p>}
                   </div>
                 </div>
                 <div className="flex gap-2 shrink-0">
@@ -457,12 +467,43 @@ export default function GateConsole() {
                     Deny
                   </button>
                   <button
+                    onClick={() => setManualSpotFor(manualSpotFor === w.id ? null : w.id)}
+                    disabled={approvalBusy === w.id}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all disabled:opacity-50"
+                  >
+                    Choose spot
+                  </button>
+                  <button
                     onClick={() => approveEntry(w.id)}
                     disabled={approvalBusy === w.id}
                     className="px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-1"
                   >
                     {approvalBusy === w.id && <Loader2 size={11} className="animate-spin" />} Approve
                   </button>
+                </div>
+              </div>
+            ))}
+            {pendingApprovals.map((w: any) => manualSpotFor === w.id && (
+              <div key={`manual-${w.id}`} className="bg-white border border-indigo-200 rounded-xl px-4 py-3">
+                <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400 mb-2">
+                  Assign {w.truck_plate} manually — otherwise Approve picks the first free dock, or parking if all docks are busy
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {(yard.spots || []).filter((s: any) => s.status === "EMPTY").map((s: any) => (
+                    <button
+                      key={s.id}
+                      onClick={() => approveEntry(w.id, s.id)}
+                      disabled={approvalBusy === w.id}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50 ${
+                        s.type === "DOCK" ? "bg-teal-50 text-teal-700 hover:bg-teal-100" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      }`}
+                    >
+                      {s.name} · {s.type === "DOCK" ? "Dock" : "Parking"}
+                    </button>
+                  ))}
+                  {(yard.spots || []).filter((s: any) => s.status === "EMPTY").length === 0 && (
+                    <p className="text-xs text-slate-400">No free spots — approving will queue this driver.</p>
+                  )}
                 </div>
               </div>
             ))}

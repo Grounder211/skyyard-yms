@@ -1269,14 +1269,21 @@ async function startServer() {
     return pass;
   };
 
-  const approveWalkin = async (walkinId: number, adminUserId: number | null, facilityId: number): Promise<{ ok: boolean; error?: string; spotName?: string | null }> => {
+  const approveWalkin = async (walkinId: number, adminUserId: number | null, facilityId: number, spotId?: number | null): Promise<{ ok: boolean; error?: string; spotName?: string | null }> => {
     const { data: walkin } = await db.from("walkin_registrations").select("*").eq("id", walkinId).eq("facility_id", facilityId).maybeSingle();
     if (!walkin) return { ok: false, error: "Not found" };
     if (walkin.status !== "pending_approval") return { ok: false, error: `Already ${walkin.status}` };
 
-    const { data: assign } = await db.rpc("walkin_autoassign_tx", {
-      p_walkin_id: walkin.id, p_truck_plate: walkin.truck_plate, p_carrier_name: walkin.carrier_name, p_facility_id: facilityId,
+    // No spotId = let the engine pick (a free dock first, parking only if
+    // every dock is busy). A spotId means the admin/guard overrode it.
+    const { data: assign } = await db.rpc("walkin_assign_spot_tx", {
+      p_walkin_id: walkin.id, p_truck_plate: walkin.truck_plate, p_carrier_name: walkin.carrier_name,
+      p_facility_id: facilityId, p_spot_id: spotId ?? null,
     });
+
+    if (!assign?.assigned && assign?.reason === "SPOT_UNAVAILABLE") {
+      return { ok: false, error: "That spot was taken while you were deciding — pick another." };
+    }
 
     if (assign?.assigned) {
       await db.from("walkin_registrations").update({ reviewed_by: adminUserId, reviewed_at: new Date().toISOString() }).eq("id", walkinId);
@@ -1308,13 +1315,18 @@ async function startServer() {
   };
 
   app.post("/api/public/walkin-checkin", requireDriverAuth, publicWalkinLimiter, async (req: any, res) => {
-    const { truck_plate, carrier_name, trailer_number, load_type, direction, consent, website, po_number, sku_summary, photo_base64 } = req.body;
+    const { truck_plate, carrier_name, trailer_number, load_type, direction, consent, website, po_number, sku_summary, photo_base64, personal_id_number, terms_accepted } = req.body;
     const facilityId = req.body.facility_id || 1;
 
     // Honeypot: a hidden field real drivers never see or fill; only bots fill every field.
     if (website) return res.status(400).json({ error: "Invalid submission" });
     if (!truck_plate || !carrier_name) return res.status(400).json({ error: "Plate and carrier are required" });
     if (consent !== true) return res.status(400).json({ error: "Consent to data processing is required" });
+    if (!personal_id_number) return res.status(400).json({ error: "Personal identity number is required" });
+    // Enforced server-side too: the frontend only enables the button after
+    // the driver scrolls through, but that's a UX affordance, not a
+    // guarantee — this is the record that they actually accepted.
+    if (terms_accepted !== true) return res.status(400).json({ error: "You must accept the terms and safety guidelines" });
 
     // Kiosk camera capture only — never a file upload. A data: URL under
     // ~1.5MB is a plausible compressed webcam snapshot; anything else (a
@@ -1346,6 +1358,7 @@ async function startServer() {
         trailer_number: trailer_number || null, load_type, direction, status: "pending_approval",
         driver_id: driver.id, facility_id: facilityId, source: "self_service_qr", consent_given: true,
         po_number: po_number || null, sku_summary: sku_summary || null, photo_url: photoUrl,
+        personal_id_number, terms_accepted_at: new Date().toISOString(),
       }).select("id, status_token").single();
       if (error) throw error;
 
@@ -1385,7 +1398,8 @@ async function startServer() {
   });
 
   app.post("/api/admin/walkin/:id/approve", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
-    const result = await approveWalkin(Number(req.params.id), req.session.user.id, req.facilityId);
+    const spotId = req.body?.spotId != null ? Number(req.body.spotId) : null;
+    const result = await approveWalkin(Number(req.params.id), req.session.user.id, req.facilityId, spotId);
     if (!result.ok) return res.status(400).json({ error: result.error });
     res.json({ success: true, spotName: result.spotName });
   });

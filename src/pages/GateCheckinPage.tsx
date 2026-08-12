@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Warehouse, KeyRound, Loader2, Truck, CheckCircle2 } from "lucide-react";
+import { Warehouse, KeyRound, Loader2, Truck, CheckCircle2, IdCard } from "lucide-react";
 import PhoneInput, { toE164 } from "../components/PhoneInput";
 
 const LOAD_TYPES = ["standard", "reefer", "flatbed", "tanker", "hazmat", "oversized"];
@@ -23,8 +23,11 @@ export default function GateCheckinPage() {
   const [form, setForm] = useState({
     truck_plate: "", carrier_name: "", trailer_number: "", load_type: "standard",
     direction: "INBOUND", consent: false, website: "", // website = honeypot, never shown
-    po_number: "", sku_summary: "",
+    po_number: "", sku_summary: "", personal_id_number: "", terms_accepted: false,
   });
+  // Accepting is gated on actually reaching the bottom of the terms — a
+  // checkbox alone is trivially clicked past without reading.
+  const [termsScrolled, setTermsScrolled] = useState(false);
 
   const requestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,6 +67,10 @@ export default function GateCheckinPage() {
     e.preventDefault();
     if (!form.consent) {
       setError("Please confirm you consent to data processing to continue.");
+      return;
+    }
+    if (!form.terms_accepted) {
+      setError("Please read and accept the terms and safety guidelines to continue.");
       return;
     }
     setError("");
@@ -140,6 +147,10 @@ export default function GateCheckinPage() {
                 <input required value={form.carrier_name} onChange={(e) => setForm({ ...form, carrier_name: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm" />
               </div>
               <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5"><IdCard size={12} /> Personal identity number</label>
+                <input required value={form.personal_id_number} onChange={(e) => setForm({ ...form, personal_id_number: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm" />
+              </div>
+              <div className="space-y-1.5">
                 <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Trailer number (optional)</label>
                 <input value={form.trailer_number} onChange={(e) => setForm({ ...form, trailer_number: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm" />
               </div>
@@ -166,13 +177,44 @@ export default function GateCheckinPage() {
                 <input value={form.sku_summary} onChange={(e) => setForm({ ...form, sku_summary: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm" />
               </div>
 
-              <label className="flex items-start gap-2.5 text-xs text-slate-500 pt-2">
+              <div className="pt-2 space-y-2">
+                <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Terms &amp; safety guidelines</label>
+                <div
+                  onScroll={(e) => {
+                    const el = e.currentTarget;
+                    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 8) setTermsScrolled(true);
+                  }}
+                  className="h-44 overflow-y-auto bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-600 leading-relaxed space-y-3"
+                >
+                  {/* PLACEHOLDER — replace with this facility's real terms and
+                      safety guidelines before going live. Deliberately not
+                      invented here: this text is what drivers legally accept. */}
+                  <p className="font-bold text-slate-700">[PLACEHOLDER — facility terms and safety guidelines go here]</p>
+                  <p>This facility has not yet published its terms and safety guidelines in the system. An administrator must replace this text with the real policy before this form is used for live gate entry.</p>
+                  <p>What normally belongs here: site speed limits, required personal protective equipment, permitted walking routes, trailer coupling/uncoupling rules, incident and near-miss reporting, emergency assembly points, and the facility's data retention terms.</p>
+                  <p>Scroll to the end to enable acceptance.</p>
+                  <p className="text-slate-400">— end of document —</p>
+                </div>
+                {!termsScrolled && <p className="text-[11px] text-slate-400">Scroll to the bottom of the document to continue.</p>}
+                <label className={`flex items-start gap-2.5 text-xs ${termsScrolled ? "text-slate-600" : "text-slate-300"}`}>
+                  <input
+                    type="checkbox"
+                    disabled={!termsScrolled}
+                    checked={form.terms_accepted}
+                    onChange={(e) => setForm({ ...form, terms_accepted: e.target.checked })}
+                    className="mt-0.5"
+                  />
+                  <span>I have read and accept the terms and safety guidelines for entering this yard.</span>
+                </label>
+              </div>
+
+              <label className="flex items-start gap-2.5 text-xs text-slate-500">
                 <input type="checkbox" checked={form.consent} onChange={(e) => setForm({ ...form, consent: e.target.checked })} className="mt-0.5" />
-                <span>I consent to my name, phone number, and vehicle details being processed for gate access purposes, retained per the facility's data retention policy. See <a href="/privacy" className="text-indigo-600 underline">privacy request page</a>.</span>
+                <span>I consent to my name, phone number, identity number, and vehicle details being processed for gate access purposes, retained per the facility's data retention policy. See <a href="/privacy" className="text-indigo-600 underline">privacy request page</a>.</span>
               </label>
 
-              <button type="submit" disabled={busy} className="w-full bg-indigo-600 text-white py-3 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
-                {busy && <Loader2 size={14} className="animate-spin" />} Request entry
+              <button type="submit" disabled={busy || !form.terms_accepted || !form.consent} className="w-full bg-indigo-600 text-white py-3 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                {busy && <Loader2 size={14} className="animate-spin" />} Register &amp; request entry
               </button>
             </form>
           )}
