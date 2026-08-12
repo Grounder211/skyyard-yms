@@ -367,7 +367,7 @@ git commit -m "feat: single-slot dock availability endpoint for the assign popov
 - Produces route: `POST /api/admin/booking-requests/:id/assign` (requireRole superadmin/ADMIN/GUARD) — body `{ start_time: string; dock_id: number }`, returns `{ success: true }` or `409 { error }` on conflict.
 - Modifies: the existing `notify()` closure (server.ts:468) gains an optional `forceEmail` param.
 
-**Why Step 1 below is necessary:** `notify()` (server.ts:468-511) looks up `notification_preferences` by `(user_id, user_type, event_type)` and defaults to `{ channel_sms: 1, channel_email: 0, channel_inapp: true }` when no row exists. `recipientType: "carrier"` has never been used before this feature, so no preference row will ever exist for it — meaning `prefs.channel_email` stays `0` and the email branch (`if (prefs.channel_email && data.email)`) never fires, silently dropping the booking-confirmed email even though `data.email` is populated. Since the user explicitly requires this email and there's no admin UI anywhere in this app for carriers to manage notification preferences, the correct fix is a per-call opt-in override, not a global default change (which would also turn on email for every other existing recipient type/event that relies on the SMS-only default).
+**Why Step 1 below is necessary:** `notify()` (server.ts:468-511) looks up `notification_preferences` by `(user_id, user_type, event_type)` and defaults to `{ channel_sms: 1, channel_email: 0, channel_inapp: true }` when no row exists. `recipientType: "CARRIER"` (the existing convention in this file — e.g. `DETENTION_DISPUTE_RESOLVED`, `VEHICLE_INSPECTION_EXPIRING`) has never had a `notification_preferences` row seeded for it, so no preference row will ever exist for it — meaning `prefs.channel_email` stays `0` and the email branch (`if (prefs.channel_email && data.email)`) never fires, silently dropping the booking-confirmed email even though `data.email` is populated. Since the user explicitly requires this email and there's no admin UI anywhere in this app for carriers to manage notification preferences, the correct fix is a per-call opt-in override, not a global default change (which would also turn on email for every other existing recipient type/event that relies on the SMS-only default).
 
 - [ ] **Step 1: Add a `forceEmail` override to `notify()`**
 
@@ -433,7 +433,7 @@ Insert directly after the `/api/admin/booking-slot-availability` route added in 
         const { data: carrier } = await db.from("carriers").select("email, contact_phone").eq("id", appt.carrier_id).maybeSingle();
         const { data: dock } = await db.from("spots").select("name").eq("id", dock_id).maybeSingle();
         notify({
-          type: "BOOKING_CONFIRMED", recipientType: "carrier", recipientId: appt.carrier_id, forceEmail: true,
+          type: "BOOKING_CONFIRMED", recipientType: "CARRIER", recipientId: appt.carrier_id, forceEmail: true,
           data: {
             phone: carrier?.contact_phone, email: carrier?.email, title: "Booking confirmed",
             body: `SkyYard: ${appt.plate} is booked for ${new Date(start_time).toLocaleString()} at ${dock?.name || "a dock"}.`,
@@ -480,7 +480,7 @@ git commit -m "feat: assign a booking request to a slot, notify the carrier"
 - Modify: `server.ts`
 
 **Interfaces:**
-- Consumes: `notify()`'s `forceEmail?: boolean` param, added in Task 5 Step 1 — pass `forceEmail: true` so the email queues even though no `notification_preferences` row exists yet for `recipientType: "carrier"`.
+- Consumes: `notify()`'s `forceEmail?: boolean` param, added in Task 5 Step 1 — pass `forceEmail: true` so the email queues even though no `notification_preferences` row exists yet for `recipientType: "CARRIER"`.
 - Produces route: `POST /api/appointments/:id/reschedule` (requireRole superadmin/ADMIN/GUARD) — body `{ start_time: string }`, returns `{ success: true }` or `409 { error }`.
 
 - [ ] **Step 1: Add the route**
@@ -522,7 +522,7 @@ Insert directly after the route added in Task 5:
       if (appt.carrier_id) {
         const { data: carrier } = await db.from("carriers").select("email, contact_phone").eq("id", appt.carrier_id).maybeSingle();
         notify({
-          type: "BOOKING_SWAPPED", recipientType: "carrier", recipientId: appt.carrier_id, forceEmail: true,
+          type: "BOOKING_SWAPPED", recipientType: "CARRIER", recipientId: appt.carrier_id, forceEmail: true,
           data: {
             phone: carrier?.contact_phone, email: carrier?.email, title: "Booking time changed",
             body: `SkyYard: ${appt.plate}'s booking moved from ${new Date(oldStartTime).toLocaleString()} to ${new Date(start_time).toLocaleString()}.`,
