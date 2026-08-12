@@ -40,13 +40,18 @@ export default function BookingAssignPopover({
     setBusy(true);
     const url = mode === "assign" ? `/api/admin/booking-requests/${requestId}/assign` : `/api/appointments/${appointmentId}/reschedule`;
     const body = mode === "assign" ? { start_time: dropTime, dock_id: selectedDockId } : { start_time: dropTime };
-    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    setBusy(false);
-    if (res.ok) {
-      onConfirm();
-    } else {
-      const d = await res.json().catch(() => ({}));
-      setError(d.error || "Failed");
+    try {
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (res.ok) {
+        onConfirm();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed");
+      }
+    } catch {
+      setError("Network error — check your connection and try again");
+    } finally {
+      setBusy(false);
     }
   };
 
