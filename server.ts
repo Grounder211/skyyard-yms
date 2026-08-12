@@ -465,7 +465,7 @@ async function startServer() {
   };
 
   // In-app + queued (SMS/email) notifications
-  const notify = async ({ type, recipientType, recipientId, data }: any) => {
+  const notify = async ({ type, recipientType, recipientId, data, forceEmail }: any) => {
     try {
       let prefs: any = { channel_sms: 1, channel_email: 0, channel_inapp: true };
       if (recipientId) {
@@ -497,7 +497,7 @@ async function startServer() {
           payload_json: { phone: data.phone, message: data.body },
         });
       }
-      if (prefs.channel_email && data.email) {
+      if ((prefs.channel_email || forceEmail) && data.email) {
         await db.from("notifications_queue").insert({
           type, recipient_type: recipientType, recipient_id: recipientId, channel: "email",
           payload_json: { to: data.email, subject: data.title, body: data.body },
@@ -3349,6 +3349,55 @@ async function startServer() {
 
       results.sort((a, b) => (a.available === b.available ? b.score - a.score : a.available ? -1 : 1));
       res.json(results);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Confirming the assign popover — the popover already showed the admin
+  // a ranked, conflict-checked dock list (booking-slot-availability), so
+  // this re-checks the one chosen dock is still free (it may not be, if
+  // someone else assigned it in the meantime) and commits.
+  app.post("/api/admin/booking-requests/:id/assign", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
+    const { start_time, dock_id } = req.body;
+    const facilityId = req.facilityId;
+    if (!start_time || !dock_id) return res.status(400).json({ error: "start_time and dock_id are required" });
+
+    try {
+      const { data: appt } = await db.from("appointments").select("*").eq("id", req.params.id).eq("facility_id", facilityId).maybeSingle();
+      if (!appt) return res.status(404).json({ error: "Booking request not found" });
+      if (appt.status !== "REQUESTED") return res.status(400).json({ error: `Already ${appt.status}` });
+
+      const endTime = estimateEndTime(start_time, appt.load_type, appt.load_weight_kg);
+      const date = String(start_time).slice(0, 10);
+      const [{ data: dockRule }, { data: dayAppointments }] = await Promise.all([
+        db.from("dock_rules").select("allowed_equipment_types").eq("facility_id", facilityId).eq("dock_door_id", dock_id).maybeSingle(),
+        db.from("appointments").select("dock_id, start_time, end_time, load_type, status").eq("facility_id", facilityId).neq("status", "CANCELLED").neq("id", appt.id)
+          .gte("start_time", `${date}T00:00:00`).lte("start_time", `${date}T23:59:59`),
+      ]);
+      const conflict = findDockConflict({ dock_id, start_time, end_time: endTime, load_type: appt.load_type }, (dayAppointments || []) as any, dockRule?.allowed_equipment_types || null);
+      if (conflict) return res.status(409).json({ error: conflict.reason });
+
+      const { error } = await db.from("appointments").update({ start_time, end_time: endTime, dock_id, status: "SCHEDULED" }).eq("id", appt.id);
+      if (error) throw error;
+
+      logAudit({ action: "BOOKING_REQUEST_ASSIGNED", entityType: "APPOINTMENT", entityId: String(appt.id), details: { start_time, dock_id }, ip: req.ip, facility_id: facilityId });
+
+      if (appt.carrier_id) {
+        const { data: carrier } = await db.from("carriers").select("email, contact_phone").eq("id", appt.carrier_id).maybeSingle();
+        const { data: dock } = await db.from("spots").select("name").eq("id", dock_id).maybeSingle();
+        notify({
+          type: "BOOKING_CONFIRMED", recipientType: "carrier", recipientId: appt.carrier_id, forceEmail: true,
+          data: {
+            phone: carrier?.contact_phone, email: carrier?.email, title: "Booking confirmed",
+            body: `SkyYard: ${appt.plate} is booked for ${new Date(start_time).toLocaleString()} at ${dock?.name || "a dock"}.`,
+            link: "/carrier",
+          },
+        });
+      }
+
+      emitUpdate("appointment_updated", { id: appt.id });
+      res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
