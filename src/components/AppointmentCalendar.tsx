@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { io } from "socket.io-client";
-import { DndContext, useDroppable, useDraggable, type DragEndEvent } from "@dnd-kit/core";
+import { DndContext, useDroppable, useDraggable, PointerSensor, KeyboardSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { useToast } from "../contexts/ToastContext";
 import VehicleLog from "./VehicleLog";
 import BookingRequestsSidebar from "./BookingRequestsSidebar";
@@ -132,8 +132,13 @@ export default function AppointmentCalendar() {
 
   const hours = Array.from({ length: 24 }, (_, i) => i);
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor),
+  );
+
   return (
-    <DndContext onDragEnd={handleDragEnd}>
+    <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
     <div className="min-h-full flex flex-col gap-6 max-w-[1600px] mx-auto px-4 lg:px-8 pb-8">
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
@@ -377,9 +382,14 @@ function MonthView({ currentDate, appointments, onEdit }: any) {
 // any typed component used with key={} in a .map() hits TS2322. Declaring
 // key here (out of the component's real prop type) satisfies tsc without
 // loosening it. Real fix: add @types/react + @types/react-dom repo-wide.
-function DraggableAppointmentBlock({ appt, children }: { appt: any; children: React.ReactNode; key?: React.Key }) {
-  const { attributes, listeners, setNodeRef } = useDraggable({ id: `appt-${appt.id}`, data: { type: "appointment", appointment: appt } });
-  return <div ref={setNodeRef} {...listeners} {...attributes} className="touch-none">{children}</div>;
+function DraggableAppointmentBlock({ appt, children, className = "", style }: { appt: any; children: React.ReactNode; className?: string; style?: React.CSSProperties; key?: React.Key }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: `appt-${appt.id}`, data: { type: "appointment", appointment: appt } });
+  const dragStyle: React.CSSProperties = { ...style, ...(transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : {}) };
+  return (
+    <div ref={setNodeRef} {...listeners} {...attributes} className={`touch-none ${className} ${isDragging ? "opacity-50 z-50" : ""}`} style={dragStyle}>
+      {children}
+    </div>
+  );
 }
 
 function DroppableHourCell({ day, hour }: { day: Date; hour: number; key?: React.Key }) {
@@ -432,19 +442,18 @@ function WeekView({ currentDate, appointments, hours, onEdit, onDelete }: any) {
                   const height = (appt.actual_duration_minutes / 60) * 80;
 
                   return (
-                    <DraggableAppointmentBlock key={appt.id} appt={appt}>
+                    <DraggableAppointmentBlock key={appt.id} appt={appt} className="absolute left-1 right-1 z-10" style={{ top, height, minHeight: 40 }}>
                     <motion.div
                       initial={{ scale: 0.9, opacity: 0 }}
                       animate={{ scale: 1, opacity: 1 }}
                       onClick={() => onEdit(appt)}
-                      className={`absolute left-1 right-1 rounded-2xl p-3 border-l-4 shadow-xl z-10 group cursor-pointer hover:brightness-95 transition-all flex flex-col justify-between overflow-hidden ${
-                        appt.priority_level === 1 
-                          ? 'bg-rose-50 border-rose-500 text-rose-900 shadow-rose-100/50' 
-                          : appt.status === 'CHECKED_IN' 
+                      className={`relative w-full h-full rounded-2xl p-3 border-l-4 shadow-xl group cursor-pointer hover:brightness-95 transition-all flex flex-col justify-between overflow-hidden ${
+                        appt.priority_level === 1
+                          ? 'bg-rose-50 border-rose-500 text-rose-900 shadow-rose-100/50'
+                          : appt.status === 'CHECKED_IN'
                             ? 'bg-emerald-50 border-emerald-500 text-emerald-900 shadow-emerald-100/50'
                             : 'bg-indigo-50 border-indigo-500 text-indigo-900 shadow-indigo-100/50'
                       }`}
-                      style={{ top, height, minHeight: 40 }}
                     >
                       <div className="flex justify-between items-start gap-1">
                         <p className="text-[11px] font-black leading-tight truncate">{appt.plate}</p>
