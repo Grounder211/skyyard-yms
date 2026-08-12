@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Search, Command, History, ArrowRight, Zap, Target, Loader2, ShieldAlert, HardHat, FileText } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { isHidden } from "../lib/permissions";
 
 export default function CommandPalette() {
   const [open, setOpen] = useState(false);
@@ -10,20 +11,24 @@ export default function CommandPalette() {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
+  // Same HIDDEN_ROUTES filter the nav and the route guard use — otherwise
+  // Cmd+K stays a working back door into a section that's switched off.
   const actions = [
-    { id: "act-1", label: "Dashboard Overview", shortcut: "G D", action: () => navigate("/"), icon: <Zap size={16}/> },
-    { id: "act-2", label: "Appointments Calendar", shortcut: "G C", action: () => navigate("/calendar"), icon: <Command size={16}/> },
-    { id: "act-6", label: "Gate & Check-in", shortcut: "G G", action: () => navigate("/gate"), icon: <Target size={16}/> },
-    { id: "act-9", label: "Live Tracking", shortcut: "G T", action: () => navigate("/tracking"), icon: <Target size={16}/> },
-    { id: "act-7", label: "Dispatch Board", shortcut: "G B", action: () => navigate("/dispatch"), icon: <Command size={16}/> },
-    { id: "act-10", label: "Exceptions", shortcut: "G E", action: () => navigate("/exceptions"), icon: <ShieldAlert size={16}/> },
-    { id: "act-11", label: "Safety Center", shortcut: "G Y", action: () => navigate("/safety"), icon: <HardHat size={16}/> },
-    { id: "act-12", label: "Documents", shortcut: "G O", action: () => navigate("/documents"), icon: <FileText size={16}/> },
-    { id: "act-3", label: "Network Topology", shortcut: "G N", action: () => navigate("/network"), icon: <Target size={16}/> },
-    { id: "act-4", label: "Financial Records", shortcut: "G F", action: () => navigate("/finance"), icon: <History size={16}/> },
-    { id: "act-8", label: "Settings", shortcut: "G ,", action: () => navigate("/settings"), icon: <History size={16}/> },
-    { id: "act-5", label: "Design System", shortcut: "G S", action: () => navigate("/design"), icon: <History size={16}/> },
-  ];
+    { id: "act-1", label: "Dashboard Overview", to: "/", shortcut: "G D", icon: <Zap size={16}/> },
+    { id: "act-2", label: "Appointments Calendar", to: "/calendar", shortcut: "G C", icon: <Command size={16}/> },
+    { id: "act-6", label: "Gate & Check-in", to: "/gate", shortcut: "G G", icon: <Target size={16}/> },
+    { id: "act-9", label: "Live Tracking", to: "/tracking", shortcut: "G T", icon: <Target size={16}/> },
+    { id: "act-7", label: "Dispatch Board", to: "/dispatch", shortcut: "G B", icon: <Command size={16}/> },
+    { id: "act-10", label: "Exceptions", to: "/exceptions", shortcut: "G E", icon: <ShieldAlert size={16}/> },
+    { id: "act-11", label: "Safety Center", to: "/safety", shortcut: "G Y", icon: <HardHat size={16}/> },
+    { id: "act-12", label: "Documents", to: "/documents", shortcut: "G O", icon: <FileText size={16}/> },
+    { id: "act-3", label: "Network Topology", to: "/network", shortcut: "G N", icon: <Target size={16}/> },
+    { id: "act-4", label: "Financial Records", to: "/finance", shortcut: "G F", icon: <History size={16}/> },
+    { id: "act-8", label: "Settings", to: "/settings", shortcut: "G ,", icon: <History size={16}/> },
+    { id: "act-5", label: "Design System", to: "/design", shortcut: "G S", icon: <History size={16}/> },
+  ]
+    .filter((a) => !isHidden(a.to))
+    .map((a) => ({ ...a, action: () => navigate(a.to) }));
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {

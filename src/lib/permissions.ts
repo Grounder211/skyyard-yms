@@ -27,6 +27,18 @@ export const ROUTE_ACCESS: Record<string, StaffRole[]> = {
   "/design": ["superadmin", "ADMIN", "GUARD", "HOSTLER"],
 };
 
+// Modules switched off in the UI for now — not deleted. The pages and
+// their APIs still exist and still work; they're simply not reachable
+// (hidden from the nav, from the command palette, and from direct URLs)
+// until they're wanted. Delete an entry here to bring one straight back.
+export const HIDDEN_ROUTES = new Set([
+  "/dispatch", "/pipeline", "/exceptions", "/documents", "/network", "/finance", "/design",
+]);
+
+export function isHidden(path: string): boolean {
+  return HIDDEN_ROUTES.has(path);
+}
+
 export function canAccess(role: StaffRole, path: string): boolean {
   const allowed = ROUTE_ACCESS[path];
   if (!allowed) return true; // unlisted routes are open to any signed-in staff member

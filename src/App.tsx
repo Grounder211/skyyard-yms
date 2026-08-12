@@ -41,7 +41,7 @@ import CommandPalette from "./components/CommandPalette";
 import NotificationBell from "./components/NotificationBell";
 import { usePresence } from "./hooks/usePresence";
 import Login from "./pages/Login";
-import { canAccess, ROLE_LABELS } from "./lib/permissions";
+import { canAccess, isHidden, ROLE_LABELS } from "./lib/permissions";
 
 import AppointmentCalendar from "./components/AppointmentCalendar";
 // mapbox-gl is large — lazy-loaded so it only ships to users who load a
@@ -126,7 +126,10 @@ function StaffArea() {
 
   if (!user) return <Login />;
 
-  const guard = (path: string, element: React.ReactNode) => (canAccess(user.role, path) ? element : <Restricted role={user.role} />);
+  // Hidden from the nav AND unreachable by typing the URL — a hidden link
+  // that still renders on direct navigation isn't actually turned off.
+  const guard = (path: string, element: React.ReactNode) =>
+    canAccess(user.role, path) && !isHidden(path) ? element : <Restricted role={user.role} />;
 
   return (
     <ToastProvider>
@@ -207,7 +210,7 @@ function AppLayout({ children, user }: any) {
     { to: "/superadmin", icon: <ShieldCheck size={20} />, label: t("nav.superadmin") },
     { to: "/design", icon: <Palette size={20} />, label: t("nav.design") },
   ];
-  const navItems = allNavItems.filter((item) => canAccess(user.role, item.to));
+  const navItems = allNavItems.filter((item) => canAccess(user.role, item.to) && !isHidden(item.to));
 
   return (
     <div className="flex h-screen bg-[var(--background)] overflow-hidden font-sans">
