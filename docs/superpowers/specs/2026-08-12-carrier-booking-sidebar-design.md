@@ -32,13 +32,13 @@ New columns on `appointments` (mirroring the fields already added to `walkin_reg
 
 ## Carrier Portal: request form
 
-New section in `CarrierPortal.tsx`, visible without needing a specific appointment to already exist. Fields: plate, personal identity number, cargo type (select) + quantity (text, appears once a type is chosen), load type, preferred date (a hint for the admin, not a commitment — stored on the row but not treated as `start_time`). Submits to a new endpoint, creates the `REQUESTED` appointment tied to `req.session.carrier_id`.
+New section in `CarrierPortal.tsx`, visible without needing a specific appointment to already exist. Fields: plate, personal identity number, cargo type (select) + quantity (text, appears once a type is chosen), load type. Submits to a new endpoint, creates the `REQUESTED` appointment tied to `req.session.carrier_id`. Sidebar cards sort oldest-first by `created_at`, so the admin naturally works the queue in submission order.
 
 The public `/book/:token` route and `BookingPage.tsx` are hidden from navigation but not deleted, matching how Dispatch/Pipeline/Exceptions/Documents/Network/Financials/Design System were switched off earlier — reversible by removing one entry, not a rewrite.
 
 ## Calendar: request sidebar + drag-to-schedule
 
-A collapsible sidebar panel alongside the Day/Week views (not Month/List — those have no hour grid to drop onto; a request there falls back to a plain "click to open the assign dialog" action instead of drag). Each pending request renders as a card: plate, carrier name, cargo type + quantity, personal ID number, requested date if given.
+A collapsible sidebar panel alongside the Day/Week views (not Month/List — those have no hour grid to drop onto; a request there falls back to a plain "click to open the assign dialog" action instead of drag). Each pending request renders as a card: plate, carrier name, cargo type + quantity, personal ID number, and how long ago it was submitted.
 
 **Drag a request card onto an hour cell:**
 1. A confirm popover opens at the drop point showing the target day/time, the plate, and the dock the slot-scoring engine (`scoreSlot`, the same one `BookingPage.tsx` already uses for its recommendations) picked automatically, with a dropdown to override it.
