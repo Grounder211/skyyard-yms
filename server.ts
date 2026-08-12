@@ -3311,6 +3311,48 @@ async function startServer() {
     res.json(valid);
   });
 
+  // The assign popover needs "which docks are free, and best, at exactly
+  // the time just dropped onto" — /api/slots/recommend only scores a fixed
+  // list of business-hour times, not an arbitrary drop target. Same
+  // scoring/conflict logic, one specific time instead of nine.
+  app.get("/api/admin/booking-slot-availability", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
+    const { start_time, load_type, carrier_id } = req.query;
+    const facilityId = req.facilityId;
+    if (!start_time) return res.status(400).json({ error: "start_time is required" });
+
+    try {
+      const endTime = estimateEndTime(start_time as string, load_type as string, undefined);
+      const date = (start_time as string).slice(0, 10);
+      const { data: docks } = await db.from("spots").select("id, name").eq("type", "DOCK").eq("facility_id", facilityId);
+      const { data: dayAppointments } = await db
+        .from("appointments")
+        .select("dock_id, start_time, end_time, load_type, load_weight_kg, status")
+        .eq("facility_id", facilityId)
+        .neq("status", "CANCELLED")
+        .gte("start_time", `${date}T00:00:00`)
+        .lte("start_time", `${date}T23:59:59`);
+      const { data: dockRules } = await db.from("dock_rules").select("dock_door_id, allowed_equipment_types").eq("facility_id", facilityId);
+      const ruleMap = new Map((dockRules || []).map((r: any) => [r.dock_door_id, r.allowed_equipment_types]));
+
+      const results = await Promise.all((docks || []).map(async (d: any) => {
+        const conflict = findDockConflict(
+          { dock_id: d.id, start_time: start_time as string, end_time: endTime, load_type: (load_type as string) || null },
+          (dayAppointments || []) as any,
+          ruleMap.get(d.id) || null
+        );
+        const scored = await scoreSlot({ dock_id: d.id, start_time: start_time as string }, {
+          equipmentType: (load_type as string) || "standard", carrierId: carrier_id as string | undefined, facilityId, date,
+        });
+        return { dockId: d.id, dockName: d.name, score: scored.score, available: !conflict, conflictReason: conflict?.reason || null };
+      }));
+
+      results.sort((a, b) => (a.available === b.available ? b.score - a.score : a.available ? -1 : 1));
+      res.json(results);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Priority 47: Smart Parking — recommend repositioning a parked trailer
   // into the same zone as its own next dock appointment, ahead of the
   // hostler move that will happen anyway. Recommendation only; creating
