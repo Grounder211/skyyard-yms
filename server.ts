@@ -136,7 +136,9 @@ async function startServer() {
     const dockRuleMap = new Map((dockRules || []).map((r: any) => [r.dock_door_id, r.allowed_equipment_types]));
 
     const flatSpots = (spots || []).map((s: any) => {
-      const trailer = Array.isArray(s.trailers) ? s.trailers.find((t: any) => t.status !== "DISPATCHED") : null;
+      // Positive match, not "anything but DISPATCHED" — a trailer already
+      // transferred out sits at in_transit and must not occupy a spot.
+      const trailer = Array.isArray(s.trailers) ? s.trailers.find((t: any) => t.status === "IN_YARD" || t.status === "DOCKED") : null;
       const { trailers, ...rest } = s;
       return {
         ...rest,
@@ -3254,14 +3256,14 @@ async function startServer() {
       const parkedTrailers = (spots || [])
         .filter((s: any) => s.type === "PARKING")
         .flatMap((s: any) => {
-          const trailer = (Array.isArray(s.trailers) ? s.trailers : [s.trailers]).find((t: any) => t && t.status !== "DISPATCHED");
+          const trailer = (Array.isArray(s.trailers) ? s.trailers : [s.trailers]).find((t: any) => t && (t.status === "IN_YARD" || t.status === "DOCKED"));
           if (!trailer?.plate) return [];
           return [{ trailerId: trailer.id, plate: trailer.plate, spotId: s.id, spotName: s.name, zoneName: s.zone_name ?? null }];
         });
 
       const emptyParkingSpots = (spots || [])
         .filter((s: any) => s.type === "PARKING")
-        .filter((s: any) => !(Array.isArray(s.trailers) ? s.trailers : [s.trailers]).some((t: any) => t && t.status !== "DISPATCHED"))
+        .filter((s: any) => !(Array.isArray(s.trailers) ? s.trailers : [s.trailers]).some((t: any) => t && (t.status === "IN_YARD" || t.status === "DOCKED")))
         .map((s: any) => ({ id: s.id, name: s.name, zoneName: s.zone_name ?? null }));
 
       const upcomingAppointments = (appts || [])
@@ -3716,7 +3718,9 @@ async function startServer() {
   app.get("/api/superadmin/facilities", requireRole("superadmin"), async (req, res) => {
     const { data: facilities } = await db.from("facilities").select("*");
     const enriched = await Promise.all((facilities || []).map(async (f: any) => {
-      const { count: active_trucks } = await db.from("trailers").select("*", { count: "exact", head: true }).eq("facility_id", f.id).neq("status", "DISPATCHED");
+      // Same fix as get_yard_stats: "not DISPATCHED" also matched
+      // in_transit trailers that have already left for another facility.
+      const { count: active_trucks } = await db.from("trailers").select("*", { count: "exact", head: true }).eq("facility_id", f.id).in("status", ["IN_YARD", "DOCKED"]);
       const today = new Date().toISOString().split("T")[0];
       const { count: todays_appts } = await db.from("appointments").select("*", { count: "exact", head: true }).eq("facility_id", f.id).gte("start_time", `${today}T00:00:00`).lte("start_time", `${today}T23:59:59`);
       return { ...f, active_trucks: active_trucks || 0, todays_appts: todays_appts || 0 };
