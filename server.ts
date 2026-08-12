@@ -3387,7 +3387,7 @@ async function startServer() {
         const { data: carrier } = await db.from("carriers").select("email, contact_phone").eq("id", appt.carrier_id).maybeSingle();
         const { data: dock } = await db.from("spots").select("name").eq("id", dock_id).maybeSingle();
         notify({
-          type: "BOOKING_CONFIRMED", recipientType: "carrier", recipientId: appt.carrier_id, forceEmail: true,
+          type: "BOOKING_CONFIRMED", recipientType: "CARRIER", recipientId: appt.carrier_id, forceEmail: true,
           data: {
             phone: carrier?.contact_phone, email: carrier?.email, title: "Booking confirmed",
             body: `SkyYard: ${appt.plate} is booked for ${new Date(start_time).toLocaleString()} at ${dock?.name || "a dock"}.`,
