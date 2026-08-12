@@ -2496,6 +2496,58 @@ async function startServer() {
     }
   });
 
+  // Calendar's "who is here / who is coming" list. Deliberately merges both
+  // arrival paths — a scheduled appointment and a walk-in that showed up
+  // unannounced are the same operational question ("what am I dealing with
+  // today?"), but until now they lived in two separate screens.
+  app.get("/api/admin/vehicle-log", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
+    const facilityId = req.facilityId;
+    const start = (req.query.start as string) || new Date(new Date().setUTCHours(0, 0, 0, 0)).toISOString();
+    const end = (req.query.end as string) || new Date(new Date().setUTCHours(23, 59, 59, 999)).toISOString();
+    try {
+      const [{ data: appts }, { data: walkins }] = await Promise.all([
+        db.from("appointments").select("id, plate, carrier, start_time, status, load_type, checked_in_at, checked_out_at, driver_id, dock_id, spots(name)")
+          .eq("facility_id", facilityId).neq("status", "CANCELLED")
+          .gte("start_time", start).lte("start_time", end),
+        db.from("walkin_registrations").select("id, truck_plate, carrier_name, driver_name, phone, load_type, status, created_at, checked_in_at, checked_out_at, assigned_dock_id, spots:assigned_dock_id(name)")
+          .eq("facility_id", facilityId).neq("status", "rejected")
+          .gte("created_at", start).lte("created_at", end),
+      ]);
+
+      const driverIds = [...new Set((appts || []).map((a: any) => a.driver_id).filter(Boolean))];
+      const { data: drivers } = driverIds.length
+        ? await db.from("drivers").select("id, name, phone").in("id", driverIds)
+        : { data: [] as any[] };
+      const driverMap = new Map((drivers || []).map((d: any) => [d.id, d]));
+
+      const rows = [
+        ...(appts || []).map((a: any) => {
+          const driver = a.driver_id ? driverMap.get(a.driver_id) : null;
+          return {
+            source: "booking", plate: a.plate, carrier: a.carrier,
+            driverName: driver?.name || null, driverPhone: driver?.phone || null,
+            loadType: a.load_type, scheduledAt: a.start_time,
+            arrivedAt: a.checked_in_at, departedAt: a.checked_out_at,
+            spotName: a.spots?.name || null,
+            state: a.checked_out_at ? "DEPARTED" : a.checked_in_at ? "ARRIVED" : "EXPECTED",
+          };
+        }),
+        ...(walkins || []).map((w: any) => ({
+          source: "walk-in", plate: w.truck_plate, carrier: w.carrier_name,
+          driverName: w.driver_name || null, driverPhone: w.phone || null,
+          loadType: w.load_type, scheduledAt: null,
+          arrivedAt: w.checked_in_at, departedAt: w.checked_out_at,
+          spotName: (w as any).spots?.name || null,
+          state: w.checked_out_at ? "DEPARTED" : w.checked_in_at ? "ARRIVED" : "EXPECTED",
+        })),
+      ].sort((a, b) => new Date(a.arrivedAt || a.scheduledAt || 0).getTime() - new Date(b.arrivedAt || b.scheduledAt || 0).getTime());
+
+      res.json({ start, end, rows });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/admin/analytics", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const facilityId = req.facilityId;
     const start = (req.query.start as string) || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();

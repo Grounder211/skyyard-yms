@@ -14,6 +14,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { io } from "socket.io-client";
 import { useToast } from "../contexts/ToastContext";
+import VehicleLog from "./VehicleLog";
 
 type ViewType = "day" | "week" | "month" | "list";
 
@@ -105,7 +106,7 @@ export default function AppointmentCalendar() {
   const hours = Array.from({ length: 24 }, (_, i) => i);
 
   return (
-    <div className="h-full flex flex-col gap-6 max-w-[1600px] mx-auto px-4 lg:px-8 pb-8">
+    <div className="min-h-full flex flex-col gap-6 max-w-[1600px] mx-auto px-4 lg:px-8 pb-8">
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
         <div>
@@ -173,7 +174,7 @@ export default function AppointmentCalendar() {
       </div>
 
       {/* Main Calendar Content */}
-      <div className="flex-1 bg-white border border-slate-200 rounded-[2.5rem] shadow-xl shadow-slate-200/50 overflow-hidden flex flex-col">
+      <div className="h-[70vh] shrink-0 bg-white border border-slate-200 rounded-[2.5rem] shadow-xl shadow-slate-200/50 overflow-hidden flex flex-col">
         {loading ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-4 text-slate-300">
             <div className="w-12 h-12 border-4 border-indigo-600/10 border-t-indigo-600 rounded-full animate-spin" />
@@ -188,6 +189,8 @@ export default function AppointmentCalendar() {
           </div>
         )}
       </div>
+
+      <VehicleLog />
 
       {/* Add Appointment Modal */}
       <AnimatePresence>
