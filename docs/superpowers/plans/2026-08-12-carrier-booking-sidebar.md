@@ -586,6 +586,7 @@ In `src/pages/CarrierPortal.tsx`, find the existing state declarations (`const [
   const submitBookingRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     setRequestError("");
+    setRequestSuccess(false);
     setRequestBusy(true);
     const res = await fetch("/api/carrier/booking-requests", {
       method: "POST",
