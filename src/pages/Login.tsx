@@ -58,9 +58,6 @@ export default function Login() {
             <Globe2 size={16} />
             {lang === "en" ? "Svenska" : "English"}
           </button>
-          <Link to="/book/demo" className="text-sm font-medium text-slate-500 hover:text-slate-900 transition-colors hidden sm:block">
-            Carrier booking
-          </Link>
           <Link to="/driver" className="text-sm font-medium text-slate-500 hover:text-slate-900 transition-colors hidden sm:block">
             Driver check-in
           </Link>
