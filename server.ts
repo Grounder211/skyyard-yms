@@ -3403,6 +3403,56 @@ async function startServer() {
     }
   });
 
+  // Dragging an *already-scheduled* appointment to a new cell. Deliberately
+  // separate from PATCH /api/appointments/:id (the general-purpose edit
+  // endpoint the edit modal uses) so the "booking swapped" notification
+  // fires only when a drag actually changes the time — never on an
+  // unrelated field edit from the modal.
+  app.post("/api/appointments/:id/reschedule", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
+    const { start_time } = req.body;
+    const facilityId = req.facilityId;
+    if (!start_time) return res.status(400).json({ error: "start_time is required" });
+
+    try {
+      const { data: appt } = await db.from("appointments").select("*").eq("id", req.params.id).eq("facility_id", facilityId).maybeSingle();
+      if (!appt) return res.status(404).json({ error: "Appointment not found" });
+      if (!appt.dock_id) return res.status(400).json({ error: "This appointment has no dock assigned yet" });
+
+      const oldStartTime = appt.start_time;
+      const endTime = estimateEndTime(start_time, appt.load_type, appt.load_weight_kg);
+      const date = String(start_time).slice(0, 10);
+      const [{ data: dockRule }, { data: dayAppointments }] = await Promise.all([
+        db.from("dock_rules").select("allowed_equipment_types").eq("facility_id", facilityId).eq("dock_door_id", appt.dock_id).maybeSingle(),
+        db.from("appointments").select("dock_id, start_time, end_time, load_type, status").eq("facility_id", facilityId).neq("status", "CANCELLED").neq("id", appt.id)
+          .gte("start_time", `${date}T00:00:00`).lte("start_time", `${date}T23:59:59`),
+      ]);
+      const conflict = findDockConflict({ dock_id: appt.dock_id, start_time, end_time: endTime, load_type: appt.load_type }, (dayAppointments || []) as any, dockRule?.allowed_equipment_types || null);
+      if (conflict) return res.status(409).json({ error: conflict.reason });
+
+      const { error } = await db.from("appointments").update({ start_time, end_time: endTime }).eq("id", appt.id);
+      if (error) throw error;
+
+      logAudit({ action: "APPOINTMENT_RESCHEDULED", entityType: "APPOINTMENT", entityId: String(appt.id), details: { from: oldStartTime, to: start_time }, ip: req.ip, facility_id: facilityId });
+
+      if (appt.carrier_id) {
+        const { data: carrier } = await db.from("carriers").select("email, contact_phone").eq("id", appt.carrier_id).maybeSingle();
+        notify({
+          type: "BOOKING_SWAPPED", recipientType: "CARRIER", recipientId: appt.carrier_id, forceEmail: true,
+          data: {
+            phone: carrier?.contact_phone, email: carrier?.email, title: "Booking time changed",
+            body: `SkyYard: ${appt.plate}'s booking moved from ${new Date(oldStartTime).toLocaleString()} to ${new Date(start_time).toLocaleString()}.`,
+            link: "/carrier",
+          },
+        });
+      }
+
+      emitUpdate("appointment_updated", { id: appt.id });
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Priority 47: Smart Parking — recommend repositioning a parked trailer
   // into the same zone as its own next dock appointment, ahead of the
   // hostler move that will happen anyway. Recommendation only; creating
