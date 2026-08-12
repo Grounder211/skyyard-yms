@@ -17,6 +17,32 @@ export default function CarrierPortal() {
   const [disputingId, setDisputingId] = useState<number | null>(null);
   const [disputeReason, setDisputeReason] = useState("");
   const [disputeBusy, setDisputeBusy] = useState(false);
+  const CARGO_TYPES = ["Pallets", "Boxes", "Shipping container", "Other"];
+  const LOAD_TYPES = ["standard", "reefer", "flatbed", "tanker", "hazmat", "oversized"];
+  const [requestForm, setRequestForm] = useState({ plate: "", personal_id_number: "", cargo_type: "", cargo_quantity: "", load_type: "standard" });
+  const [requestBusy, setRequestBusy] = useState(false);
+  const [requestError, setRequestError] = useState("");
+  const [requestSuccess, setRequestSuccess] = useState(false);
+
+  const submitBookingRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRequestError("");
+    setRequestBusy(true);
+    const res = await fetch("/api/carrier/booking-requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestForm),
+    });
+    setRequestBusy(false);
+    if (res.ok) {
+      setRequestSuccess(true);
+      setRequestForm({ plate: "", personal_id_number: "", cargo_type: "", cargo_quantity: "", load_type: "standard" });
+      loadDashboard();
+    } else {
+      const d = await res.json().catch(() => ({}));
+      setRequestError(d.error || "Failed to submit request");
+    }
+  };
 
   const loadDashboard = async () => {
     const meRes = await fetch("/api/carrier/me");
@@ -234,6 +260,53 @@ export default function CarrierPortal() {
                 </div>
               </div>
             )}
+
+            <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm mb-6">
+              <h3 className="font-bold text-slate-900 text-lg mb-1">Request a booking</h3>
+              <p className="text-slate-500 text-sm mb-4">Tell us what's coming — an admin will place it on the schedule and you'll be notified.</p>
+              {requestSuccess && (
+                <div className="bg-teal-50 border border-teal-200 text-teal-700 rounded-xl px-4 py-2.5 text-sm font-bold mb-4">
+                  Request submitted — you'll be notified once it's scheduled.
+                </div>
+              )}
+              {requestError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-2.5 text-sm font-bold mb-4">{requestError}</div>
+              )}
+              <form onSubmit={submitBookingRequest} className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Vehicle plate</label>
+                  <input required value={requestForm.plate} onChange={(e) => setRequestForm({ ...requestForm, plate: e.target.value.toUpperCase() })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold" />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Driver personal ID number</label>
+                  <input required value={requestForm.personal_id_number} onChange={(e) => setRequestForm({ ...requestForm, personal_id_number: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm" />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Load type</label>
+                  <select value={requestForm.load_type} onChange={(e) => setRequestForm({ ...requestForm, load_type: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm">
+                    {LOAD_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Cargo type</label>
+                  <select required value={requestForm.cargo_type} onChange={(e) => setRequestForm({ ...requestForm, cargo_type: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm">
+                    <option value="">Select...</option>
+                    {CARGO_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                {requestForm.cargo_type && (
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Quantity</label>
+                    <input value={requestForm.cargo_quantity} onChange={(e) => setRequestForm({ ...requestForm, cargo_quantity: e.target.value })} placeholder="e.g. 24" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm" />
+                  </div>
+                )}
+                <div className="col-span-2">
+                  <button type="submit" disabled={requestBusy} className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-2">
+                    {requestBusy && <Loader2 size={14} className="animate-spin" />} Submit request
+                  </button>
+                </div>
+              </form>
+            </div>
 
             <div>
               <h2 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-3">Appointment history</h2>
