@@ -27,6 +27,7 @@ export default function CarrierPortal() {
   const submitBookingRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     setRequestError("");
+    setRequestSuccess(false);
     setRequestBusy(true);
     const res = await fetch("/api/carrier/booking-requests", {
       method: "POST",
