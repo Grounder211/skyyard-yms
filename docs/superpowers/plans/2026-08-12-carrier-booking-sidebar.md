@@ -365,8 +365,37 @@ git commit -m "feat: single-slot dock availability endpoint for the assign popov
 
 **Interfaces:**
 - Produces route: `POST /api/admin/booking-requests/:id/assign` (requireRole superadmin/ADMIN/GUARD) — body `{ start_time: string; dock_id: number }`, returns `{ success: true }` or `409 { error }` on conflict.
+- Modifies: the existing `notify()` closure (server.ts:468) gains an optional `forceEmail` param.
 
-- [ ] **Step 1: Add the route**
+**Why Step 1 below is necessary:** `notify()` (server.ts:468-511) looks up `notification_preferences` by `(user_id, user_type, event_type)` and defaults to `{ channel_sms: 1, channel_email: 0, channel_inapp: true }` when no row exists. `recipientType: "carrier"` has never been used before this feature, so no preference row will ever exist for it — meaning `prefs.channel_email` stays `0` and the email branch (`if (prefs.channel_email && data.email)`) never fires, silently dropping the booking-confirmed email even though `data.email` is populated. Since the user explicitly requires this email and there's no admin UI anywhere in this app for carriers to manage notification preferences, the correct fix is a per-call opt-in override, not a global default change (which would also turn on email for every other existing recipient type/event that relies on the SMS-only default).
+
+- [ ] **Step 1: Add a `forceEmail` override to `notify()`**
+
+In `server.ts`, find:
+
+```typescript
+  const notify = async ({ type, recipientType, recipientId, data }: any) => {
+```
+
+Replace with:
+
+```typescript
+  const notify = async ({ type, recipientType, recipientId, data, forceEmail }: any) => {
+```
+
+Then find:
+
+```typescript
+      if (prefs.channel_email && data.email) {
+```
+
+Replace with:
+
+```typescript
+      if ((prefs.channel_email || forceEmail) && data.email) {
+```
+
+- [ ] **Step 2: Add the route**
 
 Insert directly after the `/api/admin/booking-slot-availability` route added in Task 4:
 
@@ -404,7 +433,7 @@ Insert directly after the `/api/admin/booking-slot-availability` route added in 
         const { data: carrier } = await db.from("carriers").select("email, contact_phone").eq("id", appt.carrier_id).maybeSingle();
         const { data: dock } = await db.from("spots").select("name").eq("id", dock_id).maybeSingle();
         notify({
-          type: "BOOKING_CONFIRMED", recipientType: "carrier", recipientId: appt.carrier_id,
+          type: "BOOKING_CONFIRMED", recipientType: "carrier", recipientId: appt.carrier_id, forceEmail: true,
           data: {
             phone: carrier?.contact_phone, email: carrier?.email, title: "Booking confirmed",
             body: `SkyYard: ${appt.plate} is booked for ${new Date(start_time).toLocaleString()} at ${dock?.name || "a dock"}.`,
@@ -421,12 +450,12 @@ Insert directly after the `/api/admin/booking-slot-availability` route added in 
   });
 ```
 
-- [ ] **Step 2: Typecheck**
+- [ ] **Step 3: Typecheck**
 
 Run: `npm run lint`
 Expected: no errors
 
-- [ ] **Step 3: Live-verify**
+- [ ] **Step 4: Live-verify**
 
 Restart the dev server. Seed a request (same insert as Task 3 Step 4), find its `id` and a real dock spot id, then:
 
@@ -434,9 +463,9 @@ Restart the dev server. Seed a request (same insert as Task 3 Step 4), find its 
 fetch('/api/admin/booking-requests/<id>/assign', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ start_time: new Date(Date.now()+3600000).toISOString(), dock_id: <dockId> }) }).then(r => r.json())
 ```
 
-Confirm `{success:true}`, then via SQL confirm `status='SCHEDULED'` and `start_time`/`dock_id` are set. Check `notifications_queue` has a new `email` row addressed to the test carrier (create one with a real `email` first if none exists) and an `in_app_notifications` row. Clean up test rows after.
+Confirm `{success:true}`, then via SQL confirm `status='SCHEDULED'` and `start_time`/`dock_id` are set. Check `notifications_queue` has a new `email` row addressed to the test carrier (create one with a real `email` first if none exists — this now queues correctly even with no `notification_preferences` row, because of the `forceEmail: true` override added in Step 1) and an `in_app_notifications` row. Clean up test rows after.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add server.ts
@@ -451,6 +480,7 @@ git commit -m "feat: assign a booking request to a slot, notify the carrier"
 - Modify: `server.ts`
 
 **Interfaces:**
+- Consumes: `notify()`'s `forceEmail?: boolean` param, added in Task 5 Step 1 — pass `forceEmail: true` so the email queues even though no `notification_preferences` row exists yet for `recipientType: "carrier"`.
 - Produces route: `POST /api/appointments/:id/reschedule` (requireRole superadmin/ADMIN/GUARD) — body `{ start_time: string }`, returns `{ success: true }` or `409 { error }`.
 
 - [ ] **Step 1: Add the route**
@@ -492,7 +522,7 @@ Insert directly after the route added in Task 5:
       if (appt.carrier_id) {
         const { data: carrier } = await db.from("carriers").select("email, contact_phone").eq("id", appt.carrier_id).maybeSingle();
         notify({
-          type: "BOOKING_SWAPPED", recipientType: "carrier", recipientId: appt.carrier_id,
+          type: "BOOKING_SWAPPED", recipientType: "carrier", recipientId: appt.carrier_id, forceEmail: true,
           data: {
             phone: carrier?.contact_phone, email: carrier?.email, title: "Booking time changed",
             body: `SkyYard: ${appt.plate}'s booking moved from ${new Date(oldStartTime).toLocaleString()} to ${new Date(start_time).toLocaleString()}.`,
