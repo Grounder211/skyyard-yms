@@ -1046,25 +1046,45 @@ replace with:
 Add this new component directly above `DroppableHourCell`:
 
 ```tsx
-function DraggableAppointmentBlock({ appt, children }: { appt: any; children: React.ReactNode }) {
-  const { attributes, listeners, setNodeRef } = useDraggable({ id: `appt-${appt.id}`, data: { type: "appointment", appointment: appt } });
-  return <div ref={setNodeRef} {...listeners} {...attributes} className="touch-none">{children}</div>;
+function DraggableAppointmentBlock({ appt, children, className = "", style }: { appt: any; children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: `appt-${appt.id}`, data: { type: "appointment", appointment: appt } });
+  const dragStyle: React.CSSProperties = { ...style, ...(transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : {}) };
+  return (
+    <div ref={setNodeRef} {...listeners} {...attributes} className={`touch-none ${className} ${isDragging ? "opacity-50 z-50" : ""}`} style={dragStyle}>
+      {children}
+    </div>
+  );
 }
 ```
+
+**Why `transform`/`isDragging`/`className`/`style` are required, not optional polish:** WeekView's appointment `motion.div` is absolutely positioned (`className="absolute left-1 right-1 z-10 ..."`, `style={{ top, height, minHeight: 40 }}`) relative to its hour-column parent. If `DraggableAppointmentBlock` renders a plain unstyled `<div className="touch-none">` around it (as an earlier version of this snippet did), that wrapper div is a zero-size box — its only child is taken out of flow by `absolute`, so the wrapper itself collapses to `height: 0`. dnd-kit measures the draggable node's own rect for collision detection, and a zero-height rect never intersects any droppable cell, so `over` is always `null` in `handleDragEnd` and a WeekView reschedule drag silently does nothing (fails the plan's own Day+Week reschedule requirement). The fix is to move the positioning from the inner `motion.div` onto this wrapper (`WeekView`'s call site passes `className="absolute left-1 right-1 z-10"` and `style={{ top, height, minHeight: 40 }}` into `DraggableAppointmentBlock`, and the inner `motion.div` becomes `relative w-full h-full` instead) so the wrapper has the real, correctly-sized rect. `transform`/`isDragging` additionally give the same drag-lift visual feedback `DraggableRequestCard` already has in the sidebar — without it, a block that IS being dragged shows no visual difference from one that isn't, which is also how this bug hid during manual testing.
 
 Add `useDraggable` to the existing `@dnd-kit/core` import at the top of the file:
 
 ```typescript
-import { DndContext, useDroppable, useDraggable, type DragEndEvent } from "@dnd-kit/core";
+import { DndContext, useDroppable, useDraggable, PointerSensor, KeyboardSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 ```
 
-- [ ] **Step 4: Repeat Steps 2-3's cell/block changes for DayView**
+**Why `PointerSensor`/`KeyboardSensor`/`useSensor`/`useSensors` are required:** `DndContext` with no `sensors` prop falls back to dnd-kit's `defaultSensors`, which use `PointerSensor` with no `activationConstraint`. Without a constraint, the sensor treats every `pointerdown` on a draggable as a potential drag start and installs a capture-phase `click` blocker on `document` for ~50ms — including on a plain click with zero movement. Since every appointment block in both WeekView and DayView is now wrapped in `DraggableAppointmentBlock`, this silently breaks WeekView's existing `onClick={() => onEdit(appt)}` and DayView's `ActionMenu` "Edit"/"Delete" trigger (both live inside the wrapper) — a real regression against pre-existing behavior, not something the brief's e2e drag verification would catch, since it never clicks an appointment. The fix is a `distance` activation constraint, added and used in Step 5 below.
 
-`DayView` has the same hour-cell and appointment-block structure as `WeekView` (single day column instead of seven) — apply the identical `DroppableHourCell` and `DraggableAppointmentBlock` substitutions there.
+- [ ] **Step 4: Repeat Steps 2-3's cell/block changes for DayView — but check the assumption first**
 
-- [ ] **Step 5: Wrap the calendar in DndContext and mount the sidebar**
+**Do not assume DayView shares WeekView's layout.** Read `DayView`'s actual JSX before touching it. If it uses the same absolute-positioned `h-20` hour-cell grid as WeekView, apply the identical `DroppableHourCell` substitution and wrap appointment blocks in `DraggableAppointmentBlock` the same way (passing whatever positioning className/style WeekView's call site uses, per the note in Step 3). If DayView instead renders each hour as a flex row (a time label + a list of card-style appointments, not an absolute-positioned grid) — wrap the *entire* row in a droppable, not a per-cell grid: a `DroppableDayRow({ day, hour, children })` component using `useDroppable({ id: \`${day.toISOString()}_${hour}\`, data: { day, hour } })` (same id format and `data` shape as `DroppableHourCell`, so `handleDragEnd` needs no DayView-specific branch), preserving the row's exact original `className` so borders/spacing/hover states are unaffected. Wrap each appointment card in `DraggableAppointmentBlock` (no special positioning needed here — an in-flow card already has a real rect) without adding an `onClick` if the original card didn't have one (DayView may route editing through an `ActionMenu` button instead — preserve whatever the original edit/delete entry point was, and make sure it's still clickable per the sensor note in Step 3).
 
-Find the main `return (` of the `AppointmentCalendar` component (the outermost JSX). Wrap the whole returned tree in `<DndContext onDragEnd={handleDragEnd}>`, and change the layout to a flex row with the sidebar alongside the existing calendar block. Find:
+- [ ] **Step 5: Wrap the calendar in DndContext (with a sensor activation constraint) and mount the sidebar**
+
+Find the main `return (` of the `AppointmentCalendar` component (the outermost JSX). Just before the `return (`, add:
+
+```tsx
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor),
+  );
+```
+
+This requires 8px of pointer movement before a drag starts, so a plain click never triggers dnd-kit's click-blocking behavior (see the note under Step 3) — a click resolves as a click, a drag past 8px resolves as a drag. `KeyboardSensor` is re-added explicitly because passing any `sensors` array to `DndContext` replaces dnd-kit's defaults entirely, not merges with them.
+
+Wrap the whole returned tree in `<DndContext sensors={sensors} onDragEnd={handleDragEnd}>`, and change the layout to a flex row with the sidebar alongside the existing calendar block. Find:
 
 ```tsx
     <div className="min-h-full flex flex-col gap-6 max-w-[1600px] mx-auto px-4 lg:px-8 pb-8">
@@ -1073,7 +1093,7 @@ Find the main `return (` of the `AppointmentCalendar` component (the outermost J
 Replace with:
 
 ```tsx
-    <DndContext onDragEnd={handleDragEnd}>
+    <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
     <div className="min-h-full flex flex-col gap-6 max-w-[1600px] mx-auto px-4 lg:px-8 pb-8">
 ```
 
