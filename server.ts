@@ -18,6 +18,7 @@ import { evaluateSla, isNoShow, isOnTimeArrival } from "./server/services/compli
 import { shouldNotifyExpiry } from "./server/services/vehicleExpiry.js";
 import { nextExpiryAlertLevel, missingDocumentTypes } from "./server/services/documentExpiry.js";
 import { resolveDockAssignment, type DockCandidate } from "./server/services/dockAssignment.js";
+import { validateBookingRequest } from "./server/services/bookingRequest.js";
 import crypto from "crypto";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import PDFDocument from "pdfkit";
@@ -2957,6 +2958,34 @@ async function startServer() {
     delete req.session.carrier_id;
     delete req.session.carrier_name;
     res.json({ success: true });
+  });
+
+  // Carrier submits what they need (vehicle, driver identity, cargo) with
+  // no time chosen — an admin places it on the calendar via drag-and-drop
+  // (see /api/admin/booking-requests/:id/assign). This is an appointment
+  // like any other, just with start_time/end_time/dock_id left null until
+  // assigned — no parallel "requests" table.
+  app.post("/api/carrier/booking-requests", requireCarrierAuth, async (req: any, res) => {
+    const { plate, personal_id_number, cargo_type, cargo_quantity, load_type } = req.body;
+    const validation = validateBookingRequest({ plate, personal_id_number, cargo_type, cargo_quantity, load_type });
+    if (validation.ok === false) return res.status(400).json({ error: validation.error });
+
+    try {
+      const { data: carrier } = await db.from("carriers").select("id, name, email").eq("id", req.session.carrier_id).maybeSingle();
+      if (!carrier) return res.status(401).json({ error: "Carrier session invalid" });
+
+      const { data, error } = await db.from("appointments").insert({
+        facility_id: req.facilityId || 1, plate: String(plate).toUpperCase(), carrier: carrier.name, carrier_id: carrier.id,
+        load_type: load_type || "standard", personal_id_number, cargo_type, cargo_quantity: cargo_quantity || null,
+        status: "REQUESTED",
+      }).select("id").single();
+      if (error) throw error;
+
+      logAudit({ action: "BOOKING_REQUEST_SUBMITTED", entityType: "APPOINTMENT", entityId: String(data.id), details: { plate, carrier: carrier.name }, ip: req.ip, facility_id: req.facilityId || 1 });
+      res.json({ success: true, id: data.id });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // Carrier dashboard only ever showed a live count of active trucks and
