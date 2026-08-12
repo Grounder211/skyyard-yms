@@ -650,10 +650,24 @@ function Dashboard() {
                   <DetailRow label="Seal" value={selectedSpot.seal_number} />
                   <DetailRow label="PO number" value={selectedSpot.po_number} />
                   <DetailRow label="Cargo / SKU" value={selectedSpot.sku_summary} />
+                  <DetailRow label="Cargo type" value={selectedSpot.cargo_type} />
+                  <DetailRow label="Cargo quantity" value={selectedSpot.cargo_quantity} />
                   <DetailRow label="Hazmat class" value={selectedSpot.hazmat_class} />
                   <DetailRow label="Tare weight" value={selectedSpot.tare_weight_kg ? `${selectedSpot.tare_weight_kg} kg` : undefined} />
                   {(selectedSpot.checked_in_at || selectedSpot.check_in_time) && (
                     <DetailRow label="On site since" value={timeAgo(selectedSpot.checked_in_at || selectedSpot.check_in_time)} />
+                  )}
+                  {selectedSpot.driver && (
+                    <div className="mt-3 pt-3 border-t border-[var(--outline-variant)]/30">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">Driver</p>
+                      <DetailRow label="Name" value={selectedSpot.driver.name} />
+                      <DetailRow label="Phone" value={selectedSpot.driver.phone} />
+                      <DetailRow label="Personal ID number" value={selectedSpot.driver.personalIdNumber} />
+                      <DetailRow label="License number" value={selectedSpot.driver.licenseNumber} />
+                      <DetailRow label="Vehicle type" value={selectedSpot.driver.vehicleType} />
+                      <DetailRow label="Gate pass" value={selectedSpot.driver.passNumber} />
+                      <DetailRow label="Terms accepted" value={selectedSpot.driver.termsAcceptedAt ? new Date(selectedSpot.driver.termsAcceptedAt).toLocaleString() : undefined} />
+                    </div>
                   )}
                   {(() => {
                     const risk = detentionRisk.find((r: any) => r.plate === selectedSpot.plate);
@@ -713,9 +727,9 @@ function Dashboard() {
 
               {!detailLoading && detailPanel === "vehicles" && (
                 <DetailTable
-                  columns={["Plate", "Carrier", "Spot", "Equipment", "Cargo status", "On site"]}
+                  columns={["Plate", "Carrier", "Driver", "Spot", "Cargo", "Qty", "On site"]}
                   rows={spots.filter((s: any) => s.plate).map((s: any) => [
-                    s.plate, s.carrier || "—", s.name, s.equipment_type || "standard", s.cargo_status || "expected",
+                    s.plate, s.carrier || "—", s.driver?.name || "—", s.name, s.cargo_type || "—", s.cargo_quantity || "—",
                     s.checked_in_at || s.check_in_time ? timeAgo(s.checked_in_at || s.check_in_time) : "—",
                   ])}
                   empty="No vehicles in the yard right now."

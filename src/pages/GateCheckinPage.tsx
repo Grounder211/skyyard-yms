@@ -5,10 +5,13 @@ import PhoneInput, { toE164 } from "../components/PhoneInput";
 
 const LOAD_TYPES = ["standard", "reefer", "flatbed", "tanker", "hazmat", "oversized"];
 const DIRECTIONS = ["INBOUND", "OUTBOUND"];
+const CARGO_TYPES = ["Pallets", "Boxes", "Shipping container", "Other"];
 
-// Public, unauthenticated-by-staff landing page for the shared gate QR code.
-// No guard reviews this in person, so identity is established by OTP (driver
-// phone verification) instead — see requireDriverAuth on the backend.
+// Public, unauthenticated-by-staff self check-in form (direct link, not the
+// gate QR — the physical QR at the gate points at /kiosk/:facilityId /
+// KioskCheckinPage instead). No guard reviews this in person, so identity is
+// established by OTP (driver phone verification) — see requireDriverAuth on
+// the backend.
 export default function GateCheckinPage() {
   const { facilityId = "1" } = useParams();
   const navigate = useNavigate();
@@ -24,6 +27,7 @@ export default function GateCheckinPage() {
     truck_plate: "", carrier_name: "", trailer_number: "", load_type: "standard",
     direction: "INBOUND", consent: false, website: "", // website = honeypot, never shown
     po_number: "", sku_summary: "", personal_id_number: "", terms_accepted: false,
+    cargo_type: "", cargo_quantity: "",
   });
   // Accepting is gated on actually reaching the bottom of the terms — a
   // checkbox alone is trivially clicked past without reading.
@@ -167,6 +171,21 @@ export default function GateCheckinPage() {
                     {DIRECTIONS.map((d) => <option key={d} value={d}>{d}</option>)}
                   </select>
                 </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Cargo type</label>
+                  <select value={form.cargo_type} onChange={(e) => setForm({ ...form, cargo_type: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm">
+                    <option value="">Select...</option>
+                    {CARGO_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                {form.cargo_type && (
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Quantity</label>
+                    <input value={form.cargo_quantity} onChange={(e) => setForm({ ...form, cargo_quantity: e.target.value })} placeholder="e.g. 24" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm" />
+                  </div>
+                )}
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-bold uppercase tracking-widest text-slate-400">PO number (optional)</label>

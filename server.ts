@@ -127,13 +127,34 @@ async function startServer() {
   const getYardStatus = async (facilityId: number) => {
     const { data: statsData } = await db.rpc("get_yard_stats", { f_id: facilityId });
 
-    const [{ data: spots }, { data: dockRules }] = await Promise.all([
+    const [{ data: spots }, { data: dockRules }, { data: activePasses }] = await Promise.all([
       db.from("spots")
-        .select("*, trailers!trailers_spot_id_fkey(id, plate, carrier, status, check_in_time, checked_in_at, equipment_type, seal_number, driver_license, po_number, sku_summary, reefer_temp_setpoint, hazmat_class, tare_weight_kg, damage_photos, cargo_status)")
+        .select("*, trailers!trailers_spot_id_fkey(id, plate, carrier, status, check_in_time, checked_in_at, equipment_type, seal_number, driver_license, po_number, sku_summary, reefer_temp_setpoint, hazmat_class, tare_weight_kg, damage_photos, cargo_status, cargo_type, cargo_quantity)")
         .eq("facility_id", facilityId),
       db.from("dock_rules").select("dock_door_id, allowed_equipment_types").eq("facility_id", facilityId),
+      // Clicking a vehicle needs to answer "who is driving this" — gate_passes
+      // is the only table that actually links a plate to a driver_id, so this
+      // is a lookup, not new state.
+      db.from("gate_passes").select("plate, pass_number, driver_id, drivers(name, phone, license_number, vehicle_type)").eq("facility_id", facilityId).neq("stage", "EXITED"),
     ]);
     const dockRuleMap = new Map((dockRules || []).map((r: any) => [r.dock_door_id, r.allowed_equipment_types]));
+    const driverByPlate = new Map((activePasses || []).map((p: any) => [p.plate, {
+      name: p.drivers?.name || null, phone: p.drivers?.phone || null, passNumber: p.pass_number,
+      licenseNumber: p.drivers?.license_number || null, vehicleType: p.drivers?.vehicle_type || null,
+    }]));
+
+    // personal_id_number only ever lives on the registration record itself —
+    // it's never copied onto trailers/gate_passes — so the checked-in
+    // walkin row for this plate is the only place left to read it from.
+    const plates = [...new Set((activePasses || []).map((p: any) => p.plate).filter(Boolean))];
+    const { data: checkedInWalkins } = plates.length
+      ? await db.from("walkin_registrations").select("truck_plate, personal_id_number, terms_accepted_at")
+          .eq("facility_id", facilityId).in("truck_plate", plates).eq("status", "CHECKED_IN")
+      : { data: [] as any[] };
+    for (const w of checkedInWalkins || []) {
+      const existing = driverByPlate.get(w.truck_plate);
+      if (existing) Object.assign(existing, { personalIdNumber: w.personal_id_number, termsAcceptedAt: w.terms_accepted_at });
+    }
 
     const flatSpots = (spots || []).map((s: any) => {
       // Positive match, not "anything but DISPATCHED" — a trailer already
@@ -166,6 +187,9 @@ async function startServer() {
         tare_weight_kg: trailer?.tare_weight_kg,
         damage_photos: trailer?.damage_photos,
         cargo_status: trailer?.cargo_status,
+        cargo_type: trailer?.cargo_type,
+        cargo_quantity: trailer?.cargo_quantity,
+        driver: trailer?.plate ? driverByPlate.get(trailer.plate) || null : null,
       };
     });
 
@@ -1289,8 +1313,11 @@ async function startServer() {
 
     if (assign?.assigned) {
       await db.from("walkin_registrations").update({ reviewed_by: adminUserId, reviewed_at: new Date().toISOString() }).eq("id", walkinId);
-      if (walkin.po_number || walkin.sku_summary) {
-        await db.from("trailers").update({ po_number: walkin.po_number || null, sku_summary: walkin.sku_summary || null }).eq("plate", walkin.truck_plate).eq("facility_id", facilityId);
+      if (walkin.po_number || walkin.sku_summary || walkin.cargo_type) {
+        await db.from("trailers").update({
+          po_number: walkin.po_number || null, sku_summary: walkin.sku_summary || null,
+          cargo_type: walkin.cargo_type || null, cargo_quantity: walkin.cargo_quantity || null,
+        }).eq("plate", walkin.truck_plate).eq("facility_id", facilityId);
       }
       logAudit({ action: "WALKIN_APPROVED", entityType: "WALKIN", entityId: String(walkinId), details: { spot: assign.spotName }, facility_id: facilityId });
       notify({ type: "WALKIN_APPROVED", recipientType: "driver", recipientId: walkin.driver_id, data: { phone: walkin.phone, title: "Entry Approved", body: `SkyYard: You're approved. Proceed to spot ${assign.spotName}. Reference: WK-${walkinId}` } });
@@ -1317,7 +1344,7 @@ async function startServer() {
   };
 
   app.post("/api/public/walkin-checkin", requireDriverAuth, publicWalkinLimiter, async (req: any, res) => {
-    const { truck_plate, carrier_name, trailer_number, load_type, direction, consent, website, po_number, sku_summary, photo_base64, personal_id_number, terms_accepted } = req.body;
+    const { truck_plate, carrier_name, trailer_number, load_type, direction, consent, website, po_number, sku_summary, photo_base64, personal_id_number, terms_accepted, cargo_type, cargo_quantity } = req.body;
     const facilityId = req.body.facility_id || 1;
 
     // Honeypot: a hidden field real drivers never see or fill; only bots fill every field.
@@ -1361,6 +1388,7 @@ async function startServer() {
         driver_id: driver.id, facility_id: facilityId, source: "self_service_qr", consent_given: true,
         po_number: po_number || null, sku_summary: sku_summary || null, photo_url: photoUrl,
         personal_id_number, terms_accepted_at: new Date().toISOString(),
+        cargo_type: cargo_type || null, cargo_quantity: cargo_quantity || null,
       }).select("id, status_token").single();
       if (error) throw error;
 
