@@ -3340,7 +3340,8 @@ async function startServer() {
           (dayAppointments || []) as any,
           ruleMap.get(d.id) || null
         );
-        const scored = await scoreSlot({ dock_id: d.id, start_time: start_time as string }, {
+        const timeOnly = new Date(start_time as string).toISOString().slice(11, 16);
+        const scored = await scoreSlot({ dock_id: d.id, start_time: timeOnly }, {
           equipmentType: (load_type as string) || "standard", carrierId: carrier_id as string | undefined, facilityId, date,
         });
         return { dockId: d.id, dockName: d.name, score: scored.score, available: !conflict, conflictReason: conflict?.reason || null };
