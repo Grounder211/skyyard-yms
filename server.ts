@@ -972,7 +972,11 @@ async function startServer() {
     const { start, end } = req.query;
     const facilityId = req.facilityId || 1;
     try {
-      let query = db.from("appointments").select("*, spots(name)").eq("facility_id", facilityId).neq("status", "CANCELLED");
+      // REQUESTED rows have no start_time yet — the Calendar positions
+      // appointments by start_time, so one would render at the epoch or
+      // crash the date parsing. They live in the booking-requests sidebar
+      // instead, until an admin assigns them a slot.
+      let query = db.from("appointments").select("*, spots(name)").eq("facility_id", facilityId).neq("status", "CANCELLED").neq("status", "REQUESTED");
       if (start && end) {
         query = query.gte("start_time", String(start)).lte("start_time", String(end));
       } else {
@@ -1458,6 +1462,16 @@ async function startServer() {
 
   app.get("/api/admin/walkin/pending", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
     const { data } = await db.from("walkin_registrations").select("*").eq("facility_id", req.facilityId).eq("status", "pending_approval").order("created_at", { ascending: true });
+    res.json(data || []);
+  });
+
+  // Sidebar source for the Calendar's drag-to-schedule panel. Oldest
+  // first — the admin naturally works the queue in submission order.
+  app.get("/api/admin/booking-requests", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
+    const { data } = await db.from("appointments")
+      .select("id, plate, carrier, personal_id_number, cargo_type, cargo_quantity, load_type, created_at")
+      .eq("facility_id", req.facilityId).eq("status", "REQUESTED")
+      .order("created_at", { ascending: true });
     res.json(data || []);
   });
 
