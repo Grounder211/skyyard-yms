@@ -10,7 +10,7 @@ export const ROUTE_ACCESS: Record<string, StaffRole[]> = {
   "/": ["superadmin", "ADMIN", "GUARD", "HOSTLER"],
   "/gate": ["superadmin", "ADMIN", "GUARD"],
   "/tracking": ["superadmin", "ADMIN", "GUARD", "HOSTLER"],
-  "/dispatch": ["superadmin", "ADMIN", "HOSTLER"],
+  "/dispatch": ["superadmin", "ADMIN", "HOSTLER", "GUARD"],
   "/pipeline": ["superadmin", "ADMIN", "GUARD", "HOSTLER"],
   "/exceptions": ["superadmin", "ADMIN", "GUARD", "HOSTLER"],
   "/safety": ["superadmin", "ADMIN", "GUARD", "HOSTLER"],
@@ -32,7 +32,7 @@ export const ROUTE_ACCESS: Record<string, StaffRole[]> = {
 // (hidden from the nav, from the command palette, and from direct URLs)
 // until they're wanted. Delete an entry here to bring one straight back.
 export const HIDDEN_ROUTES = new Set([
-  "/dispatch", "/pipeline", "/exceptions", "/documents", "/network", "/finance", "/design",
+  "/pipeline", "/exceptions", "/documents", "/network", "/finance", "/design",
 ]);
 
 export function isHidden(path: string): boolean {

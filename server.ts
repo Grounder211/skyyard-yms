@@ -2401,7 +2401,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/dispatch", requireRole("superadmin", "ADMIN", "HOSTLER"), async (req: any, res) => {
+  app.post("/api/dispatch", requireRole("superadmin", "ADMIN", "HOSTLER", "GUARD"), async (req: any, res) => {
     const { trailerId, spotId } = req.body;
     try {
       const { data: trailer } = await db.from("trailers").select("*, drivers(phone)").eq("id", trailerId).maybeSingle();
