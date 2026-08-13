@@ -624,8 +624,8 @@ export default function GateConsole() {
           <UserPlus size={18} className="text-amber-600" /> Walk-in registration
         </h3>
         <p className="text-sm text-slate-500 mb-6">
-          For drivers without a pre-booked appointment. A parking spot is assigned automatically if one is free — otherwise the driver is
-          queued and the on-duty manager is notified instantly.
+          For drivers without a pre-booked appointment. A free dock is assigned automatically if one matches, parking otherwise — if
+          neither is free, the driver is queued and the on-duty manager is notified instantly.
         </p>
         <form onSubmit={submitWalkin} className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Field label="Driver name" required value={walkinForm.driver_name} onChange={(v) => setWalkinForm({ ...walkinForm, driver_name: v })} />

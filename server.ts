@@ -1226,13 +1226,18 @@ async function startServer() {
       }).select().single();
       if (error) throw error;
 
-      const { data: assign } = await db.rpc("walkin_autoassign_tx", {
-        p_walkin_id: walkin.id, p_truck_plate: truck_plate, p_carrier_name: carrier_name, p_facility_id: facilityId,
+      // Dock-first: walkin_assign_spot_tx tries a free dock before falling
+      // back to parking (see approveWalkin's identical call, which already
+      // did this correctly). walkin_autoassign_tx is parking-only — using
+      // it here silently sent every guard-direct entry to parking even
+      // when a dock was free and the load_type called for one.
+      const { data: assign } = await db.rpc("walkin_assign_spot_tx", {
+        p_walkin_id: walkin.id, p_truck_plate: truck_plate, p_carrier_name: carrier_name, p_facility_id: facilityId, p_spot_id: null,
       });
 
       if (assign?.assigned) {
         logAudit({ action: "WALKIN_AUTO_CHECKIN", entityType: "WALKIN", entityId: String(walkin.id), details: { truck_plate, spot: assign.spotName }, ip: req.ip, facility_id: facilityId });
-        notify({ type: "WALKIN_CONFIRMED", recipientType: "driver", recipientId: matchedDriver?.id || null, data: { phone, title: "Registration Sync", body: `SkyYard: Walk-in confirmed for ${truck_plate}. Proceeds to parking spot: ${assign.spotName}. Reference: WK-${walkin.id}` } });
+        notify({ type: "WALKIN_CONFIRMED", recipientType: "driver", recipientId: matchedDriver?.id || null, data: { phone, title: "Registration Sync", body: `SkyYard: Walk-in confirmed for ${truck_plate}. Proceeds to spot: ${assign.spotName}. Reference: WK-${walkin.id}` } });
         if (po_number || sku_summary) {
           await db.from("trailers").update({ po_number: po_number || null, sku_summary: sku_summary || null }).eq("plate", truck_plate).eq("facility_id", facilityId);
         }
@@ -1585,10 +1590,8 @@ async function startServer() {
         const bucket = (s.severity === "critical" || s.severity === "high") ? critical : timeCritical;
         bucket.push({ type: "safety_incident", severity: s.severity, title: `Safety: ${String(s.category).replace(/_/g, " ")}`, description: s.plate || "No related asset", timestamp: s.created_at, action: { label: "Review", link: "/safety" } });
       }
-      for (const e of exceptions.data || []) {
-        const bucket = e.severity === "critical" ? critical : timeCritical;
-        bucket.push({ type: "exception", severity: e.severity, title: e.title, description: e.description || String(e.exception_type).replace(/_/g, " "), timestamp: e.created_at, action: { label: "Resolve", link: "/exceptions" } });
-      }
+      // Exception Center (/exceptions) is a suspended module (HIDDEN_ROUTES) —
+      // don't surface an action whose link leads to a Restricted page.
       for (const t of reeferTrailers.data || []) {
         const latest = latestByTrailer.get(t.id);
         const checkedInAt = t.checked_in_at || t.check_in_time || new Date().toISOString();
@@ -1600,11 +1603,10 @@ async function startServer() {
           timeCritical.push({ type: "reefer_stale", severity: "warning", title: "Reefer reading overdue", description: `${t.plate} — last checked over ${STALE_READING_HOURS}h ago`, timestamp: latest.recorded_at, action: { label: "Open trailer", link: "/tracking" } });
         }
       }
-      for (const d of activeDetention.data || []) {
-        timeCritical.push({ type: "detention", severity: "warning", title: "Detention accruing", description: `${d.carrier_name || "Unknown carrier"} — ${d.amount_owed ? Number(d.amount_owed).toFixed(0) : "?"} owed so far`, timestamp: d.created_at, action: { label: "Open finance", link: "/finance" } });
-      }
+      // Financials (/finance) is a suspended module (HIDDEN_ROUTES) — don't
+      // surface an action whose link leads to a Restricted page.
       for (const g of staleGatePasses.data || []) {
-        timeCritical.push({ type: "stale_pass", severity: "warning", title: `Vehicle stuck at ${g.stage.replace(/_/g, " ")}`, description: `${g.plate} — no movement in over 2 hours`, timestamp: g.updated_at, action: { label: "Open pipeline", link: "/pipeline" } });
+        timeCritical.push({ type: "stale_pass", severity: "warning", title: `Vehicle stuck at ${g.stage.replace(/_/g, " ")}`, description: `${g.plate} — no movement in over 2 hours`, timestamp: g.updated_at, action: { label: "Open tracking", link: "/tracking" } });
       }
       for (const w of pendingApprovals.data || []) {
         operations.push({ type: "approval", severity: "warning", title: "Gate entry awaiting approval", description: `${w.truck_plate} — ${w.carrier_name}`, timestamp: w.created_at, action: { label: "Approve", link: "/gate" } });
@@ -2089,8 +2091,11 @@ async function startServer() {
 
   // Gate badge scan — pre-registered driver (see /api/driver/profile) scans
   // their permanent QR at the gate instead of filling a form or waiting for
-  // approval. Blacklist-checked, auto-assigns a spot via the same
-  // walkin_autoassign_tx engine every other entry path already uses.
+  // approval. Blacklist-checked, auto-assigns a spot via walkin_assign_spot_tx
+  // (dock-first, same engine approveWalkin uses) — an earlier version of
+  // this comment claimed walkin_autoassign_tx was that shared engine, but
+  // it's actually a separate, parking-only RPC; every badge scan was
+  // silently going to parking regardless of load_type.
   // Physically reading the code still goes through GateConsole's existing
   // QRScanner (staff-operated camera) — a literal unattended kiosk/hardware
   // reader is a separate hardware integration, not something buildable here.
@@ -2140,8 +2145,8 @@ async function startServer() {
         if (avg <= 2) driverCaution = { average: Math.round(avg * 10) / 10, count: ratings.length };
       }
 
-      const { data: assign } = await db.rpc("walkin_autoassign_tx", {
-        p_walkin_id: walkin.id, p_truck_plate: driver.default_plate, p_carrier_name: driver.carrier_name, p_facility_id: facilityId,
+      const { data: assign } = await db.rpc("walkin_assign_spot_tx", {
+        p_walkin_id: walkin.id, p_truck_plate: driver.default_plate, p_carrier_name: driver.carrier_name, p_facility_id: facilityId, p_spot_id: null,
       });
 
       logAudit({ action: "BADGE_SCAN_ENTRY", entityType: "DRIVER", entityId: String(driver.id), details: { plate: driver.default_plate, assigned: !!assign?.assigned }, ip: req.ip, facility_id: facilityId });
@@ -3619,7 +3624,12 @@ async function startServer() {
       const { data: carrier } = await db.from("carriers").select("id, name, email, contact_phone, flagged, created_at").eq("id", id).maybeSingle();
       if (!carrier) return res.status(404).json({ error: "Carrier not found" });
       const [{ data: appts }, { data: detentions }, { count: vehicleCount }, { count: driverCount }] = await Promise.all([
-        db.from("appointments").select("id, plate, start_time, status, no_show_flag, actual_duration_minutes").eq("facility_id", req.facilityId).eq("carrier_id", id).order("start_time", { ascending: false }).limit(50),
+        // CANCELLED and REQUESTED rows aren't real completed appointments —
+        // REQUESTED especially has no actual_duration_minutes/no_show_flag
+        // (still awaiting a slot), so counting them here inflated totalAppts
+        // and understated noShowRate. Same exclusion /api/appointments
+        // already applies (server.ts:979).
+        db.from("appointments").select("id, plate, start_time, status, no_show_flag, actual_duration_minutes").eq("facility_id", req.facilityId).eq("carrier_id", id).neq("status", "CANCELLED").neq("status", "REQUESTED").order("start_time", { ascending: false }).limit(50),
         db.from("detention_records").select("id, amount_owed, status, created_at").eq("facility_id", req.facilityId).eq("carrier_id", id).order("created_at", { ascending: false }).limit(20),
         db.from("vehicles").select("*", { count: "exact", head: true }).eq("carrier_id", id),
         db.from("drivers").select("*", { count: "exact", head: true }).eq("default_carrier_id", id),
