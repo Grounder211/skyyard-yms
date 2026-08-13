@@ -21,6 +21,11 @@ import BookingAssignPopover from "./BookingAssignPopover";
 
 type ViewType = "day" | "week" | "month" | "list";
 
+// Matches WeekView/DayView's h-20 (80px) per-hour row height, used to
+// convert an hour into a scroll offset.
+const HOUR_ROW_HEIGHT = 80;
+const BUSINESS_HOUR_START = 6;
+
 const HEALTH_STYLES: Record<string, string> = {
   ON_TRACK: "bg-teal-100 text-teal-700",
   AT_RISK: "bg-amber-100 text-amber-700",
@@ -44,6 +49,17 @@ export default function AppointmentCalendar() {
     requestId?: number; appointmentId?: number; dropTime: string; position: { x: number; y: number };
   } | null>(null);
   const { toast } = useToast();
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // The Day/Week grid starts at midnight, so scheduling anything in the
+  // afternoon meant scrolling a long way down before you could even start
+  // the drag. Land on a useful hour instead of the top of an empty night.
+  useEffect(() => {
+    if (loading || (view !== "day" && view !== "week")) return;
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    el.scrollTop = BUSINESS_HOUR_START * HOUR_ROW_HEIGHT;
+  }, [loading, view, currentDate]);
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over, activatorEvent } = event;
@@ -229,7 +245,7 @@ export default function AppointmentCalendar() {
             <p className="font-bold uppercase tracking-widest text-[10px]">Syncing Timeline...</p>
           </div>
         ) : (
-          <div className="flex-1 overflow-auto custom-scrollbar">
+          <div ref={scrollContainerRef} className="flex-1 overflow-auto custom-scrollbar">
             {view === 'month' && <MonthView currentDate={currentDate} appointments={appointments} onEdit={handleEdit} />}
             {view === 'week' && <WeekView currentDate={currentDate} appointments={appointments} hours={hours} onEdit={handleEdit} onDelete={handleDelete} />}
             {view === 'day' && <DayView currentDate={currentDate} appointments={appointments} hours={hours} onEdit={handleEdit} onDelete={handleDelete} />}
