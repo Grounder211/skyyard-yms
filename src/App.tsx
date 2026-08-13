@@ -190,12 +190,63 @@ function ViewLoader() {
 
 // --- LAYOUT ---
 
+const SIDEBAR_COLLAPSED_WIDTH = 72;
+const SIDEBAR_EXPANDED_WIDTH = 256;
+
+// Tooltip is position:fixed rather than absolute-inside-the-link because
+// the nav is a scroll container (overflow-y-auto), which also clips
+// horizontally — an absolutely-positioned tooltip gets cut off at the
+// rail's edge. Fixed + measuring the link on hover escapes that entirely.
+function SidebarTooltip({ label, anchor }: { label: string; anchor: DOMRect }) {
+  return (
+    <span
+      className="pointer-events-none fixed whitespace-nowrap rounded-sm bg-[var(--inverse-surface)] text-[var(--inverse-on-surface)] text-xs font-semibold px-2.5 py-1.5 z-[60] shadow-lg"
+      style={{ left: anchor.right + 8, top: anchor.top + anchor.height / 2, transform: "translateY(-50%)" }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function SidebarLink({ to, icon, label, active, expanded }: { to: string; icon: React.ReactNode; label: string; active: boolean; expanded: boolean; key?: React.Key }) {
+  const [hoverRect, setHoverRect] = React.useState<DOMRect | null>(null);
+
+  return (
+    <>
+      <Link
+        to={to}
+        onMouseEnter={(e) => !expanded && setHoverRect(e.currentTarget.getBoundingClientRect())}
+        onMouseLeave={() => setHoverRect(null)}
+        className={`
+          flex items-center gap-3 px-3 py-3 rounded-sm transition-colors duration-150 overflow-hidden
+          ${expanded ? "" : "justify-center"}
+          ${active
+            ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
+            : "text-[var(--on-surface-variant)] hover:bg-[var(--surface-container-high)]"}
+        `}
+      >
+        <span className="shrink-0">{icon}</span>
+        {expanded && <span className="font-medium text-sm whitespace-nowrap">{label}</span>}
+      </Link>
+      {!expanded && hoverRect && <SidebarTooltip label={label} anchor={hoverRect} />}
+    </>
+  );
+}
+
 function AppLayout({ children, user }: any) {
-  const [sidebarOpen, setSidebarOpen] = React.useState(true);
+  // Collapsed icon rail by default — expand is opt-in via the hamburger,
+  // never the initial state.
+  const [sidebarExpanded, setSidebarExpanded] = React.useState(false);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = React.useState(false);
+  const [logoutHoverRect, setLogoutHoverRect] = React.useState<DOMRect | null>(null);
   const location = useLocation();
   const { logout } = useAuth();
   const { t } = useI18n();
   const { onlineUsers } = usePresence(user.facility_id || 1, user.name || user.email);
+
+  // Navigating should close the mobile drawer — otherwise it stays open
+  // and covers the page you just tapped through to.
+  React.useEffect(() => { setMobileDrawerOpen(false); }, [location.pathname]);
 
   const allNavItems = [
     { to: "/", icon: <LayoutDashboard size={20} />, label: t("nav.dashboard") },
@@ -215,37 +266,58 @@ function AppLayout({ children, user }: any) {
   ];
   const navItems = allNavItems.filter((item) => canAccess(user.role, item.to) && !isHidden(item.to));
 
+  // Mobile: sidebar is fully off-canvas until the drawer is opened, and
+  // when open it always shows labels (there's no point in a narrow rail
+  // floating over a phone-width screen). Desktop: sidebar is always a
+  // fixed, out-of-flow rail — expanding it only changes its own width and
+  // overlays over the page, it never shifts main content's layout.
+  const showLabels = sidebarExpanded || mobileDrawerOpen;
+
   return (
     <div className="flex h-screen bg-[var(--background)] overflow-hidden font-sans">
       <CommandPalette />
-      {/* Sidebar */}
-      <aside className={`
-        ${sidebarOpen ? 'w-64' : 'w-20'}
-        bg-[var(--surface-container-low)] border-r border-[var(--outline-variant)]/20 transition-[width] duration-300 flex flex-col z-50
-      `}>
-        <div className="h-16 flex items-center px-6">
-          <Warehouse className="text-[var(--primary)] w-8 h-8 shrink-0" />
-          {sidebarOpen && <span className="ml-3 font-extrabold text-xl tracking-tight text-[var(--primary)]" style={{ fontFamily: "var(--font-heading)" }}>SkyYard</span>}
+
+      {mobileDrawerOpen && (
+        <div
+          className="fixed inset-0 bg-black/40 z-40 md:hidden transition-opacity"
+          onClick={() => setMobileDrawerOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Sidebar — always fixed/out-of-flow so expanding it on desktop
+          overlays the page instead of resizing the main content column. */}
+      <aside
+        className={`
+          fixed top-0 left-0 h-screen z-50
+          bg-[var(--surface-container-low)] border-r border-[var(--outline-variant)]/20
+          flex flex-col
+          transition-[width,transform] duration-300 ease-out
+          ${mobileDrawerOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}
+        `}
+        style={{ width: showLabels ? SIDEBAR_EXPANDED_WIDTH : SIDEBAR_COLLAPSED_WIDTH }}
+      >
+        <div className="h-16 flex items-center justify-between px-3 shrink-0">
+          <div className="flex items-center gap-3 min-w-0 overflow-hidden">
+            <Warehouse className="text-[var(--primary)] w-8 h-8 shrink-0" />
+            {showLabels && <span className="font-extrabold text-xl tracking-tight text-[var(--primary)] whitespace-nowrap" style={{ fontFamily: "var(--font-heading)" }}>SkyYard</span>}
+          </div>
+          <button
+            onClick={() => { setSidebarExpanded((v) => !v); setMobileDrawerOpen((v) => !v); }}
+            className="p-2 shrink-0 text-[var(--on-surface-variant)] hover:text-[var(--primary)] hover:bg-[var(--surface-container-high)] rounded-sm transition-colors"
+            aria-label={showLabels ? "Collapse sidebar" : "Expand sidebar"}
+            aria-expanded={showLabels}
+          >
+            <Menu size={20} />
+          </button>
         </div>
 
         <nav className="flex-1 mt-4 px-3 space-y-1 overflow-y-auto">
           {navItems.map(item => (
-            <Link
-              key={item.to}
-              to={item.to}
-              className={`
-                flex items-center gap-3 px-3 py-3 rounded-sm transition-all duration-150
-                ${location.pathname === item.to
-                  ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
-                  : 'text-[var(--on-surface-variant)] hover:bg-[var(--surface-container-high)]'}
-              `}
-            >
-              <span className="shrink-0">{item.icon}</span>
-              {sidebarOpen && <span className="font-medium text-sm">{item.label}</span>}
-            </Link>
+            <SidebarLink key={item.to} to={item.to} icon={item.icon} label={item.label} active={location.pathname === item.to} expanded={showLabels} />
           ))}
 
-          {sidebarOpen && onlineUsers.length > 0 && (
+          {showLabels && onlineUsers.length > 0 && (
             <div className="mt-10 px-3">
               <p className="text-[10px] font-bold text-[var(--on-surface-variant)] uppercase tracking-widest mb-4">Online Now</p>
               <div className="space-y-3">
@@ -269,29 +341,33 @@ function AppLayout({ children, user }: any) {
           )}
         </nav>
 
-        <div className="p-4 border-t border-[var(--outline-variant)]/20 flex items-center gap-3">
+        <div className="p-3 border-t border-[var(--outline-variant)]/20">
           {canAccess(user.role, "/settings") && (
-          <Link to="/settings" className="flex items-center gap-3 px-3 py-2.5 rounded-sm text-[var(--on-surface-variant)] hover:bg-[var(--surface-container-high)] transition-all">
-            <SettingsIcon size={18} />
-            {sidebarOpen && <span className="font-medium text-sm">{t("nav.settings")}</span>}
-          </Link>
+            <SidebarLink to="/settings" icon={<SettingsIcon size={18} />} label={t("nav.settings")} active={location.pathname === "/settings"} expanded={showLabels} />
           )}
         </div>
-        {sidebarOpen && (
-          <div className="px-4 pb-4">
-            <button onClick={logout} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-sm text-[var(--error)] hover:bg-[var(--error-container)]/40 transition-all">
-              <LogOut size={18} />
-              <span className="font-medium text-sm">{t("nav.logout")}</span>
-            </button>
-          </div>
-        )}
+        <div className="px-3 pb-3">
+          <button
+            onClick={logout}
+            onMouseEnter={(e) => !showLabels && setLogoutHoverRect(e.currentTarget.getBoundingClientRect())}
+            onMouseLeave={() => setLogoutHoverRect(null)}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-sm text-[var(--error)] hover:bg-[var(--error-container)]/40 transition-colors ${showLabels ? "" : "justify-center"}`}
+          >
+            <LogOut size={18} className="shrink-0" />
+            {showLabels && <span className="font-medium text-sm whitespace-nowrap">{t("nav.logout")}</span>}
+          </button>
+          {!showLabels && logoutHoverRect && <SidebarTooltip label={t("nav.logout")} anchor={logoutHoverRect} />}
+        </div>
       </aside>
 
-      {/* Main Container */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Main Container — margin-left is the collapsed rail width, fixed,
+          on desktop (md:ml-[72px]) so expanding the sidebar overlays it
+          rather than resizing this column. Full width on mobile, where
+          the collapsed rail isn't shown at all. */}
+      <div className="flex-1 flex flex-col overflow-hidden md:ml-[72px]">
         <header className="h-16 bg-[var(--surface-container-lowest)] border-b border-[var(--outline-variant)]/20 flex items-center justify-between px-8 sticky top-0 z-10">
           <div className="flex items-center gap-4">
-            <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-2 text-[var(--on-surface-variant)] hover:text-[var(--primary)] hover:bg-[var(--surface-container-low)] rounded-sm xl:hidden">
+            <button onClick={() => setMobileDrawerOpen(true)} className="p-2 text-[var(--on-surface-variant)] hover:text-[var(--primary)] hover:bg-[var(--surface-container-low)] rounded-sm md:hidden">
               <Menu size={20} />
             </button>
             <div className="relative group hidden sm:block">
@@ -449,35 +525,6 @@ function Dashboard() {
           <StatItem icon={<Users />} label="Visitors" value={activeVisitors} sub="Currently on site — click for detail" color="teal" onClick={() => openDetail("visitors")} />
         </Reveal>
       </div>
-
-      {facility && (
-        <div className="bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]/20 rounded-sm shadow-sm p-6 hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2">
-              <MapPin size={14} className="text-indigo-500" /> Facility Map — click a spot for details
-            </p>
-            {zones.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {zones.map((z) => (
-                  <span key={z.zone} className="text-xs font-bold bg-[var(--surface-container-low)] border border-[var(--outline-variant)] text-[var(--on-surface-variant)] rounded-sm px-3 py-1.5">
-                    {z.zone}: {z.occupied}/{z.total}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-          <Suspense fallback={<div className="rounded-2xl bg-slate-50 animate-pulse" style={{ height: "440px" }} />}>
-            <YardMap
-              spots={spots}
-              facility={facility}
-              unresolvedSafetySpotIds={unresolvedSafetySpotIds}
-              spotsWithOpenExceptions={spotsWithOpenExceptions}
-              onSelectSpot={(spot: any) => setSelectedSpot(spot)}
-              height="440px"
-            />
-          </Suspense>
-        </div>
-      )}
 
       {unmanagedTrailers.length > 0 && (
         <div className="bg-amber-500/10 border border-amber-500/30 rounded-[1.75rem] p-6">
