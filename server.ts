@@ -2905,9 +2905,16 @@ async function startServer() {
   const v1 = express.Router();
   v1.use(apiKeyAuth, apiLimiter);
 
+  // personal_id_number only ever lives on the registration record itself
+  // (see the walkin_registrations join above) — select("*") on this
+  // partner-facing route would leak it (plus the equally out-of-contract
+  // cargo_type/cargo_quantity) to every third-party integrator. Explicit
+  // column list, everything on the table except those three.
   v1.get("/appointments", async (req: any, res) => {
     const { date, status } = req.query;
-    let query = db.from("appointments").select("*").eq("facility_id", req.facilityId);
+    let query = db.from("appointments").select(
+      "id, plate, carrier, driver_license, dock_id, start_time, end_time, load_type, status, checked_in_at, checked_out_at, completed_at, grace_period_minutes, no_show_flag, priority_level, load_weight_kg, temperature_requirement, special_instructions, actual_duration_minutes, detention_flag, risk_score, source, driver_id, carrier_id, facility_id, trailer_id, created_at, customer_id, origin_address, origin_lat, origin_lng, cancelled_at, cancelled_by"
+    ).eq("facility_id", req.facilityId);
     if (date) query = query.gte("start_time", `${date}T00:00:00`).lte("start_time", `${date}T23:59:59`);
     if (status) query = query.eq("status", status);
     const { data } = await query;
@@ -3329,8 +3336,8 @@ async function startServer() {
         .select("dock_id, start_time, end_time, load_type, load_weight_kg, status")
         .eq("facility_id", facilityId)
         .neq("status", "CANCELLED")
-        .gte("start_time", `${date}T00:00:00`)
-        .lte("start_time", `${date}T23:59:59`);
+        .lt("start_time", endTime)
+        .gt("end_time", start_time as string);
       const { data: dockRules } = await db.from("dock_rules").select("dock_door_id, allowed_equipment_types").eq("facility_id", facilityId);
       const ruleMap = new Map((dockRules || []).map((r: any) => [r.dock_door_id, r.allowed_equipment_types]));
 
@@ -3369,11 +3376,17 @@ async function startServer() {
       if (appt.status !== "REQUESTED") return res.status(400).json({ error: `Already ${appt.status}` });
 
       const endTime = estimateEndTime(start_time, appt.load_type, appt.load_weight_kg);
-      const date = String(start_time).slice(0, 10);
+
+      // Rescheduling into an over-capacity hour or a blackout window hit no
+      // check at all — same gap the PATCH /api/appointments/:id comment
+      // describes, just reachable via the assign popover instead.
+      const capacity = await enforceAppointmentCapacity(facilityId, start_time, endTime);
+      if (!capacity.allowed) return res.status(409).json({ error: "CAPACITY_BLOCKED", reason: capacity.reason });
+
       const [{ data: dockRule }, { data: dayAppointments }] = await Promise.all([
         db.from("dock_rules").select("allowed_equipment_types").eq("facility_id", facilityId).eq("dock_door_id", dock_id).maybeSingle(),
         db.from("appointments").select("dock_id, start_time, end_time, load_type, status").eq("facility_id", facilityId).neq("status", "CANCELLED").neq("id", appt.id)
-          .gte("start_time", `${date}T00:00:00`).lte("start_time", `${date}T23:59:59`),
+          .lt("start_time", endTime).gt("end_time", start_time),
       ]);
       const conflict = findDockConflict({ dock_id, start_time, end_time: endTime, load_type: appt.load_type }, (dayAppointments || []) as any, dockRule?.allowed_equipment_types || null);
       if (conflict) return res.status(409).json({ error: conflict.reason });
@@ -3420,11 +3433,18 @@ async function startServer() {
 
       const oldStartTime = appt.start_time;
       const endTime = estimateEndTime(start_time, appt.load_type, appt.load_weight_kg);
-      const date = String(start_time).slice(0, 10);
+
+      // Rescheduling into an over-capacity hour or a blackout window hit no
+      // check at all — same gap the PATCH /api/appointments/:id comment
+      // describes, just reachable via drag-reschedule instead of the edit
+      // modal. Exclude this appointment's own current slot from the count.
+      const capacity = await enforceAppointmentCapacity(facilityId, start_time, endTime, appt.id);
+      if (!capacity.allowed) return res.status(409).json({ error: "CAPACITY_BLOCKED", reason: capacity.reason });
+
       const [{ data: dockRule }, { data: dayAppointments }] = await Promise.all([
         db.from("dock_rules").select("allowed_equipment_types").eq("facility_id", facilityId).eq("dock_door_id", appt.dock_id).maybeSingle(),
         db.from("appointments").select("dock_id, start_time, end_time, load_type, status").eq("facility_id", facilityId).neq("status", "CANCELLED").neq("id", appt.id)
-          .gte("start_time", `${date}T00:00:00`).lte("start_time", `${date}T23:59:59`),
+          .lt("start_time", endTime).gt("end_time", start_time),
       ]);
       const conflict = findDockConflict({ dock_id: appt.dock_id, start_time, end_time: endTime, load_type: appt.load_type }, (dayAppointments || []) as any, dockRule?.allowed_equipment_types || null);
       if (conflict) return res.status(409).json({ error: conflict.reason });
