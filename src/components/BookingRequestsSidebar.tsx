@@ -1,7 +1,7 @@
 // src/components/BookingRequestsSidebar.tsx
 import React, { useEffect, useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
-import { Package, Clock } from "lucide-react";
+import { Package, Clock, X } from "lucide-react";
 
 export interface BookingRequestCard {
   id: number;
@@ -58,7 +58,7 @@ function DraggableRequestCard({ request }: { request: BookingRequestCard; key?: 
   );
 }
 
-export default function BookingRequestsSidebar({ refreshKey }: { refreshKey?: number }) {
+export default function BookingRequestsSidebar({ refreshKey, onClose }: { refreshKey?: number; onClose?: () => void }) {
   const [requests, setRequests] = useState<BookingRequestCard[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -72,7 +72,14 @@ export default function BookingRequestsSidebar({ refreshKey }: { refreshKey?: nu
 
   return (
     <div className="w-72 shrink-0 bg-slate-50/50 border border-slate-200 rounded-3xl p-4 h-[70vh] overflow-y-auto custom-scrollbar">
-      <h3 className="font-bold text-slate-900 text-sm mb-1">Booking requests</h3>
+      <div className="flex items-start justify-between gap-2 mb-1">
+        <h3 className="font-bold text-slate-900 text-sm">Booking requests</h3>
+        {onClose && (
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-900 transition-colors shrink-0" aria-label="Hide booking requests">
+            <X size={16} />
+          </button>
+        )}
+      </div>
       <p className="text-[11px] text-slate-500 mb-4">Drag a card onto a time slot to schedule it.</p>
       {loading && <p className="text-xs text-slate-400 text-center py-8">Loading...</p>}
       {!loading && requests.length === 0 && <p className="text-xs text-slate-400 text-center py-8">No pending requests.</p>}

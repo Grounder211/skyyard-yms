@@ -9,7 +9,7 @@ import {
   ChevronLeft, ChevronRight, Clock, Calendar as CalendarIcon,
   Filter, Plus, MoreHorizontal, Maximize2, Trash2,
   CheckCircle2, AlertCircle, Search, LayoutGrid, List,
-  ArrowRight, MessageSquareText
+  ArrowRight, MessageSquareText, Menu
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { io } from "socket.io-client";
@@ -38,6 +38,7 @@ export default function AppointmentCalendar() {
   const [editingAppointment, setEditingAppointment] = useState<any>(null);
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [pendingDrop, setPendingDrop] = useState<{
     mode: "assign" | "reschedule"; plate: string; loadType: string;
     requestId?: number; appointmentId?: number; dropTime: string; position: { x: number; y: number };
@@ -208,7 +209,19 @@ export default function AppointmentCalendar() {
 
       {/* Main Calendar Content */}
       <div className="flex gap-6 items-start">
-      {(view === "day" || view === "week") && <BookingRequestsSidebar refreshKey={sidebarRefreshKey} />}
+      {(view === "day" || view === "week") && (
+        sidebarOpen ? (
+          <BookingRequestsSidebar refreshKey={sidebarRefreshKey} onClose={() => setSidebarOpen(false)} />
+        ) : (
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="shrink-0 h-[70vh] w-11 bg-slate-50/50 border border-slate-200 rounded-3xl flex items-start justify-center pt-4 hover:bg-slate-100 transition-colors"
+            aria-label="Show booking requests"
+          >
+            <Menu size={18} className="text-slate-500" />
+          </button>
+        )
+      )}
       <div className="h-[70vh] shrink-0 flex-1 bg-white border border-slate-200 rounded-[2.5rem] shadow-xl shadow-slate-200/50 overflow-hidden flex flex-col">
         {loading ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-4 text-slate-300">
