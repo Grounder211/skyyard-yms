@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ArrowRight, Truck, DoorOpen, LogOut, CheckCircle2, X, Loader2, MapPin, UserCheck, UserX, Hand, LayoutGrid } from "lucide-react";
-import { io } from "socket.io-client";
+import { useSocket } from "../contexts/SocketContext";
 import { motion, AnimatePresence } from "motion/react";
 import { useToast } from "../contexts/ToastContext";
 import { useAuth } from "../contexts/AuthContext";
@@ -42,14 +42,21 @@ export default function DispatchBoard() {
     if (user?.role === "superadmin" || user?.role === "ADMIN") {
       fetch("/api/admin/hostlers").then((r) => (r.ok ? r.json() : [])).then((d) => setHostlers(Array.isArray(d) ? d : [])).catch(() => {});
     }
-    const socket = io();
-    socket.on("yard_update", () => { load(); loadParkingRecs(); });
-    socket.on("move_update", () => { load(); loadParkingRecs(); });
-    return () => {
-      socket.disconnect();
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.role]);
+
+  const socket = useSocket();
+  useEffect(() => {
+    if (!socket) return;
+    const onUpdate = () => { load(); loadParkingRecs(); };
+    socket.on("yard_update", onUpdate);
+    socket.on("move_update", onUpdate);
+    return () => {
+      socket.off("yard_update", onUpdate);
+      socket.off("move_update", onUpdate);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket]);
 
   // Phase 12: Smart Parking — recommendation only, an admin/hostler has to
   // click through to actually create the move order (never silently moved).

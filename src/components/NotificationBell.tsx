@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Bell } from "lucide-react";
 import { io } from "socket.io-client";
 import { useNavigate } from "react-router-dom";
+import { useSocket } from "../contexts/SocketContext";
 
 interface Notif {
   id: number;
@@ -20,9 +21,12 @@ const SCOPE_URLS: Record<string, { list: string; read: (id: number) => string; r
 export default function NotificationBell({ scope = "admin" }: { scope?: "admin" | "carrier" | "driver" }) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<Notif[]>([]);
-  const socketRef = useRef<any>(null);
   const navigate = useNavigate();
   const urls = SCOPE_URLS[scope];
+  // Staff pages (scope="admin") render inside the app shell's SocketProvider
+  // and reuse that connection; the standalone Carrier/Driver portals don't
+  // have one, so they fall back to opening their own, same as before.
+  const sharedSocket = useSocket();
 
   const load = async () => {
     try {
@@ -33,10 +37,18 @@ export default function NotificationBell({ scope = "admin" }: { scope?: "admin" 
 
   useEffect(() => {
     load();
-    socketRef.current = io();
-    socketRef.current.on("new_notification", () => load());
-    return () => socketRef.current?.disconnect();
-  }, [scope]);
+
+    if (sharedSocket !== undefined) {
+      if (!sharedSocket) return;
+      const onNotification = () => load();
+      sharedSocket.on("new_notification", onNotification);
+      return () => { sharedSocket.off("new_notification", onNotification); };
+    }
+
+    const localSocket = io();
+    localSocket.on("new_notification", () => load());
+    return () => { localSocket.disconnect(); };
+  }, [scope, sharedSocket]);
 
   const markAllRead = async () => {
     if (urls.readAll) {

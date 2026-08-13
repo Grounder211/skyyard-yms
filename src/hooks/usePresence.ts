@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { io, Socket } from "socket.io-client";
+import { useSocket } from "../contexts/SocketContext";
 
 export interface PresenceUser {
   id: string;
@@ -15,11 +15,12 @@ const COLORS = ["#0F5CA8", "#0A6B52", "#7A4509", "#4A42A8", "#991F1F", "#1A5F7A"
 
 export function usePresence(facilityId: number, userName: string) {
   const [onlineUsers, setOnlineUsers] = useState<PresenceUser[]>([]);
-  const socketRef = useRef<Socket | null>(null);
+  const socket = useSocket();
+  const socketRef = useRef<any>(null);
+  socketRef.current = socket;
 
   useEffect(() => {
-    const socket = io();
-    socketRef.current = socket;
+    if (!socket) return;
 
     const myPresence: PresenceUser = {
       id: Math.random().toString(36).substr(2, 9),
@@ -32,21 +33,22 @@ export function usePresence(facilityId: number, userName: string) {
 
     socket.emit("join-facility", { facilityId, user: myPresence });
 
-    socket.on("presence-update", (users: PresenceUser[]) => {
+    const onPresenceUpdate = (users: PresenceUser[]) => {
       setOnlineUsers(users.filter(u => u.id !== myPresence.id));
-    });
+    };
+    socket.on("presence-update", onPresenceUpdate);
 
     const pathHandler = () => {
       socket.emit("update-page", { facilityId, userId: myPresence.id, page: window.location.pathname });
     };
 
     window.addEventListener("popstate", pathHandler);
-    
+
     return () => {
-      socket.disconnect();
+      socket.off("presence-update", onPresenceUpdate);
       window.removeEventListener("popstate", pathHandler);
     };
-  }, [facilityId, userName]);
+  }, [socket, facilityId, userName]);
 
   const broadcastCursor = (x: number, y: number) => {
     socketRef.current?.emit("cursor-move", { facilityId, x, y });

@@ -34,6 +34,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Routes, Route, Link, useLocation } from "react-router-dom";
 import { ToastProvider } from "./contexts/ToastContext";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { SocketProvider } from "./contexts/SocketContext";
 import { I18nProvider, useI18n } from "./lib/i18n";
 import { use3DTilt } from "./hooks/use3DTilt";
 import { Reveal, CountUp } from "./components/MotionProviders";
@@ -132,6 +133,7 @@ function StaffArea() {
     canAccess(user.role, path) && !isHidden(path) ? element : <Restricted role={user.role} />;
 
   return (
+    <SocketProvider>
     <ToastProvider>
       <AppLayout user={user}>
         <Suspense fallback={<ViewLoader />}>
@@ -160,6 +162,7 @@ function StaffArea() {
         </Suspense>
       </AppLayout>
     </ToastProvider>
+    </SocketProvider>
   );
 }
 

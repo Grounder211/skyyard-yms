@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, Clock, ShieldAlert, Loader2, ChevronDown } from "lucide-react";
-import { io } from "socket.io-client";
+import { useSocket } from "../contexts/SocketContext";
 import { useToast } from "../contexts/ToastContext";
 
 const SEVERITY_STYLES: Record<string, string> = {
@@ -53,12 +53,20 @@ export default function ExceptionCenter() {
   useEffect(() => {
     setLoading(true);
     load();
-    const socket = io();
-    socket.on("exception_created", load);
-    socket.on("exception_updated", load);
-    return () => { socket.disconnect(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
+
+  const socket = useSocket();
+  useEffect(() => {
+    if (!socket) return;
+    socket.on("exception_created", load);
+    socket.on("exception_updated", load);
+    return () => {
+      socket.off("exception_created", load);
+      socket.off("exception_updated", load);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket, statusFilter]);
 
   const updateException = async (id: number, patch: any) => {
     setBusyId(id);

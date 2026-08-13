@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { io } from "socket.io-client";
+import { useSocket } from "../contexts/SocketContext";
 import { ShieldCheck, Clock, ArrowRight, CheckCircle2, LogOut, AlertTriangle, Loader2, X, Printer } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useToast } from "../contexts/ToastContext";
@@ -59,14 +59,20 @@ export default function PipelineBoard() {
 
   useEffect(() => {
     load();
-    const socket = io();
-    socket.on("yard_update", load);
     const tick = setInterval(() => forceTick((n) => n + 1), 30000);
     return () => {
-      socket.disconnect();
       clearInterval(tick);
     };
   }, []);
+
+  const socket = useSocket();
+  useEffect(() => {
+    if (!socket) return;
+    socket.on("yard_update", load);
+    return () => {
+      socket.off("yard_update", load);
+    };
+  }, [socket]);
 
   const advance = async (pass: any, stage: string, extra?: { dockId?: number; confirmSwapWithTrailerId?: number }) => {
     setBusy(pass.id);

@@ -12,7 +12,7 @@ import {
   ArrowRight, MessageSquareText, Menu
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { io } from "socket.io-client";
+import { useSocket } from "../contexts/SocketContext";
 import { DndContext, useDroppable, useDraggable, PointerSensor, KeyboardSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { useToast } from "../contexts/ToastContext";
 import VehicleLog from "./VehicleLog";
@@ -64,20 +64,20 @@ export default function AppointmentCalendar() {
     }
   };
 
-  const socketRef = useRef<any>(null);
+  const socket = useSocket();
 
   useEffect(() => {
     fetchAppointments();
-
-    socketRef.current = io();
-    socketRef.current.on("yard_update", () => {
-      fetchAppointments();
-    });
-
-    return () => {
-      socketRef.current.disconnect();
-    };
   }, [currentDate, view]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const onYardUpdate = () => fetchAppointments();
+    socket.on("yard_update", onYardUpdate);
+    return () => {
+      socket.off("yard_update", onYardUpdate);
+    };
+  }, [socket, currentDate, view]);
 
   const fetchAppointments = async () => {
     try {

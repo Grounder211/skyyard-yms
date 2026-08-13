@@ -15,7 +15,7 @@ import {
   AlertTriangle,
   MessageSquareText,
 } from "lucide-react";
-import { io } from "socket.io-client";
+import { useSocket } from "../contexts/SocketContext";
 import { QRCodeSVG } from "qrcode.react";
 import { useToast } from "../contexts/ToastContext";
 import { useAuth } from "../contexts/AuthContext";
@@ -163,16 +163,21 @@ export default function GateConsole() {
     loadYard();
     loadVisitors();
     loadPendingApprovals();
-    const socket = io();
-    socket.on("yard_update", () => {
+  }, []);
+
+  const socket = useSocket();
+  useEffect(() => {
+    if (!socket) return;
+    const onYardUpdate = () => {
       loadYard();
       loadVisitors();
       loadPendingApprovals();
-    });
-    return () => {
-      socket.disconnect();
     };
-  }, []);
+    socket.on("yard_update", onYardUpdate);
+    return () => {
+      socket.off("yard_update", onYardUpdate);
+    };
+  }, [socket]);
 
   const availableParking = (yard.spots || []).filter((s: any) => s.type === "PARKING" && s.status === "EMPTY").length;
   const availableDocks = (yard.spots || []).filter((s: any) => s.type === "DOCK" && s.status === "EMPTY").length;

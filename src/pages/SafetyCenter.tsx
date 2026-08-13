@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { HardHat, AlertTriangle, Clock, CheckCircle2, Loader2, ChevronDown, Plus, X } from "lucide-react";
-import { io } from "socket.io-client";
+import { useSocket } from "../contexts/SocketContext";
 import { useToast } from "../contexts/ToastContext";
 
 const SEVERITY_STYLES: Record<string, string> = {
@@ -76,12 +76,20 @@ export default function SafetyCenter() {
   useEffect(() => {
     setLoading(true);
     load();
-    const socket = io();
-    socket.on("safety_incident_created", load);
-    socket.on("safety_incident_updated", load);
-    return () => { socket.disconnect(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
+
+  const socket = useSocket();
+  useEffect(() => {
+    if (!socket) return;
+    socket.on("safety_incident_created", load);
+    socket.on("safety_incident_updated", load);
+    return () => {
+      socket.off("safety_incident_created", load);
+      socket.off("safety_incident_updated", load);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket, statusFilter]);
 
   const submitReport = async (e: React.FormEvent) => {
     e.preventDefault();

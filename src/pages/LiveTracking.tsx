@@ -1,10 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Radar, Truck, Clock, AlertTriangle, Activity, DoorOpen, LogIn, LogOut, ArrowRightLeft, X, History, Search, Thermometer, Fuel, Loader2, Building2, ShieldAlert, Weight, Camera, Map as MapIcon, LayoutGrid } from "lucide-react";
-import { io } from "socket.io-client";
 import { motion, AnimatePresence } from "motion/react";
 import { useToast } from "../contexts/ToastContext";
 import { useAuth } from "../contexts/AuthContext";
-import YardMap from "../components/YardMap";
+import { useSocket } from "../contexts/SocketContext";
+
+// Lazy so this page's own chunk doesn't eagerly bundle YardMap's ~1.9MB
+// mapbox-gl dependency — App.tsx already lazy-loads YardMap for other
+// consumers; a static import here defeated that for this route.
+const YardMap = React.lazy(() => import("../components/YardMap"));
 
 function elapsed(since: string) {
   const ms = Date.now() - new Date(since).getTime();
@@ -84,13 +88,18 @@ export default function LiveTracking() {
 
   useEffect(() => {
     load();
-    const socket = io();
+  }, []);
+
+  const socket = useSocket();
+  useEffect(() => {
+    if (!socket) return;
     socket.on("yard_update", load);
     socket.on("move_update", load);
     return () => {
-      socket.disconnect();
+      socket.off("yard_update", load);
+      socket.off("move_update", load);
     };
-  }, []);
+  }, [socket]);
 
   // Tick every second to keep live dwell timers moving without refetching
   useEffect(() => {
@@ -341,14 +350,16 @@ export default function LiveTracking() {
           </div>
 
           {viewMode === "map" && yard.facility && (
-            <YardMap
-              spots={yard.spots || []}
-              facility={yard.facility}
-              unresolvedSafetySpotIds={yard.unresolvedSafetySpotIds}
-              spotsWithOpenExceptions={yard.spotsWithOpenExceptions}
-              onSelectSpot={(spot: any) => spot.plate && setSelected(spot)}
-              height="560px"
-            />
+            <Suspense fallback={<div className="h-[560px] rounded-2xl bg-slate-50 animate-pulse" />}>
+              <YardMap
+                spots={yard.spots || []}
+                facility={yard.facility}
+                unresolvedSafetySpotIds={yard.unresolvedSafetySpotIds}
+                spotsWithOpenExceptions={yard.spotsWithOpenExceptions}
+                onSelectSpot={(spot: any) => spot.plate && setSelected(spot)}
+                height="560px"
+              />
+            </Suspense>
           )}
 
           {viewMode === "grid" && (

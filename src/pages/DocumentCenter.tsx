@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { FileText, Upload, Loader2, CheckCircle2, XCircle, Clock, Download, Trash2, ChevronDown, X } from "lucide-react";
-import { io } from "socket.io-client";
+import { useSocket } from "../contexts/SocketContext";
 import { useToast } from "../contexts/ToastContext";
 
 const STATUS_STYLES: Record<string, string> = {
@@ -66,12 +66,20 @@ export default function DocumentCenter() {
     setLoading(true);
     load();
     loadCompliance();
-    const socket = io();
-    socket.on("document_uploaded", () => { load(); loadCompliance(); });
-    socket.on("document_updated", () => { load(); loadCompliance(); });
-    return () => { socket.disconnect(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
+
+  const socket = useSocket();
+  useEffect(() => {
+    if (!socket) return;
+    const onDocUpdate = () => { load(); loadCompliance(); };
+    socket.on("document_uploaded", onDocUpdate);
+    socket.on("document_updated", onDocUpdate);
+    return () => {
+      socket.off("document_uploaded", onDocUpdate);
+      socket.off("document_updated", onDocUpdate);
+    };
+  }, [socket]);
 
   const submitUpload = async (e: React.FormEvent) => {
     e.preventDefault();
