@@ -42,18 +42,18 @@ function DraggableRequestCard({ request }: { request: BookingRequestCard; key?: 
       style={style}
       {...listeners}
       {...attributes}
-      className={`bg-white border border-slate-200 rounded-2xl p-4 cursor-grab active:cursor-grabbing shadow-sm hover:border-indigo-300 transition-all touch-none ${isDragging ? "opacity-50 z-50" : ""}`}
+      className={`bg-white border border-slate-200 rounded-xl p-2.5 cursor-grab active:cursor-grabbing shadow-sm hover:border-indigo-300 transition-all touch-none ${isDragging ? "opacity-50 z-50" : ""}`}
     >
-      <div className="flex items-center justify-between mb-1.5">
-        <p className="font-black text-slate-900 text-sm">{request.plate}</p>
-        <span className="text-[9px] font-bold text-slate-400 flex items-center gap-1"><Clock size={9} /> {timeAgo(request.created_at)}</span>
+      <div className="flex items-center justify-between mb-1">
+        <p className="font-black text-slate-900 text-xs">{request.plate}</p>
+        <span className="text-[8px] font-bold text-slate-400 flex items-center gap-1"><Clock size={8} /> {timeAgo(request.created_at)}</span>
       </div>
-      <p className="text-xs font-bold text-slate-500 truncate">{request.carrier}</p>
-      <div className="flex items-center gap-1.5 mt-2 text-[11px] text-slate-600">
-        <Package size={11} className="text-indigo-400 shrink-0" />
+      <p className="text-[11px] font-bold text-slate-500 truncate">{request.carrier}</p>
+      <div className="flex items-center gap-1 mt-1.5 text-[10px] text-slate-600">
+        <Package size={10} className="text-indigo-400 shrink-0" />
         <span className="truncate">{request.cargo_type}{request.cargo_quantity ? ` · ${request.cargo_quantity}` : ""}</span>
       </div>
-      <p className="text-[10px] text-slate-400 mt-1">ID: {request.personal_id_number}</p>
+      <p className="text-[9px] text-slate-400 mt-0.5">ID: {request.personal_id_number}</p>
     </div>
   );
 }
@@ -71,19 +71,19 @@ export default function BookingRequestsSidebar({ refreshKey, onClose }: { refres
   }, [refreshKey]);
 
   return (
-    <div className="w-72 shrink-0 bg-slate-50/50 border border-slate-200 rounded-3xl p-4 h-[70vh] overflow-y-auto custom-scrollbar">
-      <div className="flex items-start justify-between gap-2 mb-1">
-        <h3 className="font-bold text-slate-900 text-sm">Booking requests</h3>
+    <div className="w-60 shrink-0 bg-slate-50/50 border border-slate-200 rounded-2xl p-3 h-[70vh] overflow-y-auto custom-scrollbar">
+      <div className="flex items-start justify-between gap-2 mb-0.5">
+        <h3 className="font-bold text-slate-900 text-xs">Booking requests</h3>
         {onClose && (
           <button onClick={onClose} className="text-slate-400 hover:text-slate-900 transition-colors shrink-0" aria-label="Hide booking requests">
-            <X size={16} />
+            <X size={14} />
           </button>
         )}
       </div>
-      <p className="text-[11px] text-slate-500 mb-4">Drag a card onto a time slot to schedule it.</p>
-      {loading && <p className="text-xs text-slate-400 text-center py-8">Loading...</p>}
-      {!loading && requests.length === 0 && <p className="text-xs text-slate-400 text-center py-8">No pending requests.</p>}
-      <div className="space-y-3">
+      <p className="text-[10px] text-slate-500 mb-3">Drag a card onto a time slot to schedule it.</p>
+      {loading && <p className="text-[11px] text-slate-400 text-center py-8">Loading...</p>}
+      {!loading && requests.length === 0 && <p className="text-[11px] text-slate-400 text-center py-8">No pending requests.</p>}
+      <div className="space-y-2">
         {requests.map((r) => <DraggableRequestCard key={r.id} request={r} />)}
       </div>
     </div>
