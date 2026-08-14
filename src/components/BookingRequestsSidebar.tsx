@@ -30,19 +30,19 @@ function timeAgo(iso: string): string {
 // without loosening the component's actual prop typing. Real fix: add
 // @types/react + @types/react-dom as devDependencies repo-wide (separate task).
 function DraggableRequestCard({ request }: { request: BookingRequestCard; key?: React.Key }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+  // No transform: the Calendar's DragOverlay renders what follows the
+  // cursor, so this card stays put and dims instead of moving twice.
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `request-${request.id}`,
     data: { type: "request", request },
   });
-  const style = transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined;
 
   return (
     <div
       ref={setNodeRef}
-      style={style}
       {...listeners}
       {...attributes}
-      className={`bg-white border border-slate-200 rounded-xl p-2.5 cursor-grab active:cursor-grabbing shadow-sm hover:border-indigo-300 transition-all touch-none ${isDragging ? "opacity-50 z-50" : ""}`}
+      className={`bg-white border border-slate-200 rounded-xl p-2.5 cursor-grab active:cursor-grabbing shadow-sm hover:border-indigo-300 hover:shadow-md transition-all touch-none ${isDragging ? "opacity-40" : ""}`}
     >
       <div className="flex items-center justify-between mb-1">
         <p className="font-black text-slate-900 text-xs">{request.plate}</p>

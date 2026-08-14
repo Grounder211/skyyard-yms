@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useSocket } from "../contexts/SocketContext";
-import { DndContext, useDroppable, useDraggable, PointerSensor, KeyboardSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { DndContext, DragOverlay, useDroppable, useDraggable, PointerSensor, KeyboardSensor, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from "@dnd-kit/core";
 import { useToast } from "../contexts/ToastContext";
 import VehicleLog from "./VehicleLog";
 import BookingRequestsSidebar from "./BookingRequestsSidebar";
@@ -25,6 +25,7 @@ type ViewType = "day" | "week" | "month" | "list";
 // convert an hour into a scroll offset.
 const HOUR_ROW_HEIGHT = 80;
 const BUSINESS_HOUR_START = 6;
+const BUSINESS_HOUR_END = 20;
 
 const HEALTH_STYLES: Record<string, string> = {
   ON_TRACK: "bg-teal-100 text-teal-700",
@@ -61,8 +62,25 @@ export default function AppointmentCalendar() {
     el.scrollTop = BUSINESS_HOUR_START * HOUR_ROW_HEIGHT;
   }, [loading, view, currentDate]);
 
+  // What's currently under the cursor, for the DragOverlay. Without an
+  // overlay the dragged element is just translated in place, so the
+  // calendar's own scroll container clips it the moment you drag past an
+  // edge — which is most of the time, on a 24-hour grid.
+  const [activeDrag, setActiveDrag] = useState<{ plate: string; sub: string } | null>(null);
+
+  const handleDragStart = (event: DragStartEvent) => {
+    const d = event.active.data.current as any;
+    if (!d) return;
+    if (d.type === "request") {
+      setActiveDrag({ plate: d.request.plate, sub: `${d.request.cargo_type}${d.request.cargo_quantity ? ` · ${d.request.cargo_quantity}` : ""}` });
+    } else {
+      setActiveDrag({ plate: d.appointment.plate, sub: d.appointment.carrier || "Reschedule" });
+    }
+  };
+
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over, activatorEvent } = event;
+    setActiveDrag(null);
     if (!over) return;
     const dropData = over.data.current as { day: Date; hour: number } | undefined;
     if (!dropData) return;
@@ -155,7 +173,7 @@ export default function AppointmentCalendar() {
   );
 
   return (
-    <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+    <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={() => setActiveDrag(null)}>
     <div className="min-h-full flex flex-col gap-6 max-w-[1600px] mx-auto px-4 lg:px-8 pb-8">
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
@@ -247,8 +265,8 @@ export default function AppointmentCalendar() {
         ) : (
           <div ref={scrollContainerRef} className="flex-1 overflow-auto custom-scrollbar">
             {view === 'month' && <MonthView currentDate={currentDate} appointments={appointments} onEdit={handleEdit} />}
-            {view === 'week' && <WeekView currentDate={currentDate} appointments={appointments} hours={hours} onEdit={handleEdit} onDelete={handleDelete} />}
-            {view === 'day' && <DayView currentDate={currentDate} appointments={appointments} hours={hours} onEdit={handleEdit} onDelete={handleDelete} />}
+            {view === 'week' && <WeekView currentDate={currentDate} appointments={appointments} hours={hours} onEdit={handleEdit} onDelete={handleDelete} dragging={!!activeDrag} />}
+            {view === 'day' && <DayView currentDate={currentDate} appointments={appointments} hours={hours} onEdit={handleEdit} onDelete={handleDelete} dragging={!!activeDrag} />}
             {view === 'list' && <ListView appointments={appointments} onEdit={handleEdit} onDelete={handleDelete} />}
           </div>
         )}
@@ -287,6 +305,15 @@ export default function AppointmentCalendar() {
         />
       )}
     </div>
+
+    <DragOverlay dropAnimation={null}>
+      {activeDrag && (
+        <div className="bg-white border-2 border-indigo-500 rounded-xl px-3 py-2 shadow-2xl shadow-indigo-500/30 cursor-grabbing rotate-2">
+          <p className="font-black text-slate-900 text-xs leading-tight">{activeDrag.plate}</p>
+          <p className="text-[10px] text-slate-500 truncate max-w-[180px]">{activeDrag.sub}</p>
+        </div>
+      )}
+    </DragOverlay>
     </DndContext>
   );
 }
@@ -412,27 +439,47 @@ function MonthView({ currentDate, appointments, onEdit }: any) {
 // key here (out of the component's real prop type) satisfies tsc without
 // loosening it. Real fix: add @types/react + @types/react-dom repo-wide.
 function DraggableAppointmentBlock({ appt, children, className = "", style }: { appt: any; children: React.ReactNode; className?: string; style?: React.CSSProperties; key?: React.Key }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: `appt-${appt.id}`, data: { type: "appointment", appointment: appt } });
-  const dragStyle: React.CSSProperties = { ...style, ...(transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : {}) };
+  // No transform here on purpose: the DragOverlay renders the thing that
+  // follows the cursor, so the source block stays in place and just dims.
+  // Translating it too would move two copies at once.
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: `appt-${appt.id}`, data: { type: "appointment", appointment: appt } });
   return (
-    <div ref={setNodeRef} {...listeners} {...attributes} className={`touch-none ${className} ${isDragging ? "opacity-50 z-50" : ""}`} style={dragStyle}>
+    <div ref={setNodeRef} {...listeners} {...attributes} className={`touch-none cursor-grab active:cursor-grabbing ${className} ${isDragging ? "opacity-40" : ""}`} style={style}>
       {children}
     </div>
   );
 }
 
-function DroppableHourCell({ day, hour }: { day: Date; hour: number; key?: React.Key }) {
+function DroppableHourCell({ day, hour, dragging }: { day: Date; hour: number; dragging: boolean; key?: React.Key }) {
   const { setNodeRef, isOver } = useDroppable({ id: `${day.toISOString()}_${hour}`, data: { day, hour } });
+  const offHours = hour < BUSINESS_HOUR_START || hour >= BUSINESS_HOUR_END;
+
   return (
-    <div ref={setNodeRef} className={`h-20 border-b border-slate-50 relative group transition-colors ${isOver ? "bg-indigo-100" : ""}`}>
-      <div className="absolute inset-0 bg-indigo-50/50 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center pointer-events-none">
-        <Plus size={16} className="text-indigo-400" />
-      </div>
+    <div
+      ref={setNodeRef}
+      className={`h-20 border-b relative group transition-colors
+        ${offHours ? "bg-slate-50/60 border-slate-100" : "border-slate-50"}
+        ${isOver ? "bg-indigo-100 ring-2 ring-inset ring-indigo-400" : dragging ? "hover:bg-indigo-50/40" : ""}`}
+    >
+      {isOver ? (
+        // While dragging, name the exact slot you're about to drop into —
+        // an hour row on its own reads as ambiguous once you've scrolled
+        // away from the time gutter.
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <span className="text-[10px] font-black uppercase tracking-wider text-indigo-700 bg-white/80 rounded-full px-2 py-0.5">
+            {format(new Date(new Date(day).setHours(hour, 0, 0, 0)), "eee HH:mm")}
+          </span>
+        </div>
+      ) : (
+        <div className="absolute inset-0 bg-indigo-50/50 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center pointer-events-none">
+          <Plus size={16} className="text-indigo-400" />
+        </div>
+      )}
     </div>
   );
 }
 
-function WeekView({ currentDate, appointments, hours, onEdit, onDelete }: any) {
+function WeekView({ currentDate, appointments, hours, onEdit, onDelete, dragging }: any) {
   const start = startOfWeek(currentDate);
   const days = Array.from({ length: 7 }, (_, i) => addDays(start, i));
 
@@ -460,7 +507,7 @@ function WeekView({ currentDate, appointments, hours, onEdit, onDelete }: any) {
             
             {/* Time Slots */}
             <div className="relative">
-              {hours.map((hour: number) => <DroppableHourCell key={hour} day={day} hour={hour} />)}
+              {hours.map((hour: number) => <DroppableHourCell key={hour} day={day} hour={hour} dragging={dragging} />)}
 
               {/* Appointments */}
               {appointments
@@ -510,16 +557,27 @@ function WeekView({ currentDate, appointments, hours, onEdit, onDelete }: any) {
   );
 }
 
-function DroppableDayRow({ day, hour, children }: { day: Date; hour: number; children: React.ReactNode; key?: React.Key }) {
+function DroppableDayRow({ day, hour, dragging, children }: { day: Date; hour: number; dragging: boolean; children: React.ReactNode; key?: React.Key }) {
   const { setNodeRef, isOver } = useDroppable({ id: `${day.toISOString()}_${hour}`, data: { day, hour } });
+  const offHours = hour < BUSINESS_HOUR_START || hour >= BUSINESS_HOUR_END;
   return (
-    <div ref={setNodeRef} className={`flex gap-6 min-h-[96px] border-b border-slate-50 last:border-0 py-4 group transition-colors ${isOver ? "bg-indigo-100" : ""}`}>
+    <div
+      ref={setNodeRef}
+      className={`relative flex gap-6 min-h-[96px] border-b border-slate-50 last:border-0 py-4 group transition-colors rounded-lg
+        ${offHours ? "bg-slate-50/50" : ""}
+        ${isOver ? "bg-indigo-100 ring-2 ring-inset ring-indigo-400" : dragging ? "hover:bg-indigo-50/40" : ""}`}
+    >
+      {isOver && (
+        <span className="absolute right-3 top-2 text-[10px] font-black uppercase tracking-wider text-indigo-700 bg-white/80 rounded-full px-2 py-0.5 pointer-events-none z-10">
+          Drop at {format(new Date(new Date(day).setHours(hour, 0, 0, 0)), "HH:mm")}
+        </span>
+      )}
       {children}
     </div>
   );
 }
 
-function DayView({ currentDate, appointments, hours, onEdit, onDelete }: any) {
+function DayView({ currentDate, appointments, hours, onEdit, onDelete, dragging }: any) {
   // Same as week but only one day column
   const dayAppts = appointments.filter((a: any) => isSameDay(parseISO(a.start_time), currentDate));
 
@@ -548,7 +606,7 @@ function DayView({ currentDate, appointments, hours, onEdit, onDelete }: any) {
            {hours.map((hour: number) => {
              const hourAppts = dayAppts.filter((a: any) => parseISO(a.start_time).getHours() === hour);
              return (
-               <DroppableDayRow key={hour} day={currentDate} hour={hour}>
+               <DroppableDayRow key={hour} day={currentDate} hour={hour} dragging={dragging}>
                  <div className="w-32 flex flex-col pt-1">
                     <span className="text-[10px] font-black text-slate-300 group-hover:text-indigo-400 transition-colors uppercase tracking-[0.2em]">{format(new Date().setHours(hour, 0), "ha")}</span>
                     <div className="w-8 h-0.5 bg-slate-100 mt-2" />
