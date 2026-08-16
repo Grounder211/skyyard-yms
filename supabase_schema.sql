@@ -1,5 +1,16 @@
 -- SkyYard YMS Supabase Schema
 -- Run this in the Supabase SQL Editor (https://app.supabase.com/project/_/sql)
+--
+-- STALE PARTIAL REFERENCE: this file only covers 15 of the live project's
+-- ~44 tables and predates several columns in active use — it does not
+-- reflect the current database and should not be used to provision a new
+-- one as-is. It also has no RLS statements; the live project has
+-- ENABLE ROW LEVEL SECURITY set on every table with zero policies defined,
+-- which is correct default-deny for the anon/authenticated roles (only the
+-- app's own service_role key, used exclusively server-side, can read or
+-- write). Any table added here should get the same treatment:
+--   ALTER TABLE <table> ENABLE ROW LEVEL SECURITY;
+--   ALTER TABLE <table> FORCE ROW LEVEL SECURITY;
 
 -- 1. Enable UUID extension if needed
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";

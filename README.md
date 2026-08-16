@@ -57,17 +57,17 @@ Enforced both server-side (`requireRole(...)` guards in `server.ts`) and mirrore
 
 ### Default staff logins (seeded in the database)
 
-| Role | Email | Password |
-|---|---|---|
-| Superadmin | `superadmin@skyyard.se` | `Skyyard#2026` |
-| Admin | `admin@skyyard.se` | `Skyyard#2026` |
-| Guard | `guard@skyyard.se` | `Skyyard#2026` |
-| Hostler | `hostler@skyyard.se` | `Skyyard#2026` |
+| Role | Email |
+|---|---|
+| Superadmin | `superadmin@skyyard.se` |
+| Admin | `admin@skyyard.se` |
+| Guard | `guard@skyyard.se` |
+| Hostler | `hostler@skyyard.se` |
 
-Change these (update `password_hash` in the `users` table with a new bcrypt hash, or add a "change password" flow) before using this outside a demo.
+These four accounts were seeded with a single shared demo password. **That password must never be published here or anywhere else** — it grants superadmin access to every facility. If this repository (or any fork/clone of it) is or was ever public, treat that password as compromised and rotate `password_hash` for all four accounts immediately (a new bcrypt hash, or wire up a real "change password" flow) before relying on this deployment for anything real.
 
 ## Still on the roadmap
 
 - UI/UX polish pass (empty states, loading states, mobile responsiveness) across all pages.
-- Real Postgres-level RLS policies if you ever add direct client-to-Supabase access (currently everything goes through the Express API, so this isn't required, just an option).
+- Keep `supabase_schema.sql` in sync with the live database — it's a stale reference copy (currently missing several tables and columns, and missing the `ENABLE ROW LEVEL SECURITY` statements the live project actually has on every table with zero policies, i.e. correct default-deny for the `anon`/`authenticated` roles; only the app's own `service_role` key can read/write).
 - Swap `console.error`/log lines for the `winston` logger that's already a dependency but not wired up.
