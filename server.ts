@@ -50,6 +50,17 @@ if (isProd && !process.env.SESSION_SECRET) {
   throw new Error("SESSION_SECRET must be set in production — refusing to start with a hardcoded fallback secret.");
 }
 
+// Outside production this used to fall back to a fixed, source-committed
+// string — anyone who read the repo could forge a validly-signed session
+// cookie for any deployment that simply forgot to set NODE_ENV=production
+// (the documented `npm run dev`/`npm start` flow never sets it). A fresh
+// random secret every boot keeps local dev working with zero setup while
+// making that literal impossible to reuse across installs.
+const sessionSecret = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
+if (!isProd && !process.env.SESSION_SECRET) {
+  logger.warn("SESSION_SECRET not set — using an ephemeral secret for this process only (sessions won't survive a restart). Set SESSION_SECRET for a stable dev session.");
+}
+
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
   .map((o) => o.trim())
@@ -59,8 +70,16 @@ if (isProd && allowedOrigins.length === 0) {
   throw new Error("ALLOWED_ORIGINS must be set in production — refusing to start with CORS open to all origins.");
 }
 
+// Same reasoning as the session secret: reflecting every Origin with
+// credentials:true whenever NODE_ENV wasn't exactly "production" let any
+// website a logged-in operator visited make authenticated cross-origin
+// requests against a misconfigured (not just intentionally local) deploy.
+// Only actual localhost origins are exempt now; anything else needs an
+// explicit ALLOWED_ORIGINS entry even outside production.
+const isLocalhostOrigin = (origin: string) => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+
 const corsOriginCheck = (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-  if (!isProd || !origin || allowedOrigins.includes(origin)) return callback(null, true);
+  if (!origin || allowedOrigins.includes(origin) || (!isProd && isLocalhostOrigin(origin))) return callback(null, true);
   callback(new Error("Not allowed by CORS"));
 };
 
@@ -68,7 +87,7 @@ async function startServer() {
   const app = express();
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
-    cors: { origin: isProd ? allowedOrigins : "*" }
+    cors: { origin: corsOriginCheck }
   });
 
   const facilityPresence: Record<number, any[]> = {};
@@ -102,7 +121,7 @@ async function startServer() {
 
   app.use(session({
     store: new SupabaseSessionStore(db),
-    secret: process.env.SESSION_SECRET || "skyyard-secret-v4-quantum",
+    secret: sessionSecret,
     resave: false,
     saveUninitialized: false,
     cookie: { secure: isProd, sameSite: "lax", maxAge: 24 * 60 * 60 * 1000 }
@@ -1285,7 +1304,7 @@ async function startServer() {
     driverId?: number | null; spotName?: string | null; issuedBy?: number | null; entrySource: string;
   }) => {
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    const passNumber = `IN-${today}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const passNumber = `IN-${today}-${crypto.randomInt(1000, 10000)}`;
 
     const [{ data: vehicle }, { data: spot }] = await Promise.all([
       db.from("vehicles").select("id").eq("plate", params.plate).maybeSingle(),
@@ -1366,6 +1385,17 @@ async function startServer() {
     // the driver scrolls through, but that's a UX affordance, not a
     // guarantee — this is the record that they actually accepted.
     if (terms_accepted !== true) return res.status(400).json({ error: "You must accept the terms and safety guidelines" });
+
+    // facility_id came from the kiosk URL with no server-side binding at
+    // all — any driver session (self-service OTP) could target any
+    // facility id and push a request (with attacker-influenced carrier
+    // name/plate text) into that facility's admin notification/approval
+    // queue. This at least rejects a facility id that doesn't exist;
+    // fully binding a submission to the physical kiosk it came from would
+    // need a signed per-kiosk token, which is a larger change than this
+    // pass covers.
+    const { data: targetFacility } = await db.from("facilities").select("id").eq("id", facilityId).maybeSingle();
+    if (!targetFacility) return res.status(400).json({ error: "Invalid facility" });
 
     // Kiosk camera capture only — never a file upload. A data: URL under
     // ~1.5MB is a plausible compressed webcam snapshot; anything else (a
@@ -1757,7 +1787,16 @@ async function startServer() {
     const userId = req.session?.user?.id || null;
     try {
       const patch: any = {};
-      if (owner_id !== undefined) patch.owner_id = owner_id;
+      if (owner_id !== undefined) {
+        // Unvalidated before: any staff member could assign an exception to
+        // any user id, including another facility's — the id itself never
+        // gets read back cross-tenant, but exceptions' embedded
+        // owner:users(name) join then leaked that foreign user's name to
+        // whoever viewed the exception list.
+        const { data: ownerUser } = await db.from("users").select("id").eq("id", owner_id).eq("facility_id", req.facilityId).maybeSingle();
+        if (!ownerUser) return res.status(400).json({ error: "owner_id must be a user in your facility" });
+        patch.owner_id = owner_id;
+      }
       if (resolution_notes !== undefined) patch.resolution_notes = resolution_notes;
       if (status === "acknowledged") { patch.status = "acknowledged"; patch.acknowledged_at = new Date().toISOString(); patch.acknowledged_by = userId; }
       if (status === "resolved") { patch.status = "resolved"; patch.resolved_at = new Date().toISOString(); patch.resolved_by = userId; }
@@ -2055,7 +2094,7 @@ async function startServer() {
 
   app.get("/api/drivers/:id/ratings", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     try {
-      const { data } = await db.from("driver_ratings").select("*").eq("driver_id", req.params.id).order("created_at", { ascending: false }).limit(20);
+      const { data } = await db.from("driver_ratings").select("*").eq("driver_id", req.params.id).eq("facility_id", req.facilityId).order("created_at", { ascending: false }).limit(20);
       const avg = (data || []).length ? Math.round((data as any[]).reduce((s, r) => s + (r.rating || 0), 0) / data!.length) : null;
       res.json({ average: avg, count: (data || []).length, ratings: data || [] });
     } catch (e: any) {
@@ -2070,13 +2109,21 @@ async function startServer() {
   // second average calculation.
   app.get("/api/admin/drivers/:id", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     try {
-      const { data: driver } = await db.from("drivers").select("*").eq("id", req.params.id).maybeSingle();
+      // drivers itself is a genuinely global table (no facility_id — a
+      // driver can serve more than one yard), but appointments,
+      // safety_incidents and driver_ratings are all facility-scoped data,
+      // and none of the three sub-queries below enforced that — any
+      // facility's staff could read another facility's history for a
+      // shared driver id. select("*") on drivers also handed back
+      // badge_token, the gate-entry credential, to every staff role
+      // including HOSTLER.
+      const { data: driver } = await db.from("drivers").select("id, phone, name, default_carrier_id, default_plate, default_load_type, license_number, vehicle_type, country_code, carrier_name, created_at").eq("id", req.params.id).maybeSingle();
       if (!driver) return res.status(404).json({ error: "Driver not found" });
 
       const [{ data: ratings }, { data: appointments }, { data: safetyIncidents }] = await Promise.all([
-        db.from("driver_ratings").select("*").eq("driver_id", req.params.id).order("created_at", { ascending: false }).limit(20),
-        db.from("appointments").select("id, plate, carrier, start_time, status, no_show_flag").eq("driver_id", req.params.id).order("start_time", { ascending: false }).limit(20),
-        db.from("safety_incidents").select("id, category, severity, status, created_at").eq("driver_id", req.params.id).order("created_at", { ascending: false }).limit(20),
+        db.from("driver_ratings").select("*").eq("driver_id", req.params.id).eq("facility_id", req.facilityId).order("created_at", { ascending: false }).limit(20),
+        db.from("appointments").select("id, plate, carrier, start_time, status, no_show_flag").eq("driver_id", req.params.id).eq("facility_id", req.facilityId).order("start_time", { ascending: false }).limit(20),
+        db.from("safety_incidents").select("id, category, severity, status, created_at").eq("driver_id", req.params.id).eq("facility_id", req.facilityId).order("created_at", { ascending: false }).limit(20),
       ]);
       const avgRating = (ratings || []).length ? Math.round((ratings as any[]).reduce((s, r) => s + (r.rating || 0), 0) / ratings!.length) : null;
 
@@ -2173,7 +2220,7 @@ async function startServer() {
   app.post("/api/visitors/register", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
     const { name, company, host_name, purpose, expected_duration } = req.body;
     const facilityId = req.facilityId;
-    const accessCode = Math.floor(1000 + Math.random() * 9000).toString();
+    const accessCode = crypto.randomInt(1000, 10000).toString();
     try {
       await db.from("visitors").insert({ facility_id: facilityId, name, company, host_name, purpose, access_code: accessCode, expected_duration_minutes: expected_duration || 60 });
       logAudit({ action: "VISITOR_REGISTERED", entityType: "VISITOR", entityId: accessCode, details: { name, company }, ip: req.ip, facility_id: facilityId });
@@ -2293,22 +2340,31 @@ async function startServer() {
     const facilityId = req.facilityId;
     if (priority !== undefined && !MOVE_PRIORITIES.includes(priority)) return res.status(400).json({ error: "Invalid priority" });
     try {
+      // trailerId/fromSpotId/toSpotId all come from the client — none of
+      // them were previously verified to belong to this facility before
+      // being written into a move_orders row this facility then acts on,
+      // and an out-of-facility toSpotId silently skipped the dock-rule
+      // check below instead of being rejected. Resolve and validate all
+      // three first; fail closed (404) rather than fail open.
+      const [{ data: trailer }, fromSpotCheck, toSpotCheck] = await Promise.all([
+        db.from("trailers").select("id, equipment_type").eq("id", trailerId).eq("facility_id", facilityId).maybeSingle(),
+        fromSpotId ? db.from("spots").select("id").eq("id", fromSpotId).eq("facility_id", facilityId).maybeSingle() : Promise.resolve({ data: { id: null } as any }),
+        toSpotId ? db.from("spots").select("id, type").eq("id", toSpotId).eq("facility_id", facilityId).maybeSingle() : Promise.resolve({ data: { id: null, type: null } as any }),
+      ]);
+      if (!trailer) return res.status(404).json({ error: "Trailer not found" });
+      if (fromSpotId && !fromSpotCheck.data) return res.status(404).json({ error: "Origin spot not found" });
+      if (toSpotId && !toSpotCheck.data) return res.status(404).json({ error: "Destination spot not found" });
+
       // Dock Rules (Equipment Compatibility) wrote allowed_equipment_types
       // and told staff "governance active... will instantly restrict
       // movement" — but nothing ever read the column. This is the one
       // place a trailer gets moved onto a specific dock door.
-      if (toSpotId) {
-        const { data: toSpot } = await db.from("spots").select("type").eq("id", toSpotId).eq("facility_id", facilityId).maybeSingle();
-        if (toSpot?.type === "DOCK") {
-          const [{ data: rule }, { data: trailer }] = await Promise.all([
-            db.from("dock_rules").select("allowed_equipment_types").eq("dock_door_id", toSpotId).eq("facility_id", facilityId).maybeSingle(),
-            db.from("trailers").select("equipment_type").eq("id", trailerId).maybeSingle(),
-          ]);
-          const allowed: string[] = rule?.allowed_equipment_types || ["standard"];
-          const eType = trailer?.equipment_type || "standard";
-          if (!allowed.includes(eType)) {
-            return res.status(400).json({ error: `This dock does not accept ${eType} equipment` });
-          }
+      if (toSpotId && toSpotCheck.data?.type === "DOCK") {
+        const { data: rule } = await db.from("dock_rules").select("allowed_equipment_types").eq("dock_door_id", toSpotId).eq("facility_id", facilityId).maybeSingle();
+        const allowed: string[] = rule?.allowed_equipment_types || ["standard"];
+        const eType = trailer?.equipment_type || "standard";
+        if (!allowed.includes(eType)) {
+          return res.status(400).json({ error: `This dock does not accept ${eType} equipment` });
         }
       }
       const { data: move, error } = await db.from("move_orders").insert({
@@ -2378,11 +2434,19 @@ async function startServer() {
 
   app.post("/api/complete-move", requireRole("superadmin", "ADMIN", "HOSTLER"), async (req: any, res) => {
     const { moveId } = req.body;
+    const facilityId = req.facilityId;
     try {
+      // Unlike /api/moves/:id/claim and /release, this never pre-loaded the
+      // move to confirm it belongs to the caller's facility — moveId went
+      // straight into the RPC, which takes no facility argument either, so
+      // any staff session could complete any facility's move order.
+      const { data: move } = await db.from("move_orders").select("id").eq("id", moveId).eq("facility_id", facilityId).maybeSingle();
+      if (!move) return res.status(404).json({ error: "Move order not found" });
+
       const { data: result, error } = await db.rpc("complete_move_tx", { p_move_id: moveId });
       if (error) throw error;
 
-      logAudit({ action: "MOVE_COMPLETED", entityType: "TRAILER", entityId: String(result.trailerId), details: { moveId }, ip: req.ip });
+      logAudit({ action: "MOVE_COMPLETED", entityType: "TRAILER", entityId: String(result.trailerId), details: { moveId }, ip: req.ip, facility_id: facilityId });
 
       if (result.toSpotType === "DOCK" && result.driverId) {
         const { data: driver } = await db.from("drivers").select("phone").eq("id", result.driverId).maybeSingle();
@@ -2408,8 +2472,15 @@ async function startServer() {
 
   app.post("/api/dispatch", requireRole("superadmin", "ADMIN", "HOSTLER", "GUARD"), async (req: any, res) => {
     const { trailerId, spotId } = req.body;
+    const facilityId = req.facilityId;
     try {
-      const { data: trailer } = await db.from("trailers").select("*, drivers(phone)").eq("id", trailerId).maybeSingle();
+      const { data: trailer } = await db.from("trailers").select("*, drivers(phone)").eq("id", trailerId).eq("facility_id", facilityId).maybeSingle();
+      if (!trailer) return res.status(404).json({ error: "Trailer not found" });
+
+      if (spotId) {
+        const { data: spot } = await db.from("spots").select("id").eq("id", spotId).eq("facility_id", facilityId).maybeSingle();
+        if (!spot) return res.status(404).json({ error: "Spot not found" });
+      }
 
       const { error } = await db.rpc("dispatch_trailer_tx", { p_trailer_id: trailerId, p_spot_id: spotId || null });
       if (error) throw error;
@@ -2417,7 +2488,7 @@ async function startServer() {
       // Close out any still-ACTIVE detention record for this trailer — dispatch
       // never touched detention_records before, so a resolved detention charge
       // stayed marked ACTIVE (still accruing) forever after the trailer left.
-      const { data: activeDetention } = await db.from("detention_records").select("*").eq("trailer_id", trailerId).eq("status", "ACTIVE").maybeSingle();
+      const { data: activeDetention } = await db.from("detention_records").select("*").eq("trailer_id", trailerId).eq("facility_id", facilityId).eq("status", "ACTIVE").maybeSingle();
       if (activeDetention) {
         const finalActualMinutes = Math.floor((Date.now() - new Date(activeDetention.start_time).getTime()) / 60000);
         const finalOvertimeMinutes = finalActualMinutes - (activeDetention.threshold_minutes || 0);
@@ -2658,10 +2729,10 @@ async function startServer() {
   // Was defined but never called from anywhere in the frontend — the manual
   // check-in form on GateConsole made staff retype carrier/license info for
   // every returning plate instead of prefilling it from history.
-  app.get("/api/driver/lookup", requireRole("superadmin", "ADMIN", "GUARD"), async (req, res) => {
+  app.get("/api/driver/lookup", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
     const { plate } = req.query;
     try {
-      const { data } = await db.from("trailers").select("driver_license, carrier").eq("plate", plate).order("check_in_time", { ascending: false }).limit(1).maybeSingle();
+      const { data } = await db.from("trailers").select("driver_license, carrier").eq("plate", plate).eq("facility_id", req.facilityId).order("check_in_time", { ascending: false }).limit(1).maybeSingle();
       res.json(data || { visit_count: 0 });
     } catch (e) {
       res.status(500).json({ error: "Lookup failed" });
@@ -2678,20 +2749,26 @@ async function startServer() {
   // Driver OTP Routes
   app.post("/api/driver/request-otp", otpRequestLimiter, async (req: any, res) => {
     const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: "Phone number required" });
 
-    // No SMS provider configured — gating behind a code that can never
-    // actually be delivered would just lock every tester out. Skip
-    // straight to a session, same outcome as a successful verify. Once
-    // Twilio credentials are set this path stops applying automatically.
-    if (!getTwilioClient()) {
-      await establishDriverSession(req, phone);
-      logAudit({ action: "DRIVER_OTP_SKIPPED_NO_SMS", entityType: "DRIVER", entityId: phone, details: {}, ip: req.ip, facility_id: 1 });
-      return res.json({ success: true, skippedOtp: true, redirect: "/driver/dashboard" });
-    }
-
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    // A real, single-use, expiring code is always generated and must
+    // always be verified via /api/driver/verify-otp — this used to
+    // bypass verification entirely when no SMS provider was configured,
+    // establishing a full driver session for ANY caller-supplied phone
+    // number with no proof of ownership. Now the only thing that changes
+    // without SMS configured is delivery: the code goes to the server log
+    // instead of a text message, matching the "fail honestly, don't grant
+    // access" pattern used elsewhere in this app for unconfigured SMS.
+    const code = crypto.randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
     await db.from("driver_otp").upsert({ phone, code, expires_at: expiresAt }, { onConflict: "phone" });
+
+    if (!getTwilioClient()) {
+      logger.warn("Driver OTP not sent — no SMS provider configured", { phone });
+      logAudit({ action: "DRIVER_OTP_NOT_SENT_NO_SMS", entityType: "DRIVER", entityId: phone, details: {}, ip: req.ip, facility_id: 1 });
+      return res.json({ success: true, message: "SMS provider not configured — check server logs for the code" });
+    }
+
     await sendSms(phone, `SkyYard: Your verification code is ${code}. It expires in 10 minutes.`);
     res.json({ success: true, message: "Code sent" });
   });
@@ -3595,11 +3672,16 @@ async function startServer() {
     }
   });
 
-  app.post("/api/admin/carriers/:id/booking-link", requireRole("superadmin", "ADMIN"), async (req, res) => {
+  app.post("/api/admin/carriers/:id/booking-link", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const { id } = req.params;
     const token = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-    await db.from("carriers").update({ booking_token: token, booking_token_expires: expiresAt }).eq("id", id);
+    // The token used to carry no record of which facility issued it, so
+    // every booking made through ANY carrier's link — from ANY facility's
+    // admin — landed hardcoded into facility 1, bypassing whichever
+    // facility actually meant to receive it (wrong blacklist checked,
+    // wrong capacity limit enforced).
+    await db.from("carriers").update({ booking_token: token, booking_token_expires: expiresAt, booking_facility_id: req.facilityId }).eq("id", id);
     res.json({ booking_url: `/book/${token}` });
   });
 
@@ -3832,9 +3914,9 @@ async function startServer() {
 
   app.get("/api/book/:token", async (req: any, res) => {
     const { token } = req.params;
-    const { data: carrier } = await db.from("carriers").select("id, name, email, contact_phone").eq("booking_token", token).gt("booking_token_expires", new Date().toISOString()).maybeSingle();
+    const { data: carrier } = await db.from("carriers").select("id, name, email, contact_phone, booking_facility_id").eq("booking_token", token).gt("booking_token_expires", new Date().toISOString()).maybeSingle();
     if (!carrier) return res.status(404).json({ error: "Invalid or expired booking link" });
-    res.json({ carrier, facilityId: 1 });
+    res.json({ carrier, facilityId: carrier.booking_facility_id || 1 });
   });
 
   app.post("/api/book/:token", bookingLimiter, async (req: any, res) => {
@@ -3844,6 +3926,26 @@ async function startServer() {
       const { data: carrier } = await db.from("carriers").select("*").eq("booking_token", token).gt("booking_token_expires", new Date().toISOString()).maybeSingle();
       if (!carrier) return res.status(404).json({ error: "Invalid or expired booking link" });
       if (!plate || !start_time) return res.status(400).json({ error: "Plate and arrival time are required" });
+      // This is a public, unauthenticated, rate-limited endpoint whose
+      // plate/start_time values used to flow straight into a confirmation
+      // SMS with no validation at all — a booking token holder could put
+      // arbitrary text (including a phishing link) into `plate` and have
+      // the terminal's own trusted SMS sender deliver it to any phone
+      // number they supplied. Constrain both to their real shape before
+      // they reach anything, not just before they reach the SMS template.
+      if (typeof plate !== "string" || !/^[A-Za-z0-9 -]{1,15}$/.test(plate)) {
+        return res.status(400).json({ error: "Plate must be 1-15 letters, numbers, spaces or hyphens" });
+      }
+      if (isNaN(new Date(start_time).getTime())) {
+        return res.status(400).json({ error: "Invalid arrival time" });
+      }
+      if (driver_phone && (typeof driver_phone !== "string" || !/^\+?[0-9]{7,15}$/.test(driver_phone))) {
+        return res.status(400).json({ error: "Invalid phone number format" });
+      }
+      // Every security-relevant check below (blacklist, capacity) and the
+      // appointment itself used to hardcode facility 1 regardless of which
+      // facility's admin actually issued this token.
+      const facilityId = carrier.booking_facility_id || 1;
 
       // The no-show worker has flagged carriers as "bookings now require
       // approval" for 30+ real days (3+ no-shows in 30 days) but nothing
@@ -3855,16 +3957,25 @@ async function startServer() {
         return res.status(403).json({ error: "CARRIER_FLAGGED", reason: "This account has excessive no-shows and self-service booking is paused. Contact the terminal directly to schedule." });
       }
 
-      const blacklistHit = await checkBlacklist(1, plate, carrier.name);
+      const blacklistHit = await checkBlacklist(facilityId, plate, carrier.name);
       if (blacklistHit && blacklistHit.severity === "block") {
-        logAudit({ action: "BLACKLIST_BLOCKED_BOOKING", entityType: "TRAILER", entityId: plate, details: { reason: blacklistHit.reason, carrier: carrier.name }, ip: req.ip, facility_id: 1, severity: "warning" });
-        raiseException({ facility_id: 1, exception_type: "blacklist_block", severity: "warning", entity_type: "TRAILER", entity_id: plate, title: `Blacklisted entry blocked: ${plate}`, description: blacklistHit.reason, source: "carrier_booking" });
+        logAudit({ action: "BLACKLIST_BLOCKED_BOOKING", entityType: "TRAILER", entityId: plate, details: { reason: blacklistHit.reason, carrier: carrier.name }, ip: req.ip, facility_id: facilityId, severity: "warning" });
+        raiseException({ facility_id: facilityId, exception_type: "blacklist_block", severity: "warning", entity_type: "TRAILER", entity_id: plate, title: `Blacklisted entry blocked: ${plate}`, description: blacklistHit.reason, source: "carrier_booking" });
         return res.status(403).json({ error: "BLACKLIST_BLOCK", reason: blacklistHit.reason });
+      }
+
+      // dock_id also used to flow straight into the insert with no check
+      // that it belongs to this facility at all.
+      let validatedDockId: number | null = null;
+      if (dock_id) {
+        const { data: dock } = await db.from("spots").select("id").eq("id", dock_id).eq("facility_id", facilityId).maybeSingle();
+        if (!dock) return res.status(400).json({ error: "Selected dock is not valid for this facility" });
+        validatedDockId = dock.id;
       }
 
       const weightKg = load_weight_kg != null && load_weight_kg !== "" && !isNaN(Number(load_weight_kg)) ? Number(load_weight_kg) : null;
       const bookedEndTime = estimateEndTime(start_time, load_type, weightKg);
-      const capacity = await enforceAppointmentCapacity(1, start_time, bookedEndTime);
+      const capacity = await enforceAppointmentCapacity(facilityId, start_time, bookedEndTime);
       if (!capacity.allowed) return res.status(409).json({ error: "CAPACITY_BLOCKED", reason: capacity.reason });
 
       let driverId: number | null = null;
@@ -3895,17 +4006,17 @@ async function startServer() {
       }
 
       const { data: newAppt, error } = await db.from("appointments").insert({
-        plate, carrier: carrier.name, dock_id: dock_id || null, start_time, load_type: load_type || "standard",
+        plate, carrier: carrier.name, dock_id: validatedDockId, start_time, load_type: load_type || "standard",
         end_time: bookedEndTime, load_weight_kg: weightKg, special_instructions: instructions,
         temperature_requirement: load_type === "reefer" ? (temperature_requirement || null) : null,
         origin_address: originAddress, origin_lat: originLat, origin_lng: originLng,
-        status: "SCHEDULED", source: "self_book", driver_id: driverId, carrier_id: carrier.id, facility_id: 1,
+        status: "SCHEDULED", source: "self_book", driver_id: driverId, carrier_id: carrier.id, facility_id: facilityId,
       }).select().single();
       if (error) throw error;
 
-      logAudit({ action: "SELF_BOOKED", entityType: "APPOINTMENT", entityId: String(newAppt.id), details: { plate, carrier: carrier.name }, ip: req.ip, facility_id: 1 });
+      logAudit({ action: "SELF_BOOKED", entityType: "APPOINTMENT", entityId: String(newAppt.id), details: { plate, carrier: carrier.name }, ip: req.ip, facility_id: facilityId });
       emitUpdate("appointment_created", newAppt);
-      enqueueWebhook("APPOINTMENT_CREATED", newAppt, 1);
+      enqueueWebhook("APPOINTMENT_CREATED", newAppt, facilityId);
 
       if (driver_phone) await sendSms(driver_phone, `SkyYard: Booking confirmed for ${plate} on ${start_time}. Reference: APT-${newAppt.id}.`);
 
@@ -3929,8 +4040,13 @@ async function startServer() {
     }
   });
 
-  app.get("/api/superadmin/blacklist", requireRole("superadmin", "ADMIN"), async (req, res) => {
-    const { data } = await db.from("blacklist").select("*").order("created_at", { ascending: false });
+  app.get("/api/superadmin/blacklist", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
+    // Despite the /superadmin path, this is a per-facility control (the
+    // POST below scopes new entries to facility_id, and checkBlacklist()
+    // only ever reads a caller's own facility) — this GET and the DELETE
+    // below were the two places that didn't scope it, letting any
+    // facility's ADMIN read and remove any other facility's ban list.
+    const { data } = await db.from("blacklist").select("*").eq("facility_id", req.facilityId).order("created_at", { ascending: false });
     res.json(data || []);
   });
 
@@ -3950,8 +4066,10 @@ async function startServer() {
 
   app.delete("/api/superadmin/blacklist/:id", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     try {
-      await db.from("blacklist").delete().eq("id", req.params.id);
-      logAudit({ action: "BLACKLIST_REMOVE", entityType: "BLACKLIST", entityId: req.params.id, ip: req.ip });
+      const { data, error } = await db.from("blacklist").delete().eq("id", req.params.id).eq("facility_id", req.facilityId).select().maybeSingle();
+      if (error) throw error;
+      if (!data) return res.status(404).json({ error: "Blacklist entry not found" });
+      logAudit({ action: "BLACKLIST_REMOVE", entityType: "BLACKLIST", entityId: req.params.id, ip: req.ip, facility_id: req.facilityId });
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -4016,10 +4134,21 @@ async function startServer() {
     const { destination_facility_id, eta, notes } = req.body;
     const originFacilityId = req.facilityId;
     try {
-      const { data: trailer } = await db.from("trailers").select("*").eq("id", id).maybeSingle();
+      // Previously loaded the trailer by id alone and wrote whatever
+      // destination_facility_id the client sent with no validation —
+      // an admin of ANY facility could reassign ANY trailer to ANY
+      // facility id, real or not. This is a real, intentional feature
+      // (transferring a trailer between facilities), so both ends must
+      // be verified: the trailer must belong to the caller's own
+      // facility, and the destination must be a real facility.
+      const [{ data: trailer }, { data: destinationFacility }] = await Promise.all([
+        db.from("trailers").select("*").eq("id", id).eq("facility_id", originFacilityId).maybeSingle(),
+        db.from("facilities").select("id").eq("id", destination_facility_id).maybeSingle(),
+      ]);
       if (!trailer) return res.status(404).json({ error: "Trailer not found" });
+      if (!destinationFacility) return res.status(400).json({ error: "Destination facility not found" });
 
-      await db.from("spots").update({ status: "EMPTY" }).eq("id", trailer.spot_id);
+      await db.from("spots").update({ status: "EMPTY" }).eq("id", trailer.spot_id).eq("facility_id", originFacilityId);
       await db.from("trailers").update({ status: "in_transit", facility_id: destination_facility_id, spot_id: null }).eq("id", id);
       await db.from("gate_logs").insert({ facility_id: originFacilityId, event_type: "exit", trailer_id: id, notes: `Transfer to facility ${destination_facility_id}. ${notes || ""}` });
       await db.from("gate_logs").insert({ facility_id: destination_facility_id, event_type: "entry", trailer_id: id, notes: `Expected transfer from facility ${originFacilityId}. ETA: ${eta}` });
@@ -4171,7 +4300,7 @@ async function startServer() {
 
       if (!detentions || detentions.length === 0) return res.status(400).json({ error: "No uninvoiced detention records found" });
 
-      const invoiceNum = `SKY-${(facility?.name || "GEN").substring(0, 3).toUpperCase()}-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const invoiceNum = `SKY-${(facility?.name || "GEN").substring(0, 3).toUpperCase()}-${new Date().getFullYear()}-${crypto.randomInt(1000, 10000)}`;
 
       const doc = new PDFDocument({ size: "A4", margin: 50 });
       const chunks: Buffer[] = [];
@@ -4233,18 +4362,27 @@ async function startServer() {
       // covered the detention records being closed out, so a $1 payment
       // could zero out a $5,000 balance. Now the records only clear if the
       // amount at least covers what they owe (a small rounding tolerance
-      // for currency math).
-      if (detention_record_ids && detention_record_ids.length > 0) {
-        const { data: records } = await db.from("detention_records").select("id, amount_owed").in("id", detention_record_ids).eq("facility_id", facilityId).eq("carrier_id", carrier_id);
-        const owed = (records || []).reduce((sum, r: any) => sum + Number(r.amount_owed || 0), 0);
-        if (amountNum < owed - 0.01) {
-          return res.status(400).json({ error: `Payment amount (${amountNum}) is less than the total owed on selected records (${owed})` });
-        }
+      // for currency math). This check used to run only against
+      // detention_record_ids — invoice_numbers had no equivalent check
+      // AND no facility/carrier scoping on the update below, so an
+      // attacker could zero out another facility's detention balance
+      // entirely by supplying its (guessable, 4-digit) invoice numbers.
+      const [{ data: byIdRecords }, { data: byInvoiceRecords }] = await Promise.all([
+        detention_record_ids?.length
+          ? db.from("detention_records").select("id, amount_owed").in("id", detention_record_ids).eq("facility_id", facilityId).eq("carrier_id", carrier_id)
+          : Promise.resolve({ data: [] as any[] }),
+        invoice_numbers?.length
+          ? db.from("detention_records").select("id, amount_owed").in("notes", invoice_numbers).eq("facility_id", facilityId).eq("carrier_id", carrier_id)
+          : Promise.resolve({ data: [] as any[] }),
+      ]);
+      const owed = [...(byIdRecords || []), ...(byInvoiceRecords || [])].reduce((sum, r: any) => sum + Number(r.amount_owed || 0), 0);
+      if (owed > 0 && amountNum < owed - 0.01) {
+        return res.status(400).json({ error: `Payment amount (${amountNum}) is less than the total owed on selected records (${owed})` });
       }
 
       await db.from("payments").insert({ facility_id: facilityId, carrier_id, amount: amountNum, payment_method, invoice_numbers: invoice_numbers || [] });
       if (invoice_numbers && invoice_numbers.length > 0) {
-        await db.from("detention_records").update({ invoice_status: "paid" }).in("notes", invoice_numbers);
+        await db.from("detention_records").update({ invoice_status: "paid" }).in("notes", invoice_numbers).eq("facility_id", facilityId).eq("carrier_id", carrier_id);
       }
       // Recording a payment could previously only clear a balance if it had
       // already been through /api/admin/invoices/generate (matched by
@@ -4413,10 +4551,19 @@ async function startServer() {
   });
 
   // In-app notification bell
+  // Client-supplied userType used to be the ONLY filter — any staff role
+  // could pass ?userType=driver or ?userType=CARRIER and read every
+  // driver's/carrier's notifications system-wide (personnummer-adjacent
+  // content in some of them). Staff notifications are always written with
+  // recipientType "ADMIN" (see notify()), so hardcode that instead of
+  // trusting the query param, and restrict to broadcast rows (user_id
+  // null) or the caller's own — in_app_notifications has no facility_id
+  // column, so a same-role broadcast alert from another facility can still
+  // surface here; that residual gap needs a schema change to close fully.
   app.get("/api/notifications/inapp", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
-    const userType = (req.query.userType as string) || "ADMIN";
     try {
-      const { data } = await db.from("in_app_notifications").select("*").eq("user_type", userType).is("read_at", null).order("created_at", { ascending: false }).limit(25);
+      const { data } = await db.from("in_app_notifications").select("*").eq("user_type", "ADMIN")
+        .or(`user_id.is.null,user_id.eq.${req.session.user.id}`).is("read_at", null).order("created_at", { ascending: false }).limit(25);
       res.json(data || []);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -4425,7 +4572,8 @@ async function startServer() {
 
   app.post("/api/notifications/inapp/:id/read", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
     try {
-      await db.from("in_app_notifications").update({ read_at: new Date().toISOString() }).eq("id", req.params.id);
+      await db.from("in_app_notifications").update({ read_at: new Date().toISOString() }).eq("id", req.params.id).eq("user_type", "ADMIN")
+        .or(`user_id.is.null,user_id.eq.${req.session.user.id}`);
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -4433,9 +4581,9 @@ async function startServer() {
   });
 
   app.post("/api/notifications/inapp/read-all", requireRole("superadmin", "ADMIN", "GUARD", "HOSTLER"), async (req: any, res) => {
-    const userType = req.body?.userType || "ADMIN";
     try {
-      await db.from("in_app_notifications").update({ read_at: new Date().toISOString() }).eq("user_type", userType).is("read_at", null);
+      await db.from("in_app_notifications").update({ read_at: new Date().toISOString() }).eq("user_type", "ADMIN")
+        .or(`user_id.is.null,user_id.eq.${req.session.user.id}`).is("read_at", null);
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -4483,12 +4631,18 @@ async function startServer() {
       const email = request.requester_email;
       if (!phone && !email) return res.status(400).json({ error: "Request has no phone or email to search for" });
 
+      // drivers is a genuinely global table (no facility_id), but
+      // walkin_registrations and appointments are both facility-scoped —
+      // neither carried .eq("facility_id", ...) here, so an export request
+      // filed at one facility (for a phone number the filer merely typed
+      // in, unverified) pulled that person's walk-in and appointment
+      // history from every facility instead of just this one.
       const [drivers, walkins] = await Promise.all([
         phone ? db.from("drivers").select("id, name, phone, default_plate, carrier_name, created_at").eq("phone", phone) : Promise.resolve({ data: [] as any[] }),
-        phone ? db.from("walkin_registrations").select("id, driver_name, carrier_name, phone, truck_plate, status, created_at").eq("phone", phone) : Promise.resolve({ data: [] as any[] }),
+        phone ? db.from("walkin_registrations").select("id, driver_name, carrier_name, phone, truck_plate, status, created_at").eq("phone", phone).eq("facility_id", req.facilityId) : Promise.resolve({ data: [] as any[] }),
       ]);
       const appointments = phone
-        ? await db.from("appointments").select("id, plate, carrier, start_time, status").eq("driver_id", (drivers.data || [])[0]?.id ?? -1)
+        ? await db.from("appointments").select("id, plate, carrier, start_time, status").eq("driver_id", (drivers.data || [])[0]?.id ?? -1).eq("facility_id", req.facilityId)
         : { data: [] as any[] };
 
       const exportPayload = {
