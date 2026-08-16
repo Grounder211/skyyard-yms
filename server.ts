@@ -27,7 +27,7 @@ import { db, unwrap } from "./server/supabaseClient.js";
 import { logger } from "./server/logger.js";
 import { getCurrentTemperature } from "./server/services/smhiWeather.js";
 import { getTrafficProvider } from "./server/services/trafficProvider.js";
-import { generateSecret as generateTotpSecret, verifyToken as verifyTotpToken, otpauthUrl as totpUri } from "./server/services/totp.js";
+import { generateSecret as generateTotpSecret, verifyToken as verifyTotpToken, verifyTokenWithCounter as verifyTotpTokenWithCounter, otpauthUrl as totpUri } from "./server/services/totp.js";
 import { checkStageTransition, isLoadReady } from "./server/services/gatePassStages.js";
 import { isDockSlaBreached } from "./server/services/dockSla.js";
 import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers, summarizeZoneOccupancy, matchExceptionPlatesToSpotIds, findUnmanagedTrailers } from "./server/services/todayOps.js";
@@ -678,6 +678,18 @@ async function startServer() {
     message: { error: "Too many booking attempts. Try again in 15 minutes." },
   });
 
+  // None of the four privilege transitions below (staff login, staff 2FA
+  // completion, carrier login, driver OTP session) regenerated the session
+  // id — SupabaseSessionStore.set() upserts by sid, so a session id an
+  // attacker obtained BEFORE a victim authenticated stayed valid and
+  // became privileged the moment the victim logged in on it (session
+  // fixation, most reachable on a shared/kiosk terminal). Promisify
+  // regenerate() so every transition can await it before writing identity.
+  const regenerateSession = (req: any): Promise<void> =>
+    new Promise((resolve, reject) => {
+      req.session.regenerate((err: any) => (err ? reject(err) : resolve()));
+    });
+
   // --- Staff Authentication ---
   app.post("/api/auth/login", loginLimiter, async (req: any, res) => {
     const { email, password } = req.body;
@@ -688,6 +700,12 @@ async function startServer() {
         logAudit({ action: "STAFF_LOGIN_FAILED", entityType: "USER", entityId: String(email), details: {}, ip: req.ip, facility_id: 1, severity: "warning" });
         return res.status(401).json({ error: "Invalid email or password" });
       }
+
+      // Regenerate before writing ANY new trust level onto the session —
+      // a pre-existing session id (planted or merely observed on a shared
+      // terminal) must not inherit password-verified state, let alone a
+      // fully authenticated one.
+      await regenerateSession(req);
 
       if (user.totp_enabled) {
         // Password correct, but don't set session.user yet — that's what every
@@ -713,11 +731,20 @@ async function startServer() {
     if (!pendingUserId) return res.status(401).json({ error: "No login in progress" });
     try {
       const { data: user } = await db.from("users").select("*").eq("id", pendingUserId).maybeSingle();
-      if (!user || !user.totp_secret || !verifyTotpToken(user.totp_secret, code)) {
-        logAudit({ action: "STAFF_LOGIN_2FA_FAILED", entityType: "USER", entityId: String(pendingUserId), details: {}, ip: req.ip, facility_id: user?.facility_id || 1, severity: "warning" });
+      // A matched code is only accepted if its counter is strictly newer
+      // than the last one this account already redeemed — otherwise the
+      // same 6 digits verify for every request inside the ~90s window,
+      // not just the one legitimate login that used them first.
+      const result = user?.totp_secret ? verifyTotpTokenWithCounter(user.totp_secret, code) : { valid: false, counter: null };
+      const alreadyUsed = result.counter != null && user?.totp_last_counter != null && result.counter <= user.totp_last_counter;
+      if (!user || !result.valid || alreadyUsed) {
+        logAudit({ action: "STAFF_LOGIN_2FA_FAILED", entityType: "USER", entityId: String(pendingUserId), details: { replay: alreadyUsed }, ip: req.ip, facility_id: user?.facility_id || 1, severity: "warning" });
         return res.status(401).json({ error: "Invalid or expired code" });
       }
-      delete req.session.pending_2fa_user_id;
+      await db.from("users").update({ totp_last_counter: result.counter }).eq("id", user.id);
+      // Regenerate before writing the fully-authenticated session — same
+      // reasoning as the password step above.
+      await regenerateSession(req);
       req.session.user = { id: user.id, email: user.email, name: user.name, role: user.role, facility_id: user.facility_id };
       if (user.facility_id) req.session.facility_id = user.facility_id;
       logAudit({ action: "STAFF_LOGIN", entityType: "USER", entityId: String(user.id), details: { email: user.email, via2fa: true }, ip: req.ip, facility_id: user.facility_id || 1 });
@@ -748,8 +775,22 @@ async function startServer() {
   app.post("/api/auth/2fa/setup", (req: any, res) => {
     if (!req.session?.user) return res.status(401).json({ error: "Not authenticated" });
     (async () => {
+      // Used to require nothing but a live session and would immediately
+      // set totp_enabled: false on the real totp_secret — anyone holding
+      // a stolen/fixated session cookie could strip an account's second
+      // factor (or rebind it to their own authenticator) in one call, the
+      // exact state change /api/auth/2fa/disable deliberately gates behind
+      // a password re-check. The candidate secret is now staged in
+      // totp_pending_secret and only promoted by /confirm below, so a
+      // setup call that's never confirmed can't touch an existing,
+      // working 2FA enrollment at all.
+      const { password } = req.body;
+      const { data: existing } = await db.from("users").select("password_hash").eq("id", req.session.user.id).maybeSingle();
+      if (!existing || !(await bcrypt.compare(password || "", existing.password_hash))) {
+        return res.status(401).json({ error: "Incorrect password" });
+      }
       const secret = generateTotpSecret();
-      await db.from("users").update({ totp_secret: secret, totp_enabled: false }).eq("id", req.session.user.id);
+      await db.from("users").update({ totp_pending_secret: secret }).eq("id", req.session.user.id);
       res.json({ secret, otpauth_url: totpUri(secret, req.session.user.email) });
     })().catch((e) => res.status(500).json({ error: e.message }));
   });
@@ -758,11 +799,14 @@ async function startServer() {
     if (!req.session?.user) return res.status(401).json({ error: "Not authenticated" });
     (async () => {
       const { code } = req.body;
-      const { data: user } = await db.from("users").select("totp_secret").eq("id", req.session.user.id).maybeSingle();
-      if (!user?.totp_secret || !verifyTotpToken(user.totp_secret, code)) {
+      const { data: user } = await db.from("users").select("totp_pending_secret, totp_last_counter").eq("id", req.session.user.id).maybeSingle();
+      const result = user?.totp_pending_secret ? verifyTotpTokenWithCounter(user.totp_pending_secret, code) : { valid: false, counter: null };
+      if (!user?.totp_pending_secret || !result.valid) {
         return res.status(401).json({ error: "Invalid code — check your authenticator app and try again" });
       }
-      await db.from("users").update({ totp_enabled: true }).eq("id", req.session.user.id);
+      await db.from("users").update({
+        totp_secret: user.totp_pending_secret, totp_pending_secret: null, totp_enabled: true, totp_last_counter: result.counter,
+      }).eq("id", req.session.user.id);
       logAudit({ action: "STAFF_2FA_ENABLED", entityType: "USER", entityId: String(req.session.user.id), details: {}, ip: req.ip, facility_id: req.session.user.facility_id || 1 });
       res.json({ success: true });
     })().catch((e) => res.status(500).json({ error: e.message }));
@@ -2750,6 +2794,7 @@ async function startServer() {
   const establishDriverSession = async (req: any, phone: string) => {
     await db.from("drivers").upsert({ phone }, { onConflict: "phone", ignoreDuplicates: true });
     const { data: driver } = await db.from("drivers").select("id").eq("phone", phone).maybeSingle();
+    await regenerateSession(req);
     req.session.driver_id = driver!.id;
     req.session.driver_phone = phone;
   };
@@ -2827,9 +2872,11 @@ async function startServer() {
   });
 
   app.post("/api/driver/logout", (req: any, res) => {
-    delete req.session.driver_id;
-    delete req.session.driver_phone;
-    res.json({ success: true });
+    // Deleting just the driver keys left the same session id alive and
+    // reusable — /api/auth/logout (staff) already destroys the whole
+    // session; this should end a driver's session the same way, not
+    // leave it sitting in the store ready to be repurposed.
+    req.session?.destroy(() => res.json({ success: true }));
   });
 
   app.get("/api/driver/notifications", requireDriverAuth, async (req: any, res) => {
@@ -3054,7 +3101,7 @@ async function startServer() {
   });
 
   // Carrier Auth & Portal
-  app.post("/api/carrier/login", loginLimiter, async (req, res) => {
+  app.post("/api/carrier/login", loginLimiter, async (req: any, res) => {
     const { email, password } = req.body;
     try {
       const { data: carrier } = await db.from("carriers").select("*").eq("email", email).maybeSingle();
@@ -3062,8 +3109,9 @@ async function startServer() {
         logAudit({ action: "CARRIER_LOGIN_FAILED", entityType: "CARRIER", entityId: email, details: {}, ip: req.ip, facility_id: 1, severity: "warning" });
         return res.status(401).json({ error: "Invalid credentials" });
       }
-      (req as any).session.carrier_id = carrier.id;
-      (req as any).session.carrier_name = carrier.name;
+      await regenerateSession(req);
+      req.session.carrier_id = carrier.id;
+      req.session.carrier_name = carrier.name;
       res.json({ success: true, redirect: "/carrier/dashboard" });
     } catch (e) {
       res.status(500).json({ error: "Portal failure" });
@@ -3076,9 +3124,7 @@ async function startServer() {
   });
 
   app.post("/api/carrier/logout", (req: any, res) => {
-    delete req.session.carrier_id;
-    delete req.session.carrier_name;
-    res.json({ success: true });
+    req.session?.destroy(() => res.json({ success: true }));
   });
 
   // Carrier submits what they need (vehicle, driver identity, cargo) with

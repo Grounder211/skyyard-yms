@@ -66,12 +66,23 @@ export function generateToken(secret: string, at = Date.now()): string {
 // Accepts the current 30s window plus one step on either side (±30s) to
 // tolerate normal clock drift between the server and the user's phone.
 export function verifyToken(secret: string, token: string, windowSteps = 1): boolean {
-  if (!/^\d{6}$/.test(token)) return false;
-  const counter = Math.floor(Date.now() / 1000 / STEP_SECONDS);
+  return verifyTokenWithCounter(secret, token, windowSteps).valid;
+}
+
+// Same matching as verifyToken, but also returns which counter matched so
+// a caller can persist it and reject that counter (or anything at or
+// before it) on a later request — otherwise a code observed once stays
+// valid for every login attempt within its ~90s acceptance window, not
+// just the one legitimate use, which is what RFC 6238 §5.2 requires
+// callers to prevent.
+export function verifyTokenWithCounter(secret: string, token: string, windowSteps = 1): { valid: boolean; counter: number | null } {
+  if (!/^\d{6}$/.test(token)) return { valid: false, counter: null };
+  const nowCounter = Math.floor(Date.now() / 1000 / STEP_SECONDS);
   for (let errorWindow = -windowSteps; errorWindow <= windowSteps; errorWindow++) {
-    if (hotp(secret, counter + errorWindow) === token) return true;
+    const counter = nowCounter + errorWindow;
+    if (hotp(secret, counter) === token) return { valid: true, counter };
   }
-  return false;
+  return { valid: false, counter: null };
 }
 
 export function otpauthUrl(secret: string, accountEmail: string, issuer = "SkyYard"): string {

@@ -71,6 +71,8 @@ export default function Settings() {
   const [totpBusy, setTotpBusy] = useState(false);
   const [disablePassword, setDisablePassword] = useState("");
   const [showDisableForm, setShowDisableForm] = useState(false);
+  const [enablePassword, setEnablePassword] = useState("");
+  const [showEnableForm, setShowEnableForm] = useState(false);
 
   const loadTotpStatus = () => {
     fetch("/api/auth/2fa/status")
@@ -202,12 +204,23 @@ export default function Settings() {
 
   useEffect(load, []);
 
-  const startTotpSetup = async () => {
+  const startTotpSetup = async (e: React.FormEvent) => {
+    e.preventDefault();
     setTotpBusy(true);
-    const res = await fetch("/api/auth/2fa/setup", { method: "POST" });
+    const res = await fetch("/api/auth/2fa/setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: enablePassword }),
+    });
     setTotpBusy(false);
-    if (res.ok) setTotpSetup(await res.json());
-    else toast("Failed to start 2FA setup", "error");
+    if (res.ok) {
+      setTotpSetup(await res.json());
+      setShowEnableForm(false);
+      setEnablePassword("");
+    } else {
+      const data = await res.json().catch(() => ({}));
+      toast(data.error || "Failed to start 2FA setup", "error");
+    }
   };
 
   const confirmTotpSetup = async (e: React.FormEvent) => {
@@ -486,13 +499,26 @@ export default function Settings() {
           </form>
         )}
 
-        {!totpEnabled && !totpSetup && (
+        {!totpEnabled && !totpSetup && !showEnableForm && (
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <p className="text-sm text-slate-500 max-w-md">Require a 6-digit code from an authenticator app (Google Authenticator, Authy, 1Password) in addition to your password.</p>
-            <button onClick={startTotpSetup} disabled={totpBusy} className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-2 shrink-0">
-              {totpBusy && <Loader2 size={14} className="animate-spin" />} Enable 2FA
+            <button onClick={() => setShowEnableForm(true)} className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-2 shrink-0">
+              Enable 2FA
             </button>
           </div>
+        )}
+
+        {!totpEnabled && !totpSetup && showEnableForm && (
+          <form onSubmit={startTotpSetup} className="space-y-3 max-w-sm">
+            <p className="text-sm text-slate-500">Enter your password to start setting up two-factor authentication.</p>
+            <input type="password" required value={enablePassword} onChange={(e) => setEnablePassword(e.target.value)} placeholder="Current password" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+            <div className="flex gap-2">
+              <button type="submit" disabled={totpBusy} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-1.5">
+                {totpBusy && <Loader2 size={12} className="animate-spin" />} Continue
+              </button>
+              <button type="button" onClick={() => { setShowEnableForm(false); setEnablePassword(""); }} className="text-xs font-bold text-slate-500 hover:text-slate-800 px-4 py-2">Cancel</button>
+            </div>
+          </form>
         )}
 
         {!totpEnabled && totpSetup && (

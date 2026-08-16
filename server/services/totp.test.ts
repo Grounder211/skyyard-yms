@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateToken, verifyToken, generateSecret } from "./totp.js";
+import { generateToken, verifyToken, verifyTokenWithCounter, generateSecret } from "./totp.js";
 import crypto from "crypto";
 
 // RFC 4226 Appendix D official HOTP test vectors — this is the algorithm
@@ -57,5 +57,32 @@ describe("totp", () => {
     const b = generateSecret();
     expect(a).not.toBe(b); // must be random, not a fixed value
     expect(a).toMatch(/^[A-Z2-7]+$/);
+  });
+
+  it("verifyTokenWithCounter returns the matched counter on success", () => {
+    const secret = generateSecret();
+    const token = generateToken(secret);
+    const nowCounter = Math.floor(Date.now() / 1000 / 30);
+    const result = verifyTokenWithCounter(secret, token);
+    expect(result.valid).toBe(true);
+    expect(result.counter).toBe(nowCounter);
+  });
+
+  it("verifyTokenWithCounter returns counter null on failure", () => {
+    const secret = generateSecret();
+    const real = generateToken(secret);
+    const wrong = real === "000000" ? "111111" : "000000";
+    const result = verifyTokenWithCounter(secret, wrong);
+    expect(result.valid).toBe(false);
+    expect(result.counter).toBeNull();
+  });
+
+  it("verifyTokenWithCounter identifies which step in the window matched", () => {
+    const secret = generateSecret();
+    const nowCounter = Math.floor(Date.now() / 1000 / 30);
+    const previousStepToken = generateToken(secret, (nowCounter - 1) * 30 * 1000);
+    const result = verifyTokenWithCounter(secret, previousStepToken);
+    expect(result.valid).toBe(true);
+    expect(result.counter).toBe(nowCounter - 1);
   });
 });
