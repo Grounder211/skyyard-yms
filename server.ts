@@ -91,21 +91,47 @@ async function startServer() {
     cors: { origin: corsOriginCheck }
   });
 
+  const sessionMiddleware = session({
+    store: new SupabaseSessionStore(db),
+    secret: sessionSecret,
+    resave: false,
+    saveUninitialized: false,
+    cookie: { secure: isProd, sameSite: "lax", maxAge: 24 * 60 * 60 * 1000 }
+  });
+
   const facilityPresence: Record<number, any[]> = {};
 
+  // join-facility used to trust a client-supplied facilityId and user
+  // object with no verification at all — any socket could join any
+  // facility's presence/cursor room, or announce itself as any user, just
+  // by asking. Running the same session middleware used for HTTP requests
+  // over the socket handshake means facility and identity come from the
+  // signed session cookie instead of the payload.
+  io.use((socket, next) => sessionMiddleware(socket.request as any, {} as any, next as any));
+
   io.on("connection", (socket) => {
-    socket.on("join-facility", ({ facilityId, user }) => {
-      socket.join(`facility-${facilityId}`);
-      if (!facilityPresence[facilityId]) facilityPresence[facilityId] = [];
+    const session = (socket.request as any).session;
+    const sessionFacilityId: number = session?.facility_id || 1;
+    const sessionUser = session?.user
+      ? { id: `staff-${session.user.id}`, name: session.user.name }
+      : session?.carrier_id
+      ? { id: `carrier-${session.carrier_id}`, name: session.carrier_name }
+      : null;
 
-      facilityPresence[facilityId] = facilityPresence[facilityId].filter(u => u.id !== user.id);
-      facilityPresence[facilityId].push({ ...user, socketId: socket.id });
+    socket.on("join-facility", () => {
+      if (!sessionUser) return; // unauthenticated socket — no presence, no room
+      socket.join(`facility-${sessionFacilityId}`);
+      if (!facilityPresence[sessionFacilityId]) facilityPresence[sessionFacilityId] = [];
 
-      io.to(`facility-${facilityId}`).emit("presence-update", facilityPresence[facilityId]);
+      facilityPresence[sessionFacilityId] = facilityPresence[sessionFacilityId].filter(u => u.id !== sessionUser.id);
+      facilityPresence[sessionFacilityId].push({ ...sessionUser, socketId: socket.id });
+
+      io.to(`facility-${sessionFacilityId}`).emit("presence-update", facilityPresence[sessionFacilityId]);
     });
 
-    socket.on("cursor-move", ({ facilityId, x, y }) => {
-      socket.to(`facility-${facilityId}`).emit("cursor-update", { socketId: socket.id, x, y });
+    socket.on("cursor-move", ({ x, y }) => {
+      if (!sessionUser) return;
+      socket.to(`facility-${sessionFacilityId}`).emit("cursor-update", { socketId: socket.id, x, y });
     });
 
     socket.on("disconnect", () => {
@@ -120,13 +146,7 @@ async function startServer() {
 
   if (isProd) app.set("trust proxy", 1);
 
-  app.use(session({
-    store: new SupabaseSessionStore(db),
-    secret: sessionSecret,
-    resave: false,
-    saveUninitialized: false,
-    cookie: { secure: isProd, sameSite: "lax", maxAge: 24 * 60 * 60 * 1000 }
-  }));
+  app.use(sessionMiddleware);
 
   app.use(helmet({
     contentSecurityPolicy: isProd
@@ -332,12 +352,18 @@ async function startServer() {
     };
   };
 
-  const emitUpdate = async (event = "yard_update", payload: any = null) => {
+  // Every event here — appointment/incident/exception/document rows,
+  // driver names and phones on gate passes and walkins — used to go out
+  // via io.emit(), a global broadcast to every connected socket regardless
+  // of which facility it joined. Scoping to the facility's own room is the
+  // real fix for the cross-tenant leak; facilityId is required so a new
+  // call site can't silently regress back to a global broadcast.
+  const emitUpdate = async (event: string, payload: any, facilityId: number) => {
     if (payload) {
-      io.emit(event, payload);
+      io.to(`facility-${facilityId}`).emit(event, payload);
     } else {
-      const status = await getYardStatus(1);
-      io.emit("yard_update", status);
+      const status = await getYardStatus(facilityId);
+      io.to(`facility-${facilityId}`).emit("yard_update", status);
     }
   };
 
@@ -425,7 +451,7 @@ async function startServer() {
         title: data.title, description: data.description || null, source: data.source || null,
       }).select().single();
       if (error) throw error;
-      emitUpdate("exception_created", row);
+      emitUpdate("exception_created", row, data.facility_id);
       enqueueWebhook("EXCEPTION_CREATED", row, data.facility_id);
       return row;
     } catch (e) {
@@ -524,7 +550,12 @@ async function startServer() {
         });
       }
 
-      emitUpdate("new_notification", { userId: recipientId, userType: recipientType });
+      // No PII in this payload (just an id/type pair) and notify() has no
+      // facility context to scope by without threading it through every
+      // one of its ~25 callers — the client only uses this as a signal to
+      // refetch via the authenticated, facility-scoped
+      // /api/notifications/inapp route, so a global broadcast is fine here.
+      io.emit("new_notification", { userId: recipientId, userType: recipientType });
     } catch (e) {
       logger.error("Notification failed", { error: e });
     }
@@ -1135,7 +1166,7 @@ async function startServer() {
       }).select().single();
       if (error) throw error;
 
-      emitUpdate("appointment_created", newAppt);
+      emitUpdate("appointment_created", newAppt, facilityId);
       evaluateWorkflows("appointment_created", newAppt, facilityId);
       enqueueWebhook("APPOINTMENT_CREATED", newAppt, facilityId);
       res.json(newAppt);
@@ -1206,7 +1237,7 @@ async function startServer() {
         updated = withEnd;
       }
 
-      emitUpdate("appointment_updated", updated);
+      emitUpdate("appointment_updated", updated, facilityId);
       res.json(updated);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -1229,7 +1260,7 @@ async function startServer() {
       // but the record — and who cancelled it, and when — survives for
       // analytics.
       await db.from("appointments").update({ status: "CANCELLED", cancelled_at: new Date().toISOString(), cancelled_by: req.session?.user?.id || null }).eq("id", id).eq("facility_id", facilityId);
-      emitUpdate("appointment_deleted", { id });
+      emitUpdate("appointment_deleted", { id }, facilityId);
       if (existing) enqueueWebhook("APPOINTMENT_CANCELLED", existing, facilityId);
       res.json({ success: true });
     } catch (e: any) {
@@ -1324,7 +1355,7 @@ async function startServer() {
           await db.from("trailers").update(patch).eq("plate", truck_plate).eq("facility_id", facilityId);
         }
         const pass = await issueGatePass({ facilityId, plate: truck_plate, carrierName: carrier_name, spotName: assign.spotName, issuedBy: req.session?.user?.id, entrySource: "guard_walkin" });
-        emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
+        emitUpdate("yard_update", { type: "WALKIN", id: walkin.id }, facilityId);
         return res.json({ success: true, id: `WK-${walkin.id}`, spotName: assign.spotName, passNumber: pass?.pass_number, driverCaution });
       }
 
@@ -1332,7 +1363,7 @@ async function startServer() {
       notify({ type: "WALKIN_QUEUED", recipientType: "driver", recipientId: matchedDriver?.id || null, data: { phone, title: "Registration Queued", body: `SkyYard: You are in queue. Reference: WK-${walkin.id}. Please wait for spot assignment.` } });
       notify({ type: "WALKIN_NEEDS_ATTENTION", recipientType: "ADMIN", recipientId: null, data: { title: "Walk-in waiting for a spot", body: `${driver_name} (${carrier_name}, ${truck_plate}) is queued at the gate — yard is at capacity. Ref: WK-${walkin.id}`, link: "/gate" } });
 
-      emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
+      emitUpdate("yard_update", { type: "WALKIN", id: walkin.id }, facilityId);
       res.json({ success: true, id: `WK-${walkin.id}`, status: "QUEUED", driverCaution });
     } catch (e: any) {
       logger.error("Walk-in registration failed", { error: e });
@@ -1404,7 +1435,7 @@ async function startServer() {
       logAudit({ action: "WALKIN_APPROVED", entityType: "WALKIN", entityId: String(walkinId), details: { spot: assign.spotName }, facility_id: facilityId });
       notify({ type: "WALKIN_APPROVED", recipientType: "driver", recipientId: walkin.driver_id, data: { phone: walkin.phone, title: "Entry Approved", body: `SkyYard: You're approved. Proceed to spot ${assign.spotName}. Reference: WK-${walkinId}` } });
       await issueGatePass({ facilityId, plate: walkin.truck_plate, carrierName: walkin.carrier_name, driverId: walkin.driver_id, spotName: assign.spotName, issuedBy: adminUserId, entrySource: "self_service_approved" });
-      emitUpdate("yard_update", { type: "WALKIN", id: walkinId });
+      emitUpdate("yard_update", { type: "WALKIN", id: walkinId }, facilityId);
       return { ok: true, spotName: assign.spotName };
     }
 
@@ -1421,7 +1452,7 @@ async function startServer() {
     await db.from("walkin_registrations").update({ status: "rejected", rejection_reason: reason || "Denied by admin", reviewed_by: adminUserId, reviewed_at: new Date().toISOString() }).eq("id", walkinId);
     logAudit({ action: "WALKIN_REJECTED", entityType: "WALKIN", entityId: String(walkinId), details: { reason }, facility_id: facilityId, severity: "warning" });
     notify({ type: "WALKIN_REJECTED", recipientType: "driver", recipientId: walkin.driver_id, data: { phone: walkin.phone, title: "Entry Denied", body: `SkyYard: Entry denied. Reason: ${reason || "Not specified"}. Reference: WK-${walkinId}` } });
-    emitUpdate("yard_update", { type: "WALKIN", id: walkinId });
+    emitUpdate("yard_update", { type: "WALKIN", id: walkinId }, facilityId);
     return { ok: true };
   };
 
@@ -1500,7 +1531,7 @@ async function startServer() {
         });
       }
 
-      emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
+      emitUpdate("yard_update", { type: "WALKIN", id: walkin.id }, facilityId);
       res.json({ success: true, id: walkin.id, status: "pending_approval", status_token: walkin.status_token });
     } catch (e: any) {
       logger.error("Self-service walk-in failed", { error: e });
@@ -1767,7 +1798,7 @@ async function startServer() {
       }).select().single();
       if (error) throw error;
       logAudit({ action: "SAFETY_INCIDENT_REPORTED", entityType: "SAFETY_INCIDENT", entityId: String(data.id), details: { severity, category, plate }, ip: req.ip, facility_id: facilityId, severity: severity === "critical" || severity === "high" ? "warning" : "info" });
-      emitUpdate("safety_incident_created", data);
+      emitUpdate("safety_incident_created", data, facilityId);
       raiseException({ facility_id: facilityId, exception_type: "safety_incident", severity: severity === "critical" ? "critical" : severity === "high" ? "critical" : "warning", entity_type: plate ? "TRAILER" : "SAFETY", entity_id: plate || String(data.id), title: `Safety incident: ${category.replace(/_/g, " ")}`, description: description.trim(), source: "safety_center" });
       res.json(data);
     } catch (e: any) {
@@ -1790,7 +1821,7 @@ async function startServer() {
       const { data, error } = await db.from("safety_incidents").update(patch).eq("id", req.params.id).eq("facility_id", req.facilityId).select().single();
       if (error) throw error;
       logAudit({ action: "SAFETY_INCIDENT_UPDATED", entityType: "SAFETY_INCIDENT", entityId: String(req.params.id), details: { status }, ip: req.ip, facility_id: req.facilityId });
-      emitUpdate("safety_incident_updated", data);
+      emitUpdate("safety_incident_updated", data, req.facilityId);
       res.json(data);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -1826,7 +1857,7 @@ async function startServer() {
       if (error) throw error;
       logAudit({ action: "EXCEPTION_BULK_RESOLVED", entityType: "EXCEPTION", entityId: ids.join(","), details: { requested: ids.length, resolved: (data || []).length, ids }, ip: req.ip, facility_id: req.facilityId });
       for (const d of data || []) {
-        emitUpdate("exception_updated", d);
+        emitUpdate("exception_updated", d, req.facilityId);
         enqueueWebhook("EXCEPTION_RESOLVED", d, req.facilityId);
       }
       res.json({ success: true, resolved: (data || []).length });
@@ -1859,7 +1890,7 @@ async function startServer() {
       const { data, error } = await db.from("exceptions").update(patch).eq("id", req.params.id).eq("facility_id", req.facilityId).select().single();
       if (error) throw error;
       logAudit({ action: "EXCEPTION_UPDATED", entityType: "EXCEPTION", entityId: String(req.params.id), details: { status, resolution_notes: !!resolution_notes }, ip: req.ip, facility_id: req.facilityId });
-      emitUpdate("exception_updated", data);
+      emitUpdate("exception_updated", data, req.facilityId);
       if (status === "resolved") enqueueWebhook("EXCEPTION_RESOLVED", data, req.facilityId);
       res.json(data);
     } catch (e: any) {
@@ -1941,7 +1972,7 @@ async function startServer() {
       }).eq("id", req.params.id).eq("facility_id", req.facilityId).select().single();
       if (error) throw error;
       logAudit({ action: "GATE_PASS_VERIFIED", entityType: "GATE_PASS", entityId: req.params.id, details: { license_verified: !!license_verified, vehicle_matched: !!vehicle_matched, documents_ok: !!documents_ok, plate: data.plate }, ip: req.ip, facility_id: req.facilityId });
-      emitUpdate("yard_update", { type: "GATE_PASS" });
+      emitUpdate("yard_update", { type: "GATE_PASS" }, req.facilityId);
       res.json(data);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -2018,7 +2049,7 @@ async function startServer() {
             if (completeError) throw completeError;
           }
           await db.from("gate_passes").update({ spot_id: chosenDockId }).eq("id", pass.id);
-          emitUpdate("yard_update", { type: "MOVE_COMPLETE" });
+          emitUpdate("yard_update", { type: "MOVE_COMPLETE" }, req.facilityId);
         }
       }
 
@@ -2057,7 +2088,7 @@ async function startServer() {
         }
       }
 
-      emitUpdate("yard_update", { type: "GATE_PASS" });
+      emitUpdate("yard_update", { type: "GATE_PASS" }, req.facilityId);
       res.json(data);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -2083,7 +2114,7 @@ async function startServer() {
         }
       }
 
-      emitUpdate("yard_update", { type: "GATE_PASS" });
+      emitUpdate("yard_update", { type: "GATE_PASS" }, req.facilityId);
       res.json(data);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -2107,7 +2138,7 @@ async function startServer() {
       // this "departed" trailer sitting in it.
       if (pass.trailer_id) await db.from("trailers").update({ status: "DISPATCHED", spot_id: null, checked_out_at: new Date().toISOString() }).eq("id", pass.trailer_id);
       logAudit({ action: "GATE_PASS_EXITED", entityType: "GATE_PASS", entityId: String(pass.id), details: { plate: pass.plate }, ip: req.ip, facility_id: req.facilityId });
-      emitUpdate("yard_update", { type: "GATE_PASS" });
+      emitUpdate("yard_update", { type: "GATE_PASS" }, req.facilityId);
       res.json(data);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -2258,11 +2289,11 @@ async function startServer() {
         // verified at registration time — mark the checklist pre-satisfied so staff
         // aren't asked to re-verify what the badge itself already vouches for.
         if (pass) await db.from("gate_passes").update({ license_verified: true, vehicle_matched: true, verified_by: req.session?.user?.id, verified_at: new Date().toISOString() }).eq("id", pass.id);
-        emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
+        emitUpdate("yard_update", { type: "WALKIN", id: walkin.id }, facilityId);
         return res.json({ success: true, driver: { name: driver.name, plate: driver.default_plate, carrier_name: driver.carrier_name }, spotName: assign.spotName, passNumber: pass?.pass_number, driverCaution });
       }
 
-      emitUpdate("yard_update", { type: "WALKIN", id: walkin.id });
+      emitUpdate("yard_update", { type: "WALKIN", id: walkin.id }, facilityId);
       res.json({ success: true, driver: { name: driver.name, plate: driver.default_plate, carrier_name: driver.carrier_name }, queued: true, driverCaution });
     } catch (e: any) {
       logger.error("Badge scan failed", { error: e.message });
@@ -2379,7 +2410,7 @@ async function startServer() {
         notify({ type: "GATE_CHECKIN", recipientType: "driver", recipientId: appt.driver_id, data: { phone: driverPhone, title: "Checked In", body: `SkyYard: Welcome! You are assigned to parking spot: ${result.spotName}. Please wait for further instructions.` } });
       }
 
-      emitUpdate("yard_update", { type: "CHECKIN", plate });
+      emitUpdate("yard_update", { type: "CHECKIN", plate }, facilityId);
       res.json({ success: true, spotName: result.spotName, passNumber: pass?.pass_number });
     } catch (e: any) {
       logger.error("Gate checkin failed", { error: e });
@@ -2427,7 +2458,7 @@ async function startServer() {
       }).select().single();
       if (error) throw error;
       logAudit({ action: "MOVE_CREATED", entityType: "TRAILER", entityId: String(trailerId), details: { fromSpotId, toSpotId }, ip: req.ip, facility_id: facilityId });
-      emitUpdate("move_update", { type: "NEW_MOVE" });
+      emitUpdate("move_update", { type: "NEW_MOVE" }, facilityId);
       res.json({ success: true, move });
     } catch (e: any) {
       res.status(500).json({ error: "Failed to create move order" });
@@ -2456,7 +2487,7 @@ async function startServer() {
       if (error || !updated) return res.status(409).json({ error: "Already claimed by another operator" });
 
       logAudit({ action: "MOVE_CLAIMED", entityType: "MOVE_ORDER", entityId: String(id), ip: req.ip, facility_id: facilityId });
-      emitUpdate("move_update", { type: "MOVE_CLAIMED", id: Number(id) });
+      emitUpdate("move_update", { type: "MOVE_CLAIMED", id: Number(id) }, facilityId);
       res.json({ success: true, move: updated });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -2478,7 +2509,7 @@ async function startServer() {
       if (error) throw error;
 
       logAudit({ action: "MOVE_RELEASED", entityType: "MOVE_ORDER", entityId: String(id), ip: req.ip, facility_id: facilityId });
-      emitUpdate("move_update", { type: "MOVE_RELEASED", id: Number(id) });
+      emitUpdate("move_update", { type: "MOVE_RELEASED", id: Number(id) }, facilityId);
       res.json({ success: true, move: updated });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -2508,7 +2539,7 @@ async function startServer() {
         }
       }
 
-      emitUpdate("yard_update", { type: "MOVE_COMPLETE" });
+      emitUpdate("yard_update", { type: "MOVE_COMPLETE" }, facilityId);
       enqueueWebhook("TRAILER_MOVED", { moveId, trailerId: result.trailerId, plate: result.plate, toSpotName: result.toSpotName, toSpotType: result.toSpotType }, req.facilityId || 1);
       res.json({ success: true });
     } catch (e: any) {
@@ -2558,7 +2589,7 @@ async function startServer() {
         notify({ type: "TRAILER_DISPATCH", recipientType: "driver", recipientId: trailer.driver_id, data: { phone: trailer.drivers.phone, title: "Dispatched", body: `SkyYard: Your trailer ${trailer.plate} has been dispatched from Spot ${spotId || "Yard"}. Safe travels!` } });
       }
 
-      emitUpdate("yard_update", { type: "DISPATCH" });
+      emitUpdate("yard_update", { type: "DISPATCH" }, facilityId);
       enqueueWebhook("TRUCK_DEPARTED", { trailerId, plate: trailer?.plate, carrier: trailer?.carrier }, req.facilityId || 1);
       res.json({ success: true });
     } catch (e: any) {
@@ -3590,7 +3621,7 @@ async function startServer() {
         });
       }
 
-      emitUpdate("appointment_updated", { id: appt.id });
+      emitUpdate("appointment_updated", { id: appt.id }, facilityId);
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -3647,7 +3678,7 @@ async function startServer() {
         });
       }
 
-      emitUpdate("appointment_updated", { id: appt.id });
+      emitUpdate("appointment_updated", { id: appt.id }, facilityId);
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -3885,7 +3916,7 @@ async function startServer() {
       }
 
       logAudit({ action: "EQUIPMENT_STATUS_CHANGED", entityType: "EQUIPMENT", entityId: req.params.id, details: { status }, ip: req.ip, facility_id: req.facilityId });
-      emitUpdate("yard_update", { type: "EQUIPMENT" });
+      emitUpdate("yard_update", { type: "EQUIPMENT" }, req.facilityId);
       res.json(data);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -4114,7 +4145,7 @@ async function startServer() {
       if (error) throw error;
 
       logAudit({ action: "SELF_BOOKED", entityType: "APPOINTMENT", entityId: String(newAppt.id), details: { plate, carrier: carrier.name }, ip: req.ip, facility_id: facilityId });
-      emitUpdate("appointment_created", newAppt);
+      emitUpdate("appointment_created", newAppt, facilityId);
       enqueueWebhook("APPOINTMENT_CREATED", newAppt, facilityId);
 
       if (driver_phone) await sendSms(driver_phone, `SkyYard: Booking confirmed for ${plate} on ${start_time}. Reference: APT-${newAppt.id}.`);
@@ -4852,7 +4883,7 @@ async function startServer() {
         raiseException({ facility_id: facilityId, exception_type: "temperature_violation", severity: "critical", entity_type: "TRAILER", entity_id: plate, title: `Reefer out of range: ${plate}`, description: evaluation.reasons.join("; "), source: "reefer_monitoring" });
       }
 
-      emitUpdate("yard_update", { type: "REEFER_READING", plate });
+      emitUpdate("yard_update", { type: "REEFER_READING", plate }, facilityId);
       res.json(reading);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -4914,7 +4945,7 @@ async function startServer() {
       const { data, error } = await db.from("trailers").update({ cargo_status: status }).eq("plate", req.params.plate).eq("facility_id", req.facilityId).select("plate, cargo_status").single();
       if (error) throw error;
       logAudit({ action: "CARGO_STATUS_UPDATED", entityType: "TRAILER", entityId: req.params.plate, details: { status }, ip: req.ip, facility_id: req.facilityId });
-      emitUpdate("yard_update", { type: "CARGO_STATUS" });
+      emitUpdate("yard_update", { type: "CARGO_STATUS" }, req.facilityId);
       res.json(data);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -5107,7 +5138,7 @@ async function startServer() {
       }).select().single();
       if (error) throw error;
       logAudit({ action: "DOCUMENT_UPLOADED", entityType: "DOCUMENT", entityId: String(data.id), details: { doc_type, related_entity_type, related_entity_id }, ip: req.ip, facility_id: facilityId });
-      emitUpdate("document_uploaded", data);
+      emitUpdate("document_uploaded", data, facilityId);
       res.json(data);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -5141,7 +5172,7 @@ async function startServer() {
       const { data, error } = await db.from("documents").update(patch).eq("id", req.params.id).eq("facility_id", req.facilityId).select().single();
       if (error) throw error;
       logAudit({ action: "DOCUMENT_UPDATED", entityType: "DOCUMENT", entityId: String(req.params.id), details: { verification_status }, ip: req.ip, facility_id: req.facilityId });
-      emitUpdate("document_updated", data);
+      emitUpdate("document_updated", data, req.facilityId);
       res.json(data);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
