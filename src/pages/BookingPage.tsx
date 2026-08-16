@@ -46,11 +46,11 @@ export default function BookingPage() {
     setSelectedTime(null);
     setSelectedDock(null);
     const weightParam = form.load_weight_kg ? `&load_weight_kg=${form.load_weight_kg}` : "";
-    fetch(`/api/slots?date=${date}&load_type=${form.load_type}${weightParam}`)
+    fetch(`/api/slots?date=${date}&load_type=${form.load_type}&token=${token}${weightParam}`)
       .then((r) => r.json())
       .then((data) => setSlots(Array.isArray(data) ? data : []))
       .finally(() => setSlotsLoading(false));
-    fetch(`/api/slots/recommend?date=${date}&equipment_type=${form.load_type}&carrier_id=${carrier?.id || ""}${weightParam}`)
+    fetch(`/api/slots/recommend?date=${date}&equipment_type=${form.load_type}&token=${token}${weightParam}`)
       .then((r) => r.json())
       .then((data) => setRecommended(Array.isArray(data) ? data : []))
       .catch(() => setRecommended([]));

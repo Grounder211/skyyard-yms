@@ -1032,7 +1032,15 @@ async function startServer() {
         const driver = a.driver_id ? driverMap.get(a.driver_id) : null;
         return { ...a, dock_name: a.spots?.name, health: health.status, health_reason: health.reason, driver_name: driver?.name || null, driver_phone: driver?.phone || null };
       }));
-      res.json(rows);
+      // select("*") pulls personal_id_number (Swedish personnummer) and
+      // driver_license along with everything else — fine for the roles
+      // that actually verify identity at the gate, not for HOSTLER, whose
+      // job is moving trailers, not checking papers.
+      const role = req.session?.user?.role;
+      const sanitized = role === "HOSTLER"
+        ? rows.map(({ personal_id_number, driver_license, ...rest }: any) => rest)
+        : rows;
+      res.json(sanitized);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -3005,7 +3013,17 @@ async function startServer() {
 
   v1.get("/yard-status", async (req: any, res) => {
     const status = await getYardStatus(req.facilityId);
-    res.json(status);
+    // getYardStatus() is the internal staff-console payload. Each spot's
+    // `driver` object carries name/phone/licenseNumber/personalIdNumber
+    // (the Swedish personnummer), and cargo_type/cargo_quantity are the
+    // same two fields the sibling /appointments route above was
+    // deliberately built to keep out of partner responses — this route
+    // forwarded all of it unfiltered. Strip the same fields here.
+    const spots = (status.spots || []).map((s: any) => {
+      const { driver, cargo_type, cargo_quantity, ...rest } = s;
+      return rest;
+    });
+    res.json({ ...status, spots });
   });
 
   app.use("/api/v1", v1);
@@ -3313,9 +3331,25 @@ async function startServer() {
   // against every appointment that day, using each one's own estimated
   // duration too (end_time if a real one was recorded, otherwise its own
   // load-type estimate).
+  // Both /api/slots and /api/slots/recommend used to have no auth at all,
+  // relying on facilityContext's anonymous-caller default (facility 1) —
+  // meaning any internet caller got a live read of that facility's dock
+  // inventory and hour-by-hour occupancy, or (via recommend) an oracle on
+  // an arbitrary carrier_id's turnaround performance. The one real caller
+  // (BookingPage, reached via /book/:token) already resolves a token to a
+  // carrier and facility one call earlier — require and validate that
+  // same token here instead of trusting an implicit default facility.
+  const resolveBookingToken = async (token: string) => {
+    if (!token) return null;
+    const { data: carrier } = await db.from("carriers").select("id, booking_facility_id").eq("booking_token", token).gt("booking_token_expires", new Date().toISOString()).maybeSingle();
+    return carrier ? { carrierId: carrier.id, facilityId: carrier.booking_facility_id || 1 } : null;
+  };
+
   app.get("/api/slots", async (req: any, res) => {
-    const { date, load_type, load_weight_kg } = req.query;
-    const facilityId = req.facilityId;
+    const { date, load_type, load_weight_kg, token } = req.query;
+    const resolved = await resolveBookingToken(token as string);
+    if (!resolved) return res.status(401).json({ error: "Invalid or expired booking link" });
+    const facilityId = resolved.facilityId;
     // estimateDurationMinutes has always taken an optional weight argument
     // (heavier loads take longer to secure) but no caller ever passed one —
     // there was nowhere upstream to capture a weight, so the heavy-load
@@ -3360,8 +3394,16 @@ async function startServer() {
   // anywhere in the frontend. Now scores every real dock x time-of-day
   // combination for the requested date, same source data as /api/slots.
   app.get("/api/slots/recommend", async (req: any, res) => {
-    const { date, equipment_type, carrier_id, load_weight_kg } = req.query;
-    const facilityId = req.facilityId;
+    const { date, equipment_type, load_weight_kg, token } = req.query;
+    const resolved = await resolveBookingToken(token as string);
+    if (!resolved) return res.status(401).json({ error: "Invalid or expired booking link" });
+    const facilityId = resolved.facilityId;
+    // Derived from the token, not trusted from the client — this endpoint
+    // used to accept an arbitrary carrier_id query param and fold its
+    // turnaround history into the score/reason it returned, making it a
+    // free oracle on any carrier's performance for anyone who could guess
+    // an id.
+    const carrier_id = String(resolved.carrierId);
     const requestedWeight = load_weight_kg ? Number(load_weight_kg) : undefined;
     const times = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00"];
     const { data: docks } = await db.from("spots").select("id, name").eq("type", "DOCK").eq("facility_id", facilityId);
