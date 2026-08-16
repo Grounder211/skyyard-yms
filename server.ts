@@ -28,6 +28,7 @@ import { logger } from "./server/logger.js";
 import { getCurrentTemperature } from "./server/services/smhiWeather.js";
 import { getTrafficProvider } from "./server/services/trafficProvider.js";
 import { generateSecret as generateTotpSecret, verifyToken as verifyTotpToken, verifyTokenWithCounter as verifyTotpTokenWithCounter, otpauthUrl as totpUri } from "./server/services/totp.js";
+import { isSsrfSafeUrl } from "./server/services/ssrfGuard.js";
 import { checkStageTransition, isLoadReady } from "./server/services/gatePassStages.js";
 import { isDockSlaBreached } from "./server/services/dockSla.js";
 import { countTodayNoShows, countExpectedArrivalsToday, countBusyHostlers, summarizeZoneOccupancy, matchExceptionPlatesToSpotIds, findUnmanagedTrailers } from "./server/services/todayOps.js";
@@ -2802,7 +2803,9 @@ async function startServer() {
   // Driver OTP Routes
   app.post("/api/driver/request-otp", otpRequestLimiter, async (req: any, res) => {
     const { phone } = req.body;
-    if (!phone) return res.status(400).json({ error: "Phone number required" });
+    if (!phone || typeof phone !== "string" || !/^\+?[0-9]{7,15}$/.test(phone)) {
+      return res.status(400).json({ error: "A valid phone number is required" });
+    }
 
     // A real, single-use, expiring code is always generated and must
     // always be verified via /api/driver/verify-otp — this used to
@@ -2934,6 +2937,7 @@ async function startServer() {
     const { url, events } = req.body;
     const userId = req.session?.user?.id || null;
     if (!url || !/^https?:\/\//.test(url)) return res.status(400).json({ error: "A valid http(s) URL is required" });
+    if (!(await isSsrfSafeUrl(url))) return res.status(400).json({ error: "URL resolves to a private/internal address and can't be used for webhooks" });
     const selectedEvents = (Array.isArray(events) ? events : []).filter((e: string) => WEBHOOK_EVENT_TYPES.includes(e));
     if (selectedEvents.length === 0) return res.status(400).json({ error: "Select at least one event" });
     try {
@@ -3080,12 +3084,19 @@ async function startServer() {
     const { data: jobs } = await db.from("webhook_queue").select("*").eq("status", "pending").lt("attempts", 3).lte("next_attempt_at", new Date().toISOString()).limit(5);
     for (const job of jobs || []) {
       try {
+        // Re-checked here, not just at subscription creation — DNS can
+        // change between the two (rebinding), and a redirect response
+        // is refused outright rather than followed, since following one
+        // would let a URL that passed the check at creation time hand off
+        // the actual request to an internal address at delivery time.
+        if (!(await isSsrfSafeUrl(job.webhook_url))) throw new Error("Webhook URL resolves to a private/internal address");
         const payload = JSON.stringify(job.payload_json);
         const sig = crypto.createHmac("sha256", job.webhook_secret || "").update(payload).digest("hex");
         const resp = await fetch(job.webhook_url, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-SkyYard-Signature": sig, "X-SkyYard-Event": job.event_type },
           body: payload,
+          redirect: "manual",
           signal: AbortSignal.timeout(5000),
         });
         if (resp.ok) {
@@ -5075,7 +5086,13 @@ async function startServer() {
     if (!req.file) return res.status(400).json({ error: "No file uploaded, or file type/size rejected (PDF/JPEG/PNG/WEBP, max 10MB)" });
     if (!doc_type || !doc_type.trim()) return res.status(400).json({ error: "Document type is required" });
     if (!DOCUMENT_ENTITY_TYPES.includes(related_entity_type)) return res.status(400).json({ error: "Invalid related_entity_type" });
-    if (!related_entity_id || !String(related_entity_id).trim()) return res.status(400).json({ error: "related_entity_id is required" });
+    // related_entity_id is interpolated directly into the storage path below
+    // (facilityId/type/id/...) — without this check a value like
+    // "../../otherFacilityId/trailer/X" would place or later delete a file
+    // outside this facility's own prefix in the shared bucket.
+    if (!related_entity_id || !/^[A-Za-z0-9 _-]{1,100}$/.test(String(related_entity_id).trim())) {
+      return res.status(400).json({ error: "related_entity_id contains invalid characters" });
+    }
     try {
       const ext = (req.file.originalname.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "");
       const storagePath = `${facilityId}/${related_entity_type}/${related_entity_id}/${Date.now()}-${crypto.randomBytes(6).toString("hex")}.${ext}`;
