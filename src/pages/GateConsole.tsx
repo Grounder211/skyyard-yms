@@ -240,7 +240,8 @@ export default function GateConsole() {
     setScanOpen(false);
     // Two QR formats in play: APT-<id> (staff pre-verifies a scheduled
     // appointment) and DRV-<badge_token> (pre-registered driver's permanent
-    // gate badge — auto-verifies and auto-assigns, no form).
+    // gate badge — auto-assigns a spot, no form; the guard still runs the
+    // verify checklist on the pipeline board before the pass leaves IN_PASS).
     const badgeMatch = text.match(/^DRV-(.+)$/i);
     if (badgeMatch) {
       scanBadge(badgeMatch[1]);

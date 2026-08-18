@@ -41,6 +41,7 @@ import { recommendParkingMoves } from "./server/services/smartParking.js";
 import { predictArrival } from "./server/services/arrivalPrediction.js";
 import { assessDetentionRisk } from "./server/services/detentionRisk.js";
 import { SupabaseSessionStore } from "./server/supabaseSessionStore.js";
+import { socketPrincipal } from "./server/services/socketPrincipal.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -112,14 +113,17 @@ async function startServer() {
   io.on("connection", (socket) => {
     const session = (socket.request as any).session;
     const sessionFacilityId: number = session?.facility_id || 1;
-    const sessionUser = session?.user
-      ? { id: `staff-${session.user.id}`, name: session.user.name }
-      : session?.carrier_id
-      ? { id: `carrier-${session.carrier_id}`, name: session.carrier_name }
-      : null;
+    // Carrier sessions used to count as a principal here, so a carrier-portal
+    // login joined facility-${session.facility_id || 1} — facility 1's staff
+    // room, since carrier login never writes facility_id — and received every
+    // emitUpdate payload: driver PII and competitors' appointments the
+    // carrier's own carrier_id-scoped HTTP endpoints never expose. Only staff
+    // sessions are a principal now; carrier/driver sockets get no room and no
+    // presence entry, matching how their HTTP side is scoped.
+    const sessionUser = socketPrincipal(session);
 
     socket.on("join-facility", () => {
-      if (!sessionUser) return; // unauthenticated socket — no presence, no room
+      if (!sessionUser) return; // not staff — no presence, no room
       socket.join(`facility-${sessionFacilityId}`);
       if (!facilityPresence[sessionFacilityId]) facilityPresence[sessionFacilityId] = [];
 
@@ -2350,11 +2354,13 @@ async function startServer() {
 
       if (assign?.assigned) {
         notify({ type: "BADGE_SCAN_CONFIRMED", recipientType: "driver", recipientId: driver.id, data: { phone: driver.phone, title: "Entry confirmed", body: `SkyYard: Badge scanned, welcome back. Proceed to spot ${assign.spotName}.` } });
+        // The badge only proves the driver filled in their own profile
+        // (/api/driver/profile is self-service, no staff review), so it can't
+        // stand in for the gate checklist — leave license_verified /
+        // vehicle_matched false and let the guard assert them through
+        // /api/gate-pass/:id/verify (the amber "Verify driver, vehicle & seal"
+        // action on the pipeline board) before the pass leaves IN_PASS.
         const pass = await issueGatePass({ facilityId, plate: driver.default_plate, carrierName: driver.carrier_name, driverId: driver.id, spotName: assign.spotName, issuedBy: req.session?.user?.id, entrySource: "badge_scan" });
-        // Pre-registered badge already implies the driver's identity and vehicle were
-        // verified at registration time — mark the checklist pre-satisfied so staff
-        // aren't asked to re-verify what the badge itself already vouches for.
-        if (pass) await db.from("gate_passes").update({ license_verified: true, vehicle_matched: true, verified_by: req.session?.user?.id, verified_at: new Date().toISOString() }).eq("id", pass.id);
         emitUpdate("yard_update", { type: "WALKIN", id: walkin.id }, facilityId);
         return res.json({ success: true, driver: { name: driver.name, plate: driver.default_plate, carrier_name: driver.carrier_name }, spotName: assign.spotName, passNumber: pass?.pass_number, driverCaution });
       }
