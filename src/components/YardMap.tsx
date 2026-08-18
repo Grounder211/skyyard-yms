@@ -213,7 +213,17 @@ export default function YardMap({ spots, facility, unresolvedSafetySpotIds, spot
     });
     mapRef.current = map;
 
+    // If 'load' itself never fires (bad token, blocked network, ad
+    // blocker) the spinner above would otherwise spin forever with no
+    // feedback — "I open Tracking and nothing shows up".
+    const loadTimeout = setTimeout(() => {
+      if (!mapRef.current) return;
+      setLoadError((prev) => prev ?? "Map failed to load — check your network connection and try again");
+    }, 15000);
+    map.once("load", () => clearTimeout(loadTimeout));
+
     return () => {
+      clearTimeout(loadTimeout);
       spotMarkersRef.current.forEach((m) => m.remove());
       spotMarkersRef.current.clear();
       truckMarkersRef.current.forEach((t) => t.marker.remove());

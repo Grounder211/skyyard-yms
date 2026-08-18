@@ -1717,10 +1717,8 @@ async function startServer() {
           timeCritical.push({ type: "reefer_stale", severity: "warning", title: "Reefer reading overdue", description: `${t.plate} — last checked over ${STALE_READING_HOURS}h ago`, timestamp: latest.recorded_at, action: { label: "Open trailer", link: "/tracking" } });
         }
       }
-      // Financials (/finance) is a suspended module (HIDDEN_ROUTES) — don't
-      // surface an action whose link leads to a Restricted page.
       for (const g of staleGatePasses.data || []) {
-        timeCritical.push({ type: "stale_pass", severity: "warning", title: `Vehicle stuck at ${g.stage.replace(/_/g, " ")}`, description: `${g.plate} — no movement in over 2 hours`, timestamp: g.updated_at, action: { label: "Open tracking", link: "/tracking" } });
+        timeCritical.push({ type: "stale_pass", severity: "warning", title: `Vehicle stuck at ${g.stage.replace(/_/g, " ")}`, description: `${g.plate} — no movement in over 2 hours`, timestamp: g.updated_at, action: { label: "Open dispatch", link: "/dispatch" } });
       }
       for (const w of pendingApprovals.data || []) {
         operations.push({ type: "approval", severity: "warning", title: "Gate entry awaiting approval", description: `${w.truck_plate} — ${w.carrier_name}`, timestamp: w.created_at, action: { label: "Approve", link: "/gate" } });
