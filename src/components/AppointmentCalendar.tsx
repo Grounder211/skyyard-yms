@@ -24,8 +24,8 @@ type ViewType = "day" | "week" | "month" | "list";
 // Matches WeekView/DayView's h-20 (80px) per-hour row height, used to
 // convert an hour into a scroll offset.
 const HOUR_ROW_HEIGHT = 80;
-const BUSINESS_HOUR_START = 6;
-const BUSINESS_HOUR_END = 20;
+const BUSINESS_HOUR_START = 10;
+const BUSINESS_HOUR_END = 18;
 
 const HEALTH_STYLES: Record<string, string> = {
   ON_TRACK: "bg-teal-100 text-teal-700",
@@ -42,6 +42,7 @@ export default function AppointmentCalendar() {
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingAppointment, setEditingAppointment] = useState<any>(null);
+  const [newBookingDate, setNewBookingDate] = useState<Date | null>(null);
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -141,6 +142,18 @@ export default function AppointmentCalendar() {
     setIsModalOpen(true);
   };
 
+  // Every "+" affordance across Month/Week/Day views funnels through here
+  // so they all open the same modal pre-filled with the exact cell clicked,
+  // instead of always defaulting to "now". Past cells are a no-op — the
+  // server rejects past start_time anyway, so don't open a modal that can
+  // only fail.
+  const handleCreateAt = (date: Date) => {
+    if (date.getTime() < Date.now() - 60_000) return;
+    setEditingAppointment(null);
+    setNewBookingDate(date);
+    setIsModalOpen(true);
+  };
+
   const handleDelete = async (id: number) => {
     if (!confirm("Are you sure you want to cancel this booking?")) return;
     try {
@@ -195,8 +208,12 @@ export default function AppointmentCalendar() {
             <ViewButton active={view === 'list'} onClick={() => setView('list')} label="List" />
           </div>
 
-          <button 
-            onClick={() => setIsModalOpen(true)}
+          <button
+            onClick={() => {
+              const d = new Date(Math.max(currentDate.getTime(), Date.now()));
+              d.setHours(Math.max(d.getHours(), BUSINESS_HOUR_START), 0, 0, 0);
+              handleCreateAt(d);
+            }}
             className="flex-1 md:flex-none bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 active:scale-95"
           >
             <Plus size={20} />
@@ -264,9 +281,9 @@ export default function AppointmentCalendar() {
           </div>
         ) : (
           <div ref={scrollContainerRef} className="flex-1 overflow-auto custom-scrollbar">
-            {view === 'month' && <MonthView currentDate={currentDate} appointments={appointments} onEdit={handleEdit} />}
-            {view === 'week' && <WeekView currentDate={currentDate} appointments={appointments} hours={hours} onEdit={handleEdit} onDelete={handleDelete} dragging={!!activeDrag} />}
-            {view === 'day' && <DayView currentDate={currentDate} appointments={appointments} hours={hours} onEdit={handleEdit} onDelete={handleDelete} dragging={!!activeDrag} />}
+            {view === 'month' && <MonthView currentDate={currentDate} appointments={appointments} onEdit={handleEdit} onCreateAt={handleCreateAt} />}
+            {view === 'week' && <WeekView currentDate={currentDate} appointments={appointments} hours={hours} onEdit={handleEdit} onDelete={handleDelete} onCreateAt={handleCreateAt} dragging={!!activeDrag} />}
+            {view === 'day' && <DayView currentDate={currentDate} appointments={appointments} hours={hours} onEdit={handleEdit} onDelete={handleDelete} onCreateAt={handleCreateAt} dragging={!!activeDrag} />}
             {view === 'list' && <ListView appointments={appointments} onEdit={handleEdit} onDelete={handleDelete} />}
           </div>
         )}
@@ -279,9 +296,9 @@ export default function AppointmentCalendar() {
       <AnimatePresence>
         {isModalOpen && (
           <CreateAppointmentModal
-            onClose={() => { setIsModalOpen(false); setEditingAppointment(null); }}
-            onSuccess={() => { fetchAppointments(); setIsModalOpen(false); setEditingAppointment(null); }}
-            initialDate={currentDate}
+            onClose={() => { setIsModalOpen(false); setEditingAppointment(null); setNewBookingDate(null); }}
+            onSuccess={() => { fetchAppointments(); setIsModalOpen(false); setEditingAppointment(null); setNewBookingDate(null); }}
+            initialDate={newBookingDate || currentDate}
             editingAppointment={editingAppointment}
           />
         )}
@@ -381,13 +398,39 @@ function ActionMenu({ appt, onEdit, onDelete }: any) {
   );
 }
 
-function MonthView({ currentDate, appointments, onEdit }: any) {
+function DroppableMonthDay({ day, isPast, onCreateAt, children }: { day: Date; isPast: boolean; onCreateAt: (d: Date) => void; children: React.ReactNode; key?: React.Key }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `${day.toISOString()}_monthdrop`, data: { day, hour: BUSINESS_HOUR_START }, disabled: isPast });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`group min-h-[140px] border-r border-b border-slate-100 p-3 transition-colors ${isPast ? "bg-slate-50/40" : "hover:bg-slate-50/30"} ${isOver ? "bg-indigo-100 ring-2 ring-inset ring-indigo-400" : ""}`}
+    >
+      {children}
+      {!isPast && (
+        <button
+          type="button"
+          onClick={() => {
+            const d = new Date(day);
+            d.setHours(BUSINESS_HOUR_START, 0, 0, 0);
+            onCreateAt(d);
+          }}
+          className="mt-1 w-full flex items-center justify-center gap-1 text-[9px] font-black text-slate-300 hover:text-indigo-500 uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity"
+        >
+          <Plus size={11} /> Book
+        </button>
+      )}
+    </div>
+  );
+}
+
+function MonthView({ currentDate, appointments, onEdit, onCreateAt }: any) {
   const monthStart = startOfMonth(currentDate);
   const monthEnd = endOfMonth(currentDate);
   const startDate = startOfWeek(monthStart);
   const endDate = endOfWeek(monthEnd);
-  
+
   const calendarDays = eachDayOfInterval({ start: startDate, end: endDate });
+  const todayStart = startOfDay(new Date());
 
   return (
     <div className="grid grid-cols-7 h-full border-b border-slate-100">
@@ -399,34 +442,34 @@ function MonthView({ currentDate, appointments, onEdit }: any) {
       {calendarDays.map((day, i) => {
         const dayAppts = appointments.filter((a: any) => isSameDay(parseISO(a.start_time), day));
         const isCurrentMonth = isSameMonth(day, currentDate);
+        const isPast = day < todayStart;
 
         return (
-          <div 
-            key={day.toISOString()} 
-            className={`min-h-[140px] border-r border-b border-slate-100 p-3 transition-colors hover:bg-slate-50/30 ${!isCurrentMonth ? 'bg-slate-50/20' : ''}`}
-          >
-            <div className="flex justify-between items-start mb-2">
-              <span className={`text-sm font-black ${isToday(day) ? 'w-7 h-7 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-100' : isCurrentMonth ? 'text-slate-900' : 'text-slate-300'}`}>
-                {format(day, "d")}
-              </span>
-              {dayAppts.length > 0 && (
-                <span className="text-[9px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full uppercase tracking-tighter">
-                  {dayAppts.length} Bookings
+          <DroppableMonthDay key={day.toISOString()} day={day} isPast={isPast} onCreateAt={onCreateAt}>
+            <div className={`${!isCurrentMonth ? 'opacity-40' : ''}`}>
+              <div className="flex justify-between items-start mb-2">
+                <span className={`text-sm font-black ${isToday(day) ? 'w-7 h-7 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-100' : isCurrentMonth ? 'text-slate-900' : 'text-slate-300'}`}>
+                  {format(day, "d")}
                 </span>
-              )}
+                {dayAppts.length > 0 && (
+                  <span className="text-[9px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full uppercase tracking-tighter">
+                    {dayAppts.length} Bookings
+                  </span>
+                )}
+              </div>
+              <div className="space-y-1.5 overflow-hidden max-h-[100px]">
+                 {dayAppts.slice(0, 3).map((appt: any) => (
+                   <div key={appt.id} onClick={() => onEdit(appt)} className="p-1 px-2 bg-slate-50 border border-slate-100 rounded-lg flex items-center gap-2 group/appt cursor-pointer hover:border-indigo-300 transition-all">
+                      <div className={`w-1 h-1 rounded-full ${appt.priority_level === 1 ? 'bg-rose-500' : 'bg-indigo-500'}`} />
+                      <span className="text-[10px] font-bold text-slate-700 truncate">{appt.plate}</span>
+                   </div>
+                 ))}
+                 {dayAppts.length > 3 && (
+                   <p className="text-[9px] font-bold text-slate-400 text-center uppercase tracking-widest mt-1">+{dayAppts.length - 3} more</p>
+                 )}
+              </div>
             </div>
-            <div className="space-y-1.5 overflow-hidden max-h-[100px]">
-               {dayAppts.slice(0, 3).map((appt: any) => (
-                 <div key={appt.id} className="p-1 px-2 bg-slate-50 border border-slate-100 rounded-lg flex items-center gap-2 group cursor-pointer hover:border-indigo-300 transition-all">
-                    <div className={`w-1 h-1 rounded-full ${appt.priority_level === 1 ? 'bg-rose-500' : 'bg-indigo-500'}`} />
-                    <span className="text-[10px] font-bold text-slate-700 truncate">{appt.plate}</span>
-                 </div>
-               ))}
-               {dayAppts.length > 3 && (
-                 <p className="text-[9px] font-bold text-slate-400 text-center uppercase tracking-widest mt-1">+{dayAppts.length - 3} more</p>
-               )}
-            </div>
-          </div>
+          </DroppableMonthDay>
         );
       })}
     </div>
@@ -450,9 +493,11 @@ function DraggableAppointmentBlock({ appt, children, className = "", style }: { 
   );
 }
 
-function DroppableHourCell({ day, hour, dragging }: { day: Date; hour: number; dragging: boolean; key?: React.Key }) {
+function DroppableHourCell({ day, hour, dragging, onCreateAt }: { day: Date; hour: number; dragging: boolean; onCreateAt: (d: Date) => void; key?: React.Key }) {
   const { setNodeRef, isOver } = useDroppable({ id: `${day.toISOString()}_${hour}`, data: { day, hour } });
   const offHours = hour < BUSINESS_HOUR_START || hour >= BUSINESS_HOUR_END;
+  const slotTime = new Date(new Date(day).setHours(hour, 0, 0, 0));
+  const isPast = slotTime.getTime() < Date.now();
 
   return (
     <div
@@ -467,19 +512,23 @@ function DroppableHourCell({ day, hour, dragging }: { day: Date; hour: number; d
         // away from the time gutter.
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <span className="text-[10px] font-black uppercase tracking-wider text-indigo-700 bg-white/80 rounded-full px-2 py-0.5">
-            {format(new Date(new Date(day).setHours(hour, 0, 0, 0)), "eee HH:mm")}
+            {format(slotTime, "eee HH:mm")}
           </span>
         </div>
-      ) : (
-        <div className="absolute inset-0 bg-indigo-50/50 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center pointer-events-none">
+      ) : !isPast && (
+        <button
+          type="button"
+          onClick={() => onCreateAt(slotTime)}
+          className="absolute inset-0 w-full bg-indigo-50/50 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center"
+        >
           <Plus size={16} className="text-indigo-400" />
-        </div>
+        </button>
       )}
     </div>
   );
 }
 
-function WeekView({ currentDate, appointments, hours, onEdit, onDelete, dragging }: any) {
+function WeekView({ currentDate, appointments, hours, onEdit, onDelete, onCreateAt, dragging }: any) {
   const start = startOfWeek(currentDate);
   const days = Array.from({ length: 7 }, (_, i) => addDays(start, i));
 
@@ -507,7 +556,7 @@ function WeekView({ currentDate, appointments, hours, onEdit, onDelete, dragging
             
             {/* Time Slots */}
             <div className="relative">
-              {hours.map((hour: number) => <DroppableHourCell key={hour} day={day} hour={hour} dragging={dragging} />)}
+              {hours.map((hour: number) => <DroppableHourCell key={hour} day={day} hour={hour} dragging={dragging} onCreateAt={onCreateAt} />)}
 
               {/* Appointments */}
               {appointments
@@ -577,7 +626,7 @@ function DroppableDayRow({ day, hour, dragging, children }: { day: Date; hour: n
   );
 }
 
-function DayView({ currentDate, appointments, hours, onEdit, onDelete, dragging }: any) {
+function DayView({ currentDate, appointments, hours, onEdit, onDelete, onCreateAt, dragging }: any) {
   // Same as week but only one day column
   const dayAppts = appointments.filter((a: any) => isSameDay(parseISO(a.start_time), currentDate));
 
@@ -641,7 +690,11 @@ function DayView({ currentDate, appointments, hours, onEdit, onDelete, dragging 
                       </DraggableAppointmentBlock>
                     )) : (
                       <div className="flex-1 border-2 border-dashed border-slate-100 rounded-3xl flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                         <button className="text-[10px] font-black text-slate-300 uppercase tracking-widest flex items-center gap-2">
+                         <button
+                           type="button"
+                           onClick={() => onCreateAt(new Date(new Date(currentDate).setHours(hour, 0, 0, 0)))}
+                           className="text-[10px] font-black text-slate-300 hover:text-indigo-500 uppercase tracking-widest flex items-center gap-2"
+                         >
                            <Plus size={14}/> Add Entry
                          </button>
                       </div>
@@ -752,7 +805,8 @@ function CreateAppointmentModal({ onClose, onSuccess, initialDate, editingAppoin
         for (const w of data.capacityWarning || []) toast(w, "warning");
         onSuccess();
       } else {
-        toast("Failed to commit booking to ledger", "error");
+        const err = await res.json().catch(() => ({}));
+        toast(err.reason || err.error || "Failed to commit booking to ledger", "error");
       }
     } catch (e) {
       toast("Network synchronization failure", "error");
@@ -818,9 +872,10 @@ function CreateAppointmentModal({ onClose, onSuccess, initialDate, editingAppoin
             <div className="grid grid-cols-2 gap-8">
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Timestamp Protocol</label>
-                <input 
+                <input
                   type="datetime-local"
                   required
+                  min={editingAppointment ? undefined : format(new Date(), "yyyy-MM-dd'T'HH:mm")}
                   value={formData.start_time}
                   onChange={e => setFormData({...formData, start_time: e.target.value})}
                   className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-900 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all focus:border-indigo-600 focus:bg-white"

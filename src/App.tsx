@@ -297,18 +297,23 @@ function AppLayout({ children, user }: any) {
         `}
         style={{ width: showLabels ? SIDEBAR_EXPANDED_WIDTH : SIDEBAR_COLLAPSED_WIDTH }}
       >
-        <div className="h-16 flex items-center justify-between px-3 shrink-0">
-          <div className="flex items-center gap-3 min-w-0 overflow-hidden">
-            <Warehouse className="text-[var(--primary)] w-8 h-8 shrink-0" />
-            {showLabels && <span className="font-extrabold text-xl tracking-tight text-[var(--primary)] whitespace-nowrap" style={{ fontFamily: "var(--font-heading)" }}>SkyYard</span>}
-          </div>
+        <div className={`h-16 flex items-center shrink-0 px-3 ${showLabels ? "justify-between" : "justify-center"}`}>
+          {/* Collapsed rail is 72px — logo + toggle side-by-side overlapped
+              at that width. Collapsed shows only the toggle (doubles as the
+              brand mark); expanded shows the full logo row + toggle. */}
+          {showLabels && (
+            <div className="flex items-center gap-3 min-w-0 overflow-hidden">
+              <Warehouse className="text-[var(--primary)] w-8 h-8 shrink-0" />
+              <span className="font-extrabold text-xl tracking-tight text-[var(--primary)] whitespace-nowrap" style={{ fontFamily: "var(--font-heading)" }}>SkyYard</span>
+            </div>
+          )}
           <button
             onClick={() => { setSidebarExpanded((v) => !v); setMobileDrawerOpen((v) => !v); }}
             className="p-2 shrink-0 text-[var(--on-surface-variant)] hover:text-[var(--primary)] hover:bg-[var(--surface-container-high)] rounded-sm transition-colors"
             aria-label={showLabels ? "Collapse sidebar" : "Expand sidebar"}
             aria-expanded={showLabels}
           >
-            <Menu size={20} />
+            {showLabels ? <Menu size={20} /> : <Warehouse size={22} />}
           </button>
         </div>
 
@@ -441,17 +446,22 @@ function Dashboard() {
   const [activeVisitors, setActiveVisitors] = React.useState(0);
   const [detailPanel, setDetailPanel] = React.useState<"vehicles" | "docks" | "productivity" | "bookings" | "visitors" | null>(null);
   const [departuresToday, setDeparturesToday] = React.useState<any[] | null>(null);
+  const [productivityDate, setProductivityDate] = React.useState(() => new Date().toISOString().slice(0, 10));
   const [bookingsList, setBookingsList] = React.useState<any[] | null>(null);
   const [visitorsList, setVisitorsList] = React.useState<any[] | null>(null);
   const [detailLoading, setDetailLoading] = React.useState(false);
 
+  const loadProductivity = async (date: string) => {
+    setDetailLoading(true);
+    const r = await fetch(`/api/admin/departures-today?date=${date}`);
+    setDeparturesToday(r.ok ? await r.json() : []);
+    setDetailLoading(false);
+  };
+
   const openDetail = async (panel: "vehicles" | "docks" | "productivity" | "bookings" | "visitors") => {
     setDetailPanel(panel);
     if (panel === "productivity" && departuresToday === null) {
-      setDetailLoading(true);
-      const r = await fetch("/api/admin/departures-today");
-      setDeparturesToday(r.ok ? await r.json() : []);
-      setDetailLoading(false);
+      await loadProductivity(productivityDate);
     } else if (panel === "bookings" && bookingsList === null) {
       setDetailLoading(true);
       const r = await fetch("/api/appointments");
@@ -764,7 +774,7 @@ function Dashboard() {
                 <h3 className="font-bold text-xl text-[var(--on-surface)]" style={{ fontFamily: "var(--font-heading)" }}>
                   {detailPanel === "vehicles" && "Vehicles in the yard"}
                   {detailPanel === "docks" && "Docks"}
-                  {detailPanel === "productivity" && "Productivity — today's completed visits"}
+                  {detailPanel === "productivity" && "Productivity — completed visits"}
                   {detailPanel === "bookings" && "Bookings"}
                   {detailPanel === "visitors" && "Visitors on site"}
                 </h3>
@@ -797,6 +807,23 @@ function Dashboard() {
                 />
               )}
 
+              {detailPanel === "productivity" && (
+                <div className="mb-4 flex items-center gap-3">
+                  <label className="text-xs font-bold text-[var(--on-surface-variant)] uppercase tracking-wide">Date</label>
+                  <input
+                    type="date"
+                    value={productivityDate}
+                    max={new Date().toISOString().slice(0, 10)}
+                    onChange={(e) => {
+                      if (!e.target.value) return;
+                      setProductivityDate(e.target.value);
+                      loadProductivity(e.target.value);
+                    }}
+                    className="border border-[var(--outline-variant)] rounded-sm px-3 py-1.5 text-sm"
+                  />
+                </div>
+              )}
+
               {!detailLoading && detailPanel === "productivity" && (
                 <DetailTable
                   columns={["Plate", "Carrier", "Load type", "Driver", "Phone", "Arrived", "Departed", "Dwell"]}
@@ -806,7 +833,7 @@ function Dashboard() {
                     d.departedAt ? new Date(d.departedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—",
                     d.dwellMinutes != null ? `${d.dwellMinutes}m` : "—",
                   ])}
-                  empty="No completed visits yet today — productivity is measured from arrival to departure."
+                  empty="No completed visits on this date — productivity is measured from arrival to departure."
                 />
               )}
 

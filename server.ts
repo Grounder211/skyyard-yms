@@ -1128,6 +1128,7 @@ async function startServer() {
   app.post("/api/appointments", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
     const { plate, carrier, start_time, duration_minutes, dock_id, load_type, priority_level, special_instructions, customer_id } = req.body;
     const facilityId = req.facilityId || 1;
+    if (!start_time || new Date(start_time) < new Date()) return res.status(400).json({ error: "Booking time must be in the future" });
     try {
       // customer_id was accepted with no facility check — an appointment
       // could be linked to another facility's customer, and that customer's
@@ -1185,6 +1186,7 @@ async function startServer() {
       for (const field of allowedFields) if (updates[field] !== undefined) patch[field] = updates[field];
 
       if (Object.keys(patch).length === 0) return res.status(400).json({ error: "No valid fields to update" });
+      if (patch.start_time && new Date(patch.start_time) < new Date()) return res.status(400).json({ error: "Booking time must be in the future" });
 
       if (patch.customer_id) {
         const { data: customer } = await db.from("customers").select("id").eq("id", patch.customer_id).eq("facility_id", facilityId).maybeSingle();
@@ -1717,8 +1719,28 @@ async function startServer() {
           timeCritical.push({ type: "reefer_stale", severity: "warning", title: "Reefer reading overdue", description: `${t.plate} — last checked over ${STALE_READING_HOURS}h ago`, timestamp: latest.recorded_at, action: { label: "Open trailer", link: "/tracking" } });
         }
       }
+      // A gate pass's `stage` is a separate workflow from the trailer's
+      // real yard presence — if the trailer already left (dispatched/
+      // exited another way) but the pass was never advanced to EXITED, it
+      // shows up here as "stuck" forever even though there's no vehicle to
+      // act on. Cross-check against the trailer's actual status: only
+      // surface passes whose trailer is still really on site, and
+      // self-heal the orphaned ones so they stop reappearing.
+      const stalePlates = (staleGatePasses.data || []).map((g: any) => g.plate);
+      const { data: staleTrailers } = stalePlates.length
+        ? await db.from("trailers").select("plate, status").eq("facility_id", facilityId).in("plate", stalePlates)
+        : { data: [] as any[] };
+      const onSitePlates = new Set((staleTrailers || []).filter((t: any) => t.status === "IN_YARD" || t.status === "DOCKED").map((t: any) => t.plate));
+      const orphanedPassIds: number[] = [];
       for (const g of staleGatePasses.data || []) {
-        timeCritical.push({ type: "stale_pass", severity: "warning", title: `Vehicle stuck at ${g.stage.replace(/_/g, " ")}`, description: `${g.plate} — no movement in over 2 hours`, timestamp: g.updated_at, action: { label: "Open dispatch", link: "/dispatch" } });
+        if (onSitePlates.has(g.plate)) {
+          timeCritical.push({ type: "stale_pass", severity: "warning", title: `Vehicle stuck at ${g.stage.replace(/_/g, " ")}`, description: `${g.plate} — no movement in over 2 hours`, timestamp: g.updated_at, action: { label: "Open dispatch", link: "/dispatch" } });
+        } else {
+          orphanedPassIds.push(g.id);
+        }
+      }
+      if (orphanedPassIds.length) {
+        db.from("gate_passes").update({ stage: "EXITED", exited_at: new Date().toISOString(), updated_at: new Date().toISOString() }).in("id", orphanedPassIds).then(() => {});
       }
       for (const w of pendingApprovals.data || []) {
         operations.push({ type: "approval", severity: "warning", title: "Gate entry awaiting approval", description: `${w.truck_plate} — ${w.carrier_name}`, timestamp: w.created_at, action: { label: "Approve", link: "/gate" } });
@@ -2663,15 +2685,19 @@ async function startServer() {
   // is a join, not a new data model.
   app.get("/api/admin/departures-today", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
     const facilityId = req.facilityId;
-    const todayStart = new Date();
-    todayStart.setUTCHours(0, 0, 0, 0);
+    // ?date=YYYY-MM-DD picks any past day's productivity, not just today's.
+    const requestedDate = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : null;
+    const dayStart = requestedDate ? new Date(`${requestedDate}T00:00:00.000Z`) : new Date();
+    if (!requestedDate) dayStart.setUTCHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
     try {
       const { data: passes } = await db
         .from("gate_passes")
         .select("plate, carrier_name, issued_at, exited_at, driver_id, trailer_id")
         .eq("facility_id", facilityId)
         .eq("stage", "EXITED")
-        .gte("exited_at", todayStart.toISOString())
+        .gte("exited_at", dayStart.toISOString())
+        .lt("exited_at", dayEnd.toISOString())
         .order("exited_at", { ascending: false });
 
       const driverIds = [...new Set((passes || []).map((p: any) => p.driver_id).filter(Boolean))];
@@ -3579,6 +3605,7 @@ async function startServer() {
     const { start_time, dock_id } = req.body;
     const facilityId = req.facilityId;
     if (!start_time || !dock_id) return res.status(400).json({ error: "start_time and dock_id are required" });
+    if (new Date(start_time) < new Date()) return res.status(400).json({ error: "Booking time must be in the future" });
 
     try {
       const { data: appt } = await db.from("appointments").select("*").eq("id", req.params.id).eq("facility_id", facilityId).maybeSingle();
@@ -3635,6 +3662,7 @@ async function startServer() {
     const { start_time } = req.body;
     const facilityId = req.facilityId;
     if (!start_time) return res.status(400).json({ error: "start_time is required" });
+    if (new Date(start_time) < new Date()) return res.status(400).json({ error: "Booking time must be in the future" });
 
     try {
       const { data: appt } = await db.from("appointments").select("*").eq("id", req.params.id).eq("facility_id", facilityId).maybeSingle();
