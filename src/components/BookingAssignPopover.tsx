@@ -22,10 +22,21 @@ export default function BookingAssignPopover({
   const [selectedDockId, setSelectedDockId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Drop only snaps to the top of an hour cell — this lets the exact minute
+  // be tuned afterward instead of forcing a full drop-zone redesign for
+  // sub-hour precision. Defaults to the dropped hour, editable in minutes.
+  const initialTime = new Date(dropTime);
+  const [timeStr, setTimeStr] = useState(() => `${String(initialTime.getHours()).padStart(2, "0")}:${String(initialTime.getMinutes()).padStart(2, "0")}`);
+  const effectiveTime = (() => {
+    const [h, m] = timeStr.split(":").map(Number);
+    const d = new Date(dropTime);
+    d.setHours(h, m, 0, 0);
+    return d.toISOString();
+  })();
 
   useEffect(() => {
     if (mode !== "assign") return;
-    fetch(`/api/admin/booking-slot-availability?start_time=${encodeURIComponent(dropTime)}&load_type=${loadType}`)
+    fetch(`/api/admin/booking-slot-availability?start_time=${encodeURIComponent(effectiveTime)}&load_type=${loadType}`)
       .then((r) => (r.ok ? r.json() : []))
       .then((d: DockOption[]) => {
         setDocks(d);
@@ -33,13 +44,13 @@ export default function BookingAssignPopover({
         if (best) setSelectedDockId(best.dockId);
       })
       .finally(() => setLoadingDocks(false));
-  }, [mode, dropTime, loadType]);
+  }, [mode, effectiveTime, loadType]);
 
   const confirm = async () => {
     setError("");
     setBusy(true);
     const url = mode === "assign" ? `/api/admin/booking-requests/${requestId}/assign` : `/api/appointments/${appointmentId}/reschedule`;
-    const body = mode === "assign" ? { start_time: dropTime, dock_id: selectedDockId } : { start_time: dropTime };
+    const body = mode === "assign" ? { start_time: effectiveTime, dock_id: selectedDockId } : { start_time: effectiveTime };
     try {
       const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (res.ok) {
@@ -64,9 +75,18 @@ export default function BookingAssignPopover({
         <h4 className="font-bold text-slate-900 text-xs">{mode === "assign" ? "Schedule this booking?" : "Move this booking?"}</h4>
         <button onClick={onCancel} className="text-slate-400 hover:text-slate-900"><X size={14} /></button>
       </div>
-      <p className="text-[11px] text-slate-500 mb-2.5">
-        <span className="font-bold text-slate-900">{plate}</span> {mode === "assign" ? "to" : "moves to"} <span className="font-bold text-slate-900">{new Date(dropTime).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}</span>
+      <p className="text-[11px] text-slate-500 mb-1.5">
+        <span className="font-bold text-slate-900">{plate}</span> {mode === "assign" ? "to" : "moves to"} <span className="font-bold text-slate-900">{new Date(effectiveTime).toLocaleDateString([], { weekday: "short" })}</span>
       </p>
+      <div className="mb-2.5">
+        <label className="text-[9px] font-bold uppercase tracking-widest text-slate-400 block mb-1">Time</label>
+        <input
+          type="time"
+          value={timeStr}
+          onChange={(e) => setTimeStr(e.target.value)}
+          className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold"
+        />
+      </div>
 
       {mode === "assign" && (
         <div className="mb-2.5">

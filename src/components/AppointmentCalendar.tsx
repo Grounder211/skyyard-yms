@@ -53,16 +53,6 @@ export default function AppointmentCalendar() {
   const { toast } = useToast();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // The Day/Week grid starts at midnight, so scheduling anything in the
-  // afternoon meant scrolling a long way down before you could even start
-  // the drag. Land on a useful hour instead of the top of an empty night.
-  useEffect(() => {
-    if (loading || (view !== "day" && view !== "week")) return;
-    const el = scrollContainerRef.current;
-    if (!el) return;
-    el.scrollTop = BUSINESS_HOUR_START * HOUR_ROW_HEIGHT;
-  }, [loading, view, currentDate]);
-
   // What's currently under the cursor, for the DragOverlay. Without an
   // overlay the dragged element is just translated in place, so the
   // calendar's own scroll container clips it the moment you drag past an
@@ -178,7 +168,9 @@ export default function AppointmentCalendar() {
     else setCurrentDate(addDays(currentDate, 1));
   };
 
-  const hours = Array.from({ length: 24 }, (_, i) => i);
+  // Booking is only ever 10am-6pm, so that's all the grid shows — no more
+  // scrolling past 20 unused hours to reach the slots you can actually book.
+  const hours = Array.from({ length: BUSINESS_HOUR_END - BUSINESS_HOUR_START }, (_, i) => i + BUSINESS_HOUR_START);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -563,8 +555,12 @@ function WeekView({ currentDate, appointments, hours, onEdit, onDelete, onCreate
                 .filter((a: any) => isSameDay(parseISO(a.start_time), day))
                 .map((appt: any) => {
                   const startD = parseISO(appt.start_time);
-                  const top = (startD.getHours() * 80) + (startD.getMinutes() / 60) * 80;
-                  const height = (appt.actual_duration_minutes / 60) * 80;
+                  // Row 0 is BUSINESS_HOUR_START now, not midnight — offset
+                  // against that. Clamped to 0 so a pre-existing booking
+                  // outside 10am-6pm (grandfathered before this policy)
+                  // still shows instead of rendering off the top of the grid.
+                  const top = Math.max(0, (startD.getHours() - BUSINESS_HOUR_START) * HOUR_ROW_HEIGHT + (startD.getMinutes() / 60) * HOUR_ROW_HEIGHT);
+                  const height = (appt.actual_duration_minutes / 60) * HOUR_ROW_HEIGHT;
 
                   return (
                     <DraggableAppointmentBlock key={appt.id} appt={appt} className="absolute left-1 right-1 z-10" style={{ top, height, minHeight: 40 }}>

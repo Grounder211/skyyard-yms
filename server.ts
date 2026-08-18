@@ -166,9 +166,39 @@ async function startServer() {
 
   // --- Yard status (the single read that powers Dashboard, Gate Console, Dispatch, Live Tracking) ---
   const getYardStatus = async (facilityId: number) => {
-    const { data: statsData } = await db.rpc("get_yard_stats", { f_id: facilityId });
+    // This single function backs Dashboard/Gate Console/Dispatch/Live
+    // Tracking, and was firing ~13 DB round trips one at a time — most of
+    // them independent of each other, just written as sequential awaits.
+    // Over a hosted Supabase connection that's 900ms-1s of pure network
+    // latency stacked up before the page can render anything. Every query
+    // below that doesn't depend on another query's result is batched into
+    // one Promise.all so they run concurrently instead — down to 2 real
+    // round trips (this batch, then the walkin lookup that needs plates
+    // out of activePasses first).
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+    const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000).toISOString();
 
-    const [{ data: spots }, { data: dockRules }, { data: activePasses }] = await Promise.all([
+    const [
+      { data: statsData },
+      { data: spots },
+      { data: dockRules },
+      { data: activePasses },
+      { data: moveRows },
+      { data: fSettings },
+      { data: facilityRow },
+      { data: departedToday },
+      { data: todaysAppointments },
+      { count: totalHostlers },
+      { count: gateQueue },
+      { count: departuresImminent },
+      { count: criticalExceptions },
+      { count: activeVisitors },
+      { data: unresolvedIncidents },
+      { data: equipmentRows },
+      { data: openTrailerExceptions },
+    ] = await Promise.all([
+      db.rpc("get_yard_stats", { f_id: facilityId }),
       db.from("spots")
         .select("*, trailers!trailers_spot_id_fkey(id, plate, carrier, status, check_in_time, checked_in_at, equipment_type, seal_number, driver_license, po_number, sku_summary, reefer_temp_setpoint, hazmat_class, tare_weight_kg, damage_photos, cargo_status, cargo_type, cargo_quantity)")
         .eq("facility_id", facilityId),
@@ -177,7 +207,31 @@ async function startServer() {
       // is the only table that actually links a plate to a driver_id, so this
       // is a lookup, not new state.
       db.from("gate_passes").select("plate, pass_number, driver_id, drivers(name, phone, license_number, vehicle_type)").eq("facility_id", facilityId).neq("stage", "EXITED"),
+      db.from("move_orders")
+        .select("*, trailers(plate), from_spot:spots!move_orders_from_spot_id_fkey(name), to_spot:spots!move_orders_to_spot_id_fkey(name), assignee:users!move_orders_assigned_to_fkey(id, name)")
+        .eq("facility_id", facilityId)
+        .neq("status", "COMPLETED"),
+      db.from("facility_settings").select("detention_threshold_hours").eq("facility_id", facilityId).maybeSingle(),
+      db.from("facilities").select("name, latitude, longitude").eq("id", facilityId).maybeSingle(),
+      // Dashboard's "Avg. Dwell" and "Daily Velocity", sourced from
+      // gate_passes (issued_at -> exited_at) — the same rows the
+      // Productivity drill-down lists, so the headline number and its own
+      // detail table can't disagree.
+      db.from("gate_passes").select("issued_at, exited_at").eq("facility_id", facilityId).eq("stage", "EXITED").not("exited_at", "is", null).gte("exited_at", todayStart.toISOString()),
+      db.from("appointments").select("status, start_time, no_show_flag").eq("facility_id", facilityId).gte("start_time", todayStart.toISOString()).lt("start_time", todayEnd),
+      db.from("users").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("role", "HOSTLER"),
+      db.from("walkin_registrations").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("status", "pending_approval"),
+      db.from("gate_passes").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("stage", "OUT_PASS"),
+      db.from("exceptions").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("severity", "critical").neq("status", "resolved"),
+      db.from("visitors").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).is("checked_out_at", null),
+      // Phase K: safety incidents had a free-text `location` with no real
+      // link to the yard map — added a real spot_id column so the map can
+      // mark exactly where unresolved incidents are.
+      db.from("safety_incidents").select("spot_id").eq("facility_id", facilityId).neq("status", "resolved").not("spot_id", "is", null),
+      db.from("equipment").select("status").eq("facility_id", facilityId),
+      db.from("exceptions").select("entity_id").eq("facility_id", facilityId).eq("entity_type", "TRAILER").neq("status", "resolved"),
     ]);
+
     const dockRuleMap = new Map((dockRules || []).map((r: any) => [r.dock_door_id, r.allowed_equipment_types]));
     const driverByPlate = new Map((activePasses || []).map((p: any) => [p.plate, {
       name: p.drivers?.name || null, phone: p.drivers?.phone || null, passNumber: p.pass_number,
@@ -187,6 +241,7 @@ async function startServer() {
     // personal_id_number only ever lives on the registration record itself —
     // it's never copied onto trailers/gate_passes — so the checked-in
     // walkin row for this plate is the only place left to read it from.
+    // Needs activePasses' plates first, so it can't join the batch above.
     const plates = [...new Set((activePasses || []).map((p: any) => p.plate).filter(Boolean))];
     const { data: checkedInWalkins } = plates.length
       ? await db.from("walkin_registrations").select("truck_plate, personal_id_number, terms_accepted_at")
@@ -234,12 +289,6 @@ async function startServer() {
       };
     });
 
-    const { data: moveRows } = await db
-      .from("move_orders")
-      .select("*, trailers(plate), from_spot:spots!move_orders_from_spot_id_fkey(name), to_spot:spots!move_orders_to_spot_id_fkey(name), assignee:users!move_orders_assigned_to_fkey(id, name)")
-      .eq("facility_id", facilityId)
-      .neq("status", "COMPLETED");
-
     const priorityWeight: Record<string, number> = { urgent: 3, high: 2, normal: 1, low: 0 };
     const moves = (moveRows || [])
       .map((m: any) => ({
@@ -251,52 +300,23 @@ async function startServer() {
       }))
       .sort((a: any, b: any) => (priorityWeight[b.priority] ?? 1) - (priorityWeight[a.priority] ?? 1) || new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
-    const { data: fSettings } = await db.from("facility_settings").select("detention_threshold_hours").eq("facility_id", facilityId).maybeSingle();
-    const { data: facilityRow } = await db.from("facilities").select("name, latitude, longitude").eq("id", facilityId).maybeSingle();
-
-    // Dashboard's "Avg. Dwell" and "Daily Velocity" were literal hardcoded
-    // constants (42 and 128) — never computed from anything, displayed as
-    // if real on the very first screen a manager sees. Real numbers,
-    // computed from today's actual departures.
-    // Sourced from gate_passes (issued_at -> exited_at), the same rows the
-    // Productivity drill-down lists. Previously this read trailers'
-    // checked_in_at/checked_out_at instead, so the headline average and
-    // its own detail table could disagree — a visit visible in the
-    // breakdown wasn't counted in the number above it.
-    const todayStart = new Date();
-    todayStart.setUTCHours(0, 0, 0, 0);
-    const { data: departedToday } = await db.from("gate_passes").select("issued_at, exited_at").eq("facility_id", facilityId).eq("stage", "EXITED").not("exited_at", "is", null).gte("exited_at", todayStart.toISOString());
+    // Dashboard's "Avg. Dwell" and "Daily Velocity", computed from today's
+    // actual gate_passes departures (issued_at -> exited_at) — the same
+    // rows the Productivity drill-down lists, so the headline number and
+    // its own detail table can't disagree.
     const dwellSamples = (departedToday || []).filter((p: any) => p.issued_at).map((p: any) => (new Date(p.exited_at).getTime() - new Date(p.issued_at).getTime()) / 60000);
     const avgDwellMinutes = dwellSamples.length ? Math.round(dwellSamples.reduce((a, b) => a + b, 0) / dwellSamples.length) : null;
     const dailyVelocity = (departedToday || []).length;
 
-    // Command Center gap: the "Today's Operations" answer (expected
-    // arrivals / no-shows / active moves) didn't exist anywhere as a
-    // headline number — reuses this same todayStart boundary rather than
-    // introducing a second definition of "today".
-    const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000).toISOString();
-    const { data: todaysAppointments } = await db
-      .from("appointments")
-      .select("status, start_time, no_show_flag")
-      .eq("facility_id", facilityId)
-      .gte("start_time", todayStart.toISOString())
-      .lt("start_time", todayEnd);
-    const { count: totalHostlers } = await db.from("users").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("role", "HOSTLER");
     const busyHostlers = countBusyHostlers(moves);
 
-    // Command Center Priority 2 (next-gen roadmap): "what's coming in the
-    // next hour" is a sharper operational signal than a whole-day count.
-    // Reuses countExpectedArrivalsToday's own window args rather than a new
+    // Command Center Priority 2: "what's coming in the next hour" is a
+    // sharper operational signal than a whole-day count. Reuses
+    // countExpectedArrivalsToday's own window args rather than a new
     // function — it already just filters SCHEDULED appointments by range.
     const nowIso = new Date().toISOString();
     const in60Iso = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     const arrivalsNext60m = countExpectedArrivalsToday(todaysAppointments || [], nowIso, in60Iso);
-    const [{ count: gateQueue }, { count: departuresImminent }, { count: criticalExceptions }, { count: activeVisitors }] = await Promise.all([
-      db.from("walkin_registrations").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("status", "pending_approval"),
-      db.from("gate_passes").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("stage", "OUT_PASS"),
-      db.from("exceptions").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).eq("severity", "critical").neq("status", "resolved"),
-      db.from("visitors").select("*", { count: "exact", head: true }).eq("facility_id", facilityId).is("checked_out_at", null),
-    ]);
     // A cancelled slot isn't "a booking we have" anymore — same status
     // filter the Calendar's own listing query already uses.
     const bookingsToday = (todaysAppointments || []).filter((a: any) => a.status !== "CANCELLED").length;
@@ -319,13 +339,10 @@ async function startServer() {
     // matched back to an actual spot. Added a real spot_id column instead
     // (nullable — not every incident happens at a numbered spot) so the
     // map can mark exactly where unresolved incidents are.
-    const { data: unresolvedIncidents } = await db.from("safety_incidents").select("spot_id").eq("facility_id", facilityId).neq("status", "resolved").not("spot_id", "is", null);
     const unresolvedSafetySpotIds = [...new Set((unresolvedIncidents || []).map((i: any) => i.spot_id))];
 
-    const { data: equipmentRows } = await db.from("equipment").select("status").eq("facility_id", facilityId);
     const equipmentDown = (equipmentRows || []).filter((e: any) => e.status === "maintenance" || e.status === "broken").length;
 
-    const { data: openTrailerExceptions } = await db.from("exceptions").select("entity_id").eq("facility_id", facilityId).eq("entity_type", "TRAILER").neq("status", "resolved");
     const spotsWithOpenExceptions = matchExceptionPlatesToSpotIds((openTrailerExceptions || []).map((e: any) => e.entity_id), flatSpots);
 
     // Sourced from real yard-manager pain points: a carrier drops a
