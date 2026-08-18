@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
-import { Globe2, ShieldBan, UploadCloud, Building2, Trash2, Loader2, CheckCircle2, AlertTriangle, Truck, Link2, Copy, Package, Pencil, X, Users } from "lucide-react";
+import { Globe2, ShieldBan, UploadCloud, Building2, Trash2, Loader2, CheckCircle2, AlertTriangle, Truck, Copy, Package, Pencil, X, Users } from "lucide-react";
 import { useToast } from "../contexts/ToastContext";
 import PhoneInput, { toE164 } from "../components/PhoneInput";
 
@@ -239,27 +239,12 @@ function CarriersTab() {
     }
   };
 
-  const generateLink = async (id: number) => {
-    setLinkBusy(id);
-    const res = await fetch(`/api/admin/carriers/${id}/booking-link`, { method: "POST" });
-    setLinkBusy(null);
-    if (res.ok) {
-      const { booking_url } = await res.json();
-      const fullUrl = `${window.location.origin}${booking_url}`;
-      navigator.clipboard?.writeText(fullUrl).catch(() => {});
-      toast(`Booking link copied: ${fullUrl}`, "success");
-      load();
-    } else {
-      toast("Failed to generate link", "error");
-    }
-  };
-
   const unflag = async (id: number) => {
     setLinkBusy(id);
     const res = await fetch(`/api/admin/carriers/${id}/unflag`, { method: "POST" });
     setLinkBusy(null);
     if (res.ok) {
-      toast("Carrier unflagged — self-service booking restored", "success");
+      toast("Carrier unflagged", "success");
       load();
     } else {
       toast("Failed to unflag carrier", "error");
@@ -303,51 +288,35 @@ function CarriersTab() {
         {loading ? (
           <p className="text-sm text-slate-400 p-8 text-center">Loading...</p>
         ) : rows.length === 0 ? (
-          <p className="text-sm text-slate-400 p-8 text-center">No carriers yet — add one to enable self-service pre-booking links.</p>
+          <p className="text-sm text-slate-400 p-8 text-center">No carriers yet — add one to give them portal access.</p>
         ) : (
           <table className="w-full text-left">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-100">
                 <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Name</th>
                 <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Email</th>
-                <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Booking link</th>
-                <th className="px-5 py-3" />
                 <th className="px-5 py-3" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {rows.map((r) => {
-                const active = r.booking_token && r.booking_token_expires && new Date(r.booking_token_expires) > new Date();
-                return (
-                  <tr key={r.id}>
-                    <td className="px-5 py-3 text-sm font-bold text-slate-800 flex items-center gap-2">
-                      <RouterLink to={`/carriers/${r.id}`} className="hover:text-indigo-600 hover:underline">{r.name}</RouterLink>
-                      {r.flagged && (
-                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-red-100 text-red-700">Flagged</span>
-                      )}
-                    </td>
-                    <td className="px-5 py-3 text-sm text-slate-500">{r.email || "—"}</td>
-                    <td className="px-5 py-3">
-                      <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${active ? "bg-teal-100 text-teal-700" : "bg-slate-100 text-slate-500"}`}>
-                        {active ? "Active" : "None"}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3 text-right">
-                      <button onClick={() => generateLink(r.id)} disabled={linkBusy === r.id} className="text-indigo-600 hover:text-indigo-800 flex items-center gap-1 text-xs font-bold ml-auto disabled:opacity-50">
-                        {linkBusy === r.id ? <Loader2 size={12} className="animate-spin" /> : active ? <Copy size={12} /> : <Link2 size={12} />}
-                        {active ? "Copy link" : "Generate link"}
+              {rows.map((r) => (
+                <tr key={r.id}>
+                  <td className="px-5 py-3 text-sm font-bold text-slate-800 flex items-center gap-2">
+                    <RouterLink to={`/carriers/${r.id}`} className="hover:text-indigo-600 hover:underline">{r.name}</RouterLink>
+                    {r.flagged && (
+                      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-red-100 text-red-700">Flagged</span>
+                    )}
+                  </td>
+                  <td className="px-5 py-3 text-sm text-slate-500">{r.email || "—"}</td>
+                  <td className="px-5 py-3 text-right">
+                    {r.flagged && (
+                      <button onClick={() => unflag(r.id)} disabled={linkBusy === r.id} className="text-teal-600 hover:text-teal-800 text-xs font-bold disabled:opacity-50">
+                        Unflag
                       </button>
-                    </td>
-                    <td className="px-5 py-3 text-right">
-                      {r.flagged && (
-                        <button onClick={() => unflag(r.id)} disabled={linkBusy === r.id} className="text-teal-600 hover:text-teal-800 text-xs font-bold disabled:opacity-50">
-                          Unflag
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+                    )}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         )}

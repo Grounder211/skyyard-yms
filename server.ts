@@ -3468,6 +3468,8 @@ async function startServer() {
   // (BookingPage, reached via /book/:token) already resolves a token to a
   // carrier and facility one call earlier — require and validate that
   // same token here instead of trusting an implicit default facility.
+  // Disabled — resolveBookingToken + /api/slots + /api/slots/recommend existed only to serve the disabled /book/:token self-service page (BookingPage.tsx) — no other caller. The admin Calendar's own dock-availability check is the separate /api/admin/booking-slot-availability endpoint below, untouched. Not deleted, just switched off; uncomment to bring back.
+  /*
   const resolveBookingToken = async (token: string) => {
     if (!token) return null;
     const { data: carrier } = await db.from("carriers").select("id, booking_facility_id").eq("booking_token", token).gt("booking_token_expires", new Date().toISOString()).maybeSingle();
@@ -3570,6 +3572,7 @@ async function startServer() {
     if (valid.length > 0) (valid[0] as any).recommended = true;
     res.json(valid);
   });
+  */
 
   // The assign popover needs "which docks are free, and best, at exactly
   // the time just dropped onto" — /api/slots/recommend only scores a fixed
@@ -3845,6 +3848,8 @@ async function startServer() {
     }
   });
 
+  // Disabled — generates a /book/:token self-service link, which is disabled below (see /api/book/:token). Not deleted, just switched off; uncomment to bring back.
+  /*
   app.post("/api/admin/carriers/:id/booking-link", requireRole("superadmin", "ADMIN"), async (req: any, res) => {
     const { id } = req.params;
     const token = crypto.randomUUID();
@@ -3857,6 +3862,7 @@ async function startServer() {
     await db.from("carriers").update({ booking_token: token, booking_token_expires: expiresAt, booking_facility_id: req.facilityId }).eq("id", id);
     res.json({ booking_url: `/book/${token}` });
   });
+  */
 
   // Flagging (auto, on 3+ no-shows in 30 days) had no way back — a carrier
   // that improved its record stayed locked out of self-service booking
@@ -4085,6 +4091,8 @@ async function startServer() {
     }
   });
 
+  // Disabled — self-service /book/:token direct-booking flow. Carriers now only submit a REQUESTED booking (POST /api/carrier/booking-requests) that an admin drags onto a slot — this endpoint let a carrier auto-confirm a SCHEDULED appointment with no admin review at all, which is the auto-assign behavior we removed. Not deleted, just switched off; uncomment to bring back.
+  /*
   app.get("/api/book/:token", async (req: any, res) => {
     const { token } = req.params;
     const { data: carrier } = await db.from("carriers").select("id, name, email, contact_phone, booking_facility_id").eq("booking_token", token).gt("booking_token_expires", new Date().toISOString()).maybeSingle();
@@ -4198,6 +4206,7 @@ async function startServer() {
       res.status(500).json({ error: e.message });
     }
   });
+  */
 
   // Bulk Import
   app.post("/api/admin/bulk-import", requireRole("superadmin", "ADMIN"), async (req: any, res) => {

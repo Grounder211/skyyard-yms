@@ -156,7 +156,7 @@ export default function CarrierPortal() {
                 {busy && <Loader2 size={16} className="animate-spin" />} Sign in
               </button>
             </form>
-            <p className="text-xs text-slate-400 text-center mt-6">Don't have an account? Ask your terminal admin for a booking link or portal invite.</p>
+            <p className="text-xs text-slate-400 text-center mt-6">Don't have an account? Ask your terminal admin for a portal invite.</p>
           </motion.div>
         ) : (
           <div className="space-y-8">
