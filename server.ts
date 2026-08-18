@@ -630,6 +630,28 @@ async function startServer() {
     });
   };
 
+  // Phase E: appointments.load_weight_kg/temperature_requirement existed on
+  // the table already but no endpoint ever wrote or checked them — dead
+  // columns, same class of gap as detention billing earlier this session.
+  // Non-blocking by design: an unregistered/mismatched plate shouldn't
+  // silently reject a real booking, staff still make the final call (same
+  // pattern as the existing gate-checkin overrideDiscrepancy flow) — this
+  // surfaces the mismatch instead of hiding it.
+  const checkVehicleCapacity = async (plate: string, loadWeightKg?: number, temperatureRequirement?: string) => {
+    if (!plate || (!loadWeightKg && !temperatureRequirement)) return null;
+    const { data: vehicle } = await db.from("vehicles").select("*").eq("plate", plate.toUpperCase()).maybeSingle();
+    if (!vehicle) return null;
+
+    const warnings: string[] = [];
+    if (loadWeightKg && vehicle.max_weight_kg && loadWeightKg > vehicle.max_weight_kg) {
+      warnings.push(`Load ${loadWeightKg}kg exceeds ${plate}'s registered capacity of ${vehicle.max_weight_kg}kg`);
+    }
+    if (temperatureRequirement && temperatureRequirement !== "ambient" && vehicle.equipment_type !== "reefer") {
+      warnings.push(`Load requires ${temperatureRequirement} but ${plate} is registered as ${vehicle.equipment_type}, not reefer`);
+    }
+    return warnings.length > 0 ? { vehicle, warnings } : null;
+  };
+
   const evaluateWorkflows = async (event: string, data: any, facilityId: number) => {
     const { data: rules } = await db.from("workflow_rules").select("*").eq("facility_id", facilityId).eq("trigger_event", event).eq("active", true);
     for (const rule of rules || []) {
@@ -1143,7 +1165,7 @@ async function startServer() {
   // every other staff-mutation endpoint in this file. Any unauthenticated
   // caller could create, retime, or delete appointments in the yard.
   app.post("/api/appointments", requireRole("superadmin", "ADMIN", "GUARD"), async (req: any, res) => {
-    const { plate, carrier, start_time, duration_minutes, dock_id, load_type, priority_level, special_instructions, customer_id } = req.body;
+    const { plate, carrier, start_time, duration_minutes, dock_id, load_type, priority_level, special_instructions, customer_id, load_weight_kg, temperature_requirement } = req.body;
     const facilityId = req.facilityId || 1;
     if (!start_time || new Date(start_time) < new Date()) return res.status(400).json({ error: "Booking time must be in the future" });
     try {
@@ -1179,15 +1201,22 @@ async function startServer() {
         priority_level: priority_level || 2,
         special_instructions: special_instructions || null,
         customer_id: customer_id || null,
+        load_weight_kg: load_weight_kg || null,
+        temperature_requirement: temperature_requirement || null,
         facility_id: facilityId,
         status: "SCHEDULED",
       }).select().single();
       if (error) throw error;
 
+      const capacityIssue = await checkVehicleCapacity(plate, load_weight_kg, temperature_requirement);
+      if (capacityIssue) {
+        logAudit({ action: "LOAD_CAPACITY_WARNING", entityType: "APPOINTMENT", entityId: String(newAppt.id), details: { warnings: capacityIssue.warnings }, ip: req.ip, facility_id: facilityId, severity: "warning" });
+      }
+
       emitUpdate("appointment_created", newAppt, facilityId);
       evaluateWorkflows("appointment_created", newAppt, facilityId);
       enqueueWebhook("APPOINTMENT_CREATED", newAppt, facilityId);
-      res.json(newAppt);
+      res.json({ ...newAppt, capacityWarning: capacityIssue?.warnings || null });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -4211,9 +4240,14 @@ async function startServer() {
       emitUpdate("appointment_created", newAppt, facilityId);
       enqueueWebhook("APPOINTMENT_CREATED", newAppt, facilityId);
 
+      const capacityIssue = await checkVehicleCapacity(plate, load_weight_kg, temperature_requirement);
+      if (capacityIssue) {
+        logAudit({ action: "LOAD_CAPACITY_WARNING", entityType: "APPOINTMENT", entityId: String(newAppt.id), details: { warnings: capacityIssue.warnings }, ip: req.ip, facility_id: facilityId, severity: "warning" });
+      }
+
       if (driver_phone) await sendSms(driver_phone, `SkyYard: Booking confirmed for ${plate} on ${start_time}. Reference: APT-${newAppt.id}.`);
 
-      res.json({ success: true, appointment: newAppt });
+      res.json({ success: true, appointment: newAppt, capacityWarning: capacityIssue?.warnings || null });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
