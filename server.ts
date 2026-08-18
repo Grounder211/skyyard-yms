@@ -2873,10 +2873,22 @@ async function startServer() {
   };
 
   // Driver OTP Routes
+  // Temporary product decision (explicit, not a bug): gate self-checkin
+  // skips phone verification for now — a guard/admin still reviews every
+  // walk-in before the gate opens, so an unverified phone claim doesn't
+  // grant yard access by itself. Real driver authentication replaces this
+  // later. Flip back to true to require a verified code again.
+  const DRIVER_OTP_REQUIRED = false;
+
   app.post("/api/driver/request-otp", otpRequestLimiter, async (req: any, res) => {
     const { phone } = req.body;
     if (!phone || typeof phone !== "string" || !/^\+?[0-9]{7,15}$/.test(phone)) {
       return res.status(400).json({ error: "A valid phone number is required" });
+    }
+
+    if (!DRIVER_OTP_REQUIRED) {
+      await establishDriverSession(req, phone);
+      return res.json({ success: true, skippedOtp: true });
     }
 
     // A real, single-use, expiring code is always generated and must
